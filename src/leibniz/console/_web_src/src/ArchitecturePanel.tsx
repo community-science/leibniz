@@ -72,8 +72,8 @@ const ROOTS: RootTree[] = [
           {
             level: 2,
             kind: 'add',
-            tag: 'why charts aren’t the semantics',
-            text: 'The chart only parameterizes; meaning lives in the ambient space, so everything counted on it is invariant to how g is written.',
+            tag: 'charts are not the semantics',
+            text: 'The chart only parameterizes; meaning lives in the ambient space, so everything counted on it is invariant to how the generator is written.',
           },
           {
             level: 3,
@@ -82,31 +82,28 @@ const ROOTS: RootTree[] = [
             text: 'state_space.py — StateSpaceAmbient, StateSpaceAxis, generator surface',
           },
         ],
-        verdict: { tone: 'ok', text: 'converges? yes — to code in two rungs.' },
+        verdict: { tone: 'ok', text: 'Specified in code.' },
       },
       {
         id: 'U-law',
-        gist: 'A universe either has a law, or only convention.',
-        meta: 'A field equation or game rules carry a law; a glyph’s label has none.',
+        gist: 'A universe carries a law, or only a convention.',
+        meta: 'A field equation or game rules carry a law; a glyph’s label rests on convention.',
         status: 'direction',
         rungs: [
           {
             level: 1,
             kind: 'add',
-            tag: 'names the axis',
-            text: 'Call this intrinsic (a law decides) vs extrinsic (law-less, pre-scientific).',
+            tag: 'intrinsic vs extrinsic',
+            text: 'A law makes correctness intrinsic; a convention makes it extrinsic — a pre-scientific labeling rather than a question with a governing law.',
           },
           {
             level: 2,
-            kind: 'horizon',
-            tag: '⚠',
-            text: 'This is half of what we used to call “grounding.” The other half (verifier vs convergence) belongs to R — see the grounding edge below.',
+            kind: 'add',
+            tag: 'one half of grounding',
+            text: 'Whether a universe carries a law is one of the two questions usually bundled as “grounding.” The other — exact verifier versus convergence — belongs to Refinement (see the grounding edge).',
           },
         ],
-        verdict: {
-          tone: 'partial',
-          text: 'converges? partly — clean only once grounding is split across U and R.',
-        },
+        verdict: { tone: 'partial', text: 'Grounding resolves across Universe and Refinement; see the grounding edge.' },
       },
       {
         id: 'U-levels',
@@ -118,22 +115,22 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'where experiment acts',
-            text: 'Experiment lives on the reality↔law edge (does the theory model the world?). Task scoring lives on the task↔law edge.',
+            text: 'Experiment connects reality and the law — does the theory model the world? Task scoring connects a task to the law.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'known vs unknown law',
-            text: 'Known law → operationalize it. Unknown law → discover the theory from novel-intervention experiment (a virtual cell), a tower of scales.',
+            text: 'A known law is operationalized; an unknown law is discovered from novel-intervention experiment — for example a virtual cell, a tower of scales.',
           },
           {
             level: 3,
             kind: 'add',
-            tag: 'why fitting isn’t theory',
-            text: 'Fitting measured data builds a predictor with no theory inside it. The multi-scale tower is bound by cross-scale consistency: an effective theory must not contradict the converged law beneath it.',
+            tag: 'fitting is not theory',
+            text: 'Fitting measured data yields a predictor with no theory inside it. In a multi-scale universe an effective theory must stay consistent with the converged law beneath it.',
           },
         ],
-        verdict: { tone: 'open', text: 'converges? no — the discovery / multi-scale rung is open.' },
+        verdict: { tone: 'open', text: 'Discovery and multi-scale universes remain to be specified.' },
       },
     ],
   },
@@ -145,27 +142,27 @@ const ROOTS: RootTree[] = [
       {
         id: 'Q-task',
         gist: 'A task is a question put to a universe.',
-        meta: 'One universe supports many; “classification vs prediction” is the wrong cut.',
+        meta: 'One universe supports many tasks — more than a classification-vs-prediction split.',
         status: 'direction',
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'the form',
-            text: 'A signature (access, binding, target): how it’s sampled, how the input determines the answer, and what shape the answer is.',
+            text: 'A signature (access, binding, target): how the universe is sampled, how the input determines the answer, and what shape the answer takes.',
           },
           {
             level: 2,
             kind: 'horizon',
-            tag: '⚠',
-            text: 'Is Q its own root, or just “a region of U you point at”? If the latter, the basis is three roots, not four. (Thread #2.)',
+            tag: 'open',
+            text: 'Whether a query is an independent facet or simply a region of the universe singled out — and so whether there are four roots or three — remains open.',
           },
         ],
-        verdict: { tone: 'open', text: 'converges? open at the root — Q’s independence from U is the shakiest claim.' },
+        verdict: { tone: 'open', text: 'A query’s independence from the universe remains to be settled.' },
       },
       {
         id: 'Q-binding',
-        gist: 'Binding: evolution / equilibrium / inverse.',
+        gist: 'Binding: evolution, equilibrium, or inverse.',
         meta: 'Step forward in time · settle to an extremal state · infer a cause.',
         status: 'direction',
         rungs: [
@@ -173,16 +170,16 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'examples',
-            text: 'Evolution: an advancing field. Equilibrium: a molecule’s folded structure (a free-energy minimum, not a time-step). Inverse: read a cause from observations — the ill-posed cousin of running time backward.',
+            text: 'Evolution: an advancing field. Equilibrium: a molecule’s folded structure — a free-energy minimum, not a time-step. Inverse: a cause read from observations, the ill-posed counterpart of running time backward.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'relation to the law',
-            text: 'The menu of bindings is set by the law (U); which one you ask is the free choice that makes Q a root.',
+            text: 'The law fixes the menu of bindings; choosing one is the free part of asking a question.',
           },
         ],
-        verdict: { tone: 'partial', text: 'converges? mostly — completeness of the menu is open.' },
+        verdict: { tone: 'partial', text: 'The full menu of bindings remains to be enumerated.' },
       },
       {
         id: 'Q-target',
@@ -193,11 +190,11 @@ const ROOTS: RootTree[] = [
           {
             level: 1,
             kind: 'add',
-            tag: 'the orthogonality prize',
-            text: 'Target shape is independent of how truth is established (R). “Target ⊥ grounding,” fought for over the structure-prediction turns, is just Q ⊥ R.',
+            tag: 'independent of grounding',
+            text: 'Target shape is independent of how truth is established: a state-valued or a readout task can each be verifier- or convergence-grounded. That independence is what a classification-vs-prediction split obscures.',
           },
         ],
-        verdict: { tone: 'ok', text: 'converges? yes — and confirms the basis.' },
+        verdict: { tone: 'ok', text: 'An independent axis.' },
       },
     ],
   },
@@ -209,7 +206,7 @@ const ROOTS: RootTree[] = [
       {
         id: 'R-correctness',
         gist: 'Correctness is convergence, not an oracle.',
-        meta: 'The subtle one — opens deep.',
+        meta: 'When no exact answer exists, refinement decides correctness.',
         status: 'direction',
         defaultOpen: true,
         rungs: [
@@ -217,19 +214,19 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'the move',
-            text: 'When you can’t know the exact answer, you call it correct by checking it stops changing as you compute it more carefully — and trust it as far as it stays stable.',
+            text: 'When the exact answer is unknowable, an answer counts as correct when it stops changing as it is computed more carefully — and it is trusted only as far as it stays stable.',
           },
           {
             level: 2,
             kind: 'add',
-            tag: 'ladder & ruler',
-            text: 'Ask at coarser, then finer resolution; compare on shared features. If it settles (Cauchy), the settled value is the answer and the leftover gap is the ruler ε. If it never settles, the answer is undefined and no model scores there.',
+            tag: 'ladder and ruler',
+            text: 'Compute at coarser, then finer resolution and compare on shared features. If the sequence settles (Cauchy), the settled value is the answer and the leftover gap is the ruler ε. If it never settles, the answer is undefined and no model scores there.',
           },
           {
             level: 3,
             kind: 'add',
             tag: 'what falls out',
-            text: 'Horizon, directionality, chaotic / laminar character are all outputs of whether it settles — never declared. A verifier is the degenerate ε = 0 corner (a discrete law is already fully resolved).',
+            text: 'The horizon, the direction of time, and chaotic-versus-laminar character are outputs of whether the sequence settles — not declarations. A verifier is the limiting case where the gap is zero: a discrete law is already fully resolved.',
           },
           {
             level: 3,
@@ -240,47 +237,44 @@ const ROOTS: RootTree[] = [
           {
             level: 4,
             kind: 'horizon',
-            tag: '⚠ horizon',
-            text: 'Diverges exactly where it should reach code: “within tolerance” (which tolerance? which norm? how many rungs?) and the adversarial robustness of “stable.” These are the named open questions.',
+            tag: 'open',
+            text: 'The operational meaning of “within tolerance” — which norm, which tolerance, how many rungs — and the precise stability criterion remain to be specified.',
           },
         ],
-        verdict: {
-          tone: 'open',
-          text: 'converges? no — and that is the signal. Cauchy down to the formal rung, then diverges at the code rung, matching the open-questions list.',
-        },
+        verdict: { tone: 'open', text: 'Defined down to its formal objects; the operational details remain open.' },
       },
       {
         id: 'R-territory',
         gist: 'One operator, many territories.',
-        meta: 'Correctness, the score-hierarchy, and the bootstrap are the same move.',
+        meta: 'Correctness, the score hierarchy, and the bootstrap share one mechanism.',
         status: 'direction',
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'the parameter',
-            text: 'R refines a territory: resolution → correctness; problem-partition → the adaptive score-tree; operators over time → the bootstrap; and scale / intervention for multi-scale and discovery.',
+            text: 'Refinement applies to a territory: resolution gives correctness; the problem partition gives the score hierarchy; operators over time give the bootstrap; scale and intervention give multi-scale and discovery.',
           },
           {
             level: 2,
             kind: 'add',
-            tag: 'the collapse it buys',
-            text: 'Three former “roots” (correctness, hierarchy, bootstrap) are one R with a territory parameter — the largest compression in the document.',
+            tag: 'one mechanism',
+            text: 'Correctness, the score hierarchy, and the bootstrap are the same refinement over different territories — one mechanism, not three.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'the partition tree',
-            text: 'On the problem-partition territory the score is a tree 𝒯 of regions, refined until the competence estimate is stable under adversarial subdivision — so a model cannot hide failure in an unrefined cell. A submission’s claim is a subtree of 𝒯; the scalar score is its measure-weighted contraction.',
+            text: 'Over the problem partition the score is a tree of regions, refined until each region’s competence estimate is stable under adversarial subdivision — so a model cannot hide failure in an unrefined cell. A submission’s claim is a subtree; the scalar score is its measure-weighted contraction.',
           },
           {
             level: 3,
             kind: 'horizon',
-            tag: '⚠',
-            text: 'Is {resolution, partition, scale, intervention, operators-time} one clean axis, or does it hide structure? (Thread #3.)',
+            tag: 'open',
+            text: 'Whether these territories form one uniform axis or several distinct kinds remains open.',
           },
         ],
-        verdict: { tone: 'open', text: 'converges? open — the territory list may not be homogeneous.' },
+        verdict: { tone: 'open', text: 'The shared mechanism is clear; the uniformity of its territories is open.' },
       },
       {
         id: 'R-ratchet',
@@ -292,22 +286,22 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'how it grows',
-            text: 'A model extends trusted ground by being Cauchy where prior rungs diverged while agreeing on the overlap (the anchor against self-consistent nonsense).',
+            text: 'A model extends trusted ground by settling where earlier ones diverged while agreeing with them on the overlap — the safeguard against confidently converging to nonsense.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'rungs are operators',
-            text: 'The ladder’s rungs are operators — solvers, prior submissions, and (for discovery universes) experiments. For unknown-law universes the overlap test also demands cross-scale consistency with converged sub-laws.',
+            text: 'The rungs are operators — solvers, earlier submissions, and, in discovery universes, experiments. In an unknown-law universe the overlap test also requires consistency with converged sub-laws across scales.',
           },
           {
             level: 3,
             kind: 'add',
             tag: 'two ratchets',
-            text: 'Two ratchets tighten over time, the same shape: trusted ground toward truth, and the cost proxy and its description-language toward the single algorithmic ideal.',
+            text: 'Two ratchets tighten together: trusted ground toward truth, and the cost measure and its description language toward the single algorithmic ideal.',
           },
         ],
-        verdict: { tone: 'partial', text: 'converges? partly — persistence of trusted ground is unbuilt.' },
+        verdict: { tone: 'partial', text: 'Persisting trusted ground across submissions remains to be built.' },
       },
     ],
   },
@@ -319,26 +313,26 @@ const ROOTS: RootTree[] = [
       {
         id: 'D-volume',
         gist: 'Volume is a distinguishable-state count; bits add.',
-        meta: 'The settled one — bottoms out fast.',
+        meta: 'The unit the whole score is built on.',
         status: 'implemented',
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'defines “different”',
-            text: 'Two states differ only if distinguishable at the declared resolution; bits = log2(count), so doubling the variety adds one bit.',
+            text: 'Two states differ only when distinguishable at the declared resolution; bits = log2(count), so doubling the variety adds one bit.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'locates it, justifies invariance',
-            text: 'An ε-covering count under the declared metric, taken in the ambient space (not the chart) — invariant to parameterization; bits add because independent axes form a product measure.',
+            text: 'An ε-covering count under the declared metric, taken in the ambient space rather than the chart — invariant to parameterization; bits add because independent axes form a product measure.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'the region grammar',
-            text: 'Regions are finite disjoint unions of products of per-axis regions; qualitative labels are strata (typed annotations, never axes); volume may be exact or a bracketed estimate.',
+            text: 'Regions are finite disjoint unions of products of per-axis regions; qualitative labels are strata (typed annotations, never axes); volume is exact or a bracketed estimate.',
           },
           {
             level: 3,
@@ -347,61 +341,61 @@ const ROOTS: RootTree[] = [
             text: 'state_space.py — Distinguishability, log2 μ, RegionFiltration',
           },
         ],
-        verdict: { tone: 'ok', text: 'converges? yes — two rungs to code; a short ladder, honestly short.' },
+        verdict: { tone: 'ok', text: 'Specified in code.' },
       },
       {
         id: 'D-ledger',
-        gist: 'One ledger: value (credit) − cost (debit).',
-        meta: 'Value and cost are the same unit, opposite signs.',
+        gist: 'One ledger: value (credit) minus cost (debit).',
+        meta: 'Value and cost share one unit, opposite signs.',
         status: 'direction',
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'the two entries',
-            text: 'Credit = bits of validated prediction. Debit = bits to describe and run the operator. Net score = compression = world explained − operator spent.',
+            text: 'Credit is bits of validated prediction; debit is bits to describe and run the operator. The net score is compression: world explained minus operator spent.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'one quantity to minimize',
-            text: 'Science is compression: the single quantity is the total codelength of validated reality — description-length + log2(ops) + unpredicted residual. The research frontier is validated bits of prediction per unit algorithmic cost.',
+            text: 'The single quantity is the total codelength of validated reality — description length + log2(operations) + unpredicted residual. The frontier is validated bits of prediction per unit of algorithmic cost.',
           },
           {
             level: 2,
             kind: 'horizon',
-            tag: '⚠',
-            text: 'Does the credit − debit collapse really hold as one number, or do value and cost resist unification (forcing a second axis)? (Thread #4.)',
+            tag: 'open',
+            text: 'Whether value and cost reduce to one number, or require separate axes, remains open.',
           },
         ],
-        verdict: { tone: 'open', text: 'converges? open — “one number” is asserted, not yet shown.' },
+        verdict: { tone: 'open', text: 'The single-number reduction remains to be demonstrated.' },
       },
       {
         id: 'D-cost',
         gist: 'Cost = description length + log2(operations).',
-        meta: 'Levin complexity: Occam made computable. Compute alone is the term-dropping case.',
+        meta: 'Levin complexity: Occam’s razor made computable; plain compute drops the description-length term.',
         status: 'mixed',
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'the two constraints',
-            text: 'Computable from the submitted program; independent of the machine — so log-ops is the per-op cost model, description-length is a property of the program.',
+            text: 'Computable from the submitted program and independent of the machine: log-operations from the per-op cost model, description length from the program itself.',
           },
           {
             level: 2,
             kind: 'horizon',
-            tag: '⚠',
-            text: 'How is description-length read from a program (compressed params + architecture? two-part MDL?), and against which reference language? Open.',
+            tag: 'open',
+            text: 'How description length is read from a program — compressed parameters and architecture, or a two-part code — and against which reference language, remains to be defined.',
           },
           {
             level: 3,
             kind: 'code',
             tag: '⟂',
-            text: 'cost metrology — operation count is implemented; the algorithmic reframe is direction',
+            text: 'cost metrology — operation count is in code; the algorithmic reframe is a direction',
           },
         ],
-        verdict: { tone: 'partial', text: 'converges? half — log-ops reaches code; description-length is open.' },
+        verdict: { tone: 'partial', text: 'Operation count is in code; description length remains to be defined.' },
       },
     ],
   },
@@ -412,20 +406,20 @@ const EDGES: CouplingEdge[] = [
     id: 'edge-distinguishability',
     roots: ['U', 'D'],
     title: 'Distinguishability',
-    body: '“States” belong to the universe; “counted in bits” belongs to the currency. The metric (d, ε) is where U hands D something to count. A clean, low-tension edge — but real: D cannot run without U supplying a metric.',
+    body: 'States belong to the universe; counting them in bits belongs to the currency. The metric (d, ε) is where the universe gives the currency something to count — a clean coupling, and a real one: counting needs a metric to count against.',
   },
   {
     id: 'edge-grounding',
     roots: ['U', 'R'],
-    title: 'Grounding (the disentanglement)',
+    title: 'Grounding',
     warn: true,
-    body: 'The sharpest finding. “Grounding” was never primitive: intrinsic / extrinsic is a U question (has a law?), verifier / convergence is an R question (is ε = 0?). It felt primitive because it sits on this edge. Thread #1: if so, the contract should carry a law-status on U and let the ε = 0 / ε > 0 split emerge from R — no grounding field at all.',
+    body: 'Grounding bundles two independent questions: whether the universe carries a law (Universe) and whether an answer is checked by an exact verifier or by convergence (Refinement). A contract can carry a law-status on the universe and let the verifier-versus-convergence distinction follow from refinement, rather than declaring grounding directly.',
   },
   {
     id: 'edge-score',
     roots: ['U', 'R', 'D'],
     title: 'The score (triple point)',
-    body: 'Competence = predictive mass within ε (from R) of the converged answer, in bits (D), integrated over the query space (U) — and the integral is itself an R-refined adaptive tree. The score is not a root; it is the point where all three meet, and it needs nothing else. That is the basis passing its own test.',
+    body: 'Competence is the predictive mass within ε (from Refinement) of the converged answer, measured in bits (Description length), integrated over the query space (Universe) — and the integral is itself a refined adaptive tree. The score is not a root but the point where all three meet, and it needs nothing more.',
   },
 ];
 
@@ -482,18 +476,17 @@ export function ArchitecturePanel() {
       <header className="architecture-intro">
         <h2>Architecture &mdash; adaptive precision tree</h2>
         <p>
-          The architecture as a forest of adaptive precision ladders. Every concept shows a one-line gist; open it to
-          descend its refinements, each tagged with the precision it <em>adds</em> (never retracts), bottoming out at
-          code <span className="architecture-tag code">&#x27c2;</span> or at a{' '}
-          <span className="architecture-tag horizon">&#x26a0; horizon</span> where understanding stops converging. The
-          claim under test: the four roots are an orthogonal basis &mdash; what exists, what you ask, how you know, what
-          you count &mdash; and every other concept is a composition of them. The places they couple are the edges.
+          The architecture as a forest of adaptive precision ladders. Each concept opens with a one-line gist and
+          descends into refinements that add precision, ending at a code reference{' '}
+          <span className="architecture-tag code">&#x27c2;</span> or an open design question{' '}
+          <span className="architecture-tag horizon">open</span>. Four orthogonal roots organize it &mdash; what
+          exists, what you ask, how you know, what you count &mdash; and every other concept is a composition of them,
+          shown as the edges where the roots couple.
         </p>
         <p className="architecture-intro-provenance">
-          Each node is tagged by status: <span className="architecture-status implemented">implemented</span> parts are
-          backed by merged work; <span className="architecture-status direction">design direction</span> parts are
-          agreed but unbuilt, with their open questions tracked in the planning sequence. This view is the canonical home
-          for the architecture; it supersedes the earlier prose proposal.
+          Each node is marked <span className="architecture-status implemented">implemented</span> &mdash; backed by
+          working code &mdash; or <span className="architecture-status direction">design direction</span> &mdash;
+          planned, with open questions noted inline.
         </p>
         <div className="architecture-controls" role="group" aria-label="Precision level">
           <span className="architecture-controls-label">Show precision up to</span>
@@ -567,8 +560,8 @@ export function ArchitecturePanel() {
       <section className="architecture-edges" aria-label="Edges where the roots couple">
         <h3>Edges &mdash; where the roots couple</h3>
         <p className="architecture-edges-note">
-          A perfectly orthogonal basis would have no edges. There are three, and they are the interesting strain: each
-          is a concept that lives <em>between</em> roots rather than inside one.
+          Some concepts are not contained in a single root; they couple two or more. These edges record where the
+          roots meet.
         </p>
         {EDGES.map((edge) => (
           <div className={`architecture-edge ${edge.warn ? 'warn' : ''}`} key={edge.id}>
