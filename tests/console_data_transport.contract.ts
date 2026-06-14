@@ -23,15 +23,15 @@ assertEqual(parsed.format, 'leibniz.console-data', 'format');
 assertEqual(parsed.format_version, 1, 'format version');
 assertEqual(parsed.artifact_index.format, 'leibniz.console.artifact-index', 'artifact index format');
 assertEqual(parsed.artifact_index.format_version, 1, 'artifact index format version');
-assertEqual(parsed.artifact_index.artifacts.length, 10, 'artifact index count');
-assertEqual(parsed.artifact_details.length, 10, 'artifact detail count');
+assertEqual(parsed.artifact_index.artifacts.length, 11, 'artifact index count');
+assertEqual(parsed.artifact_details.length, 11, 'artifact detail count');
 assertEqual(
   parsed.artifact_details.map((detail) => `${detail.kind}:${detail.source_path}`).join('|'),
   parsed.artifact_index.artifacts.map((artifact) => `${artifact.kind}:${artifact.source_path}`).join('|'),
   'artifact details align with artifact index',
 );
 assertEqual(parsed.result_views.length, 0, 'result view count');
-assertEqual(parsed.model_inspections.length, 5, 'model inspection count');
+assertEqual(parsed.model_inspections.length, 6, 'model inspection count');
 assertEqual(parsed.benchmark_tasks.length, 3, 'benchmark task count');
 assertEqual(
   parsed.operator_vocabulary.operators.map((operator) => operator.kind).join(','),

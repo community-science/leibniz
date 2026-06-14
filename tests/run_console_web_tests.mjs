@@ -278,6 +278,8 @@ function assertBenchmarkFrontierPlotStructure() {
     '<clipPath id={plotClipId}>',
     '<g clipPath={`url(#${plotClipId})`}>',
     'models={frontierModels}',
+    'aria-label="Predictability boundary"',
+    "competence_value_kind === 'validated-bits'",
     'const renderedPoints = [...visiblePoints].sort(comparePlotPointRenderOrder)',
     'left.frontier ? 1 : -1',
   ];

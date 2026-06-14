@@ -71,6 +71,15 @@ export type CompetencePointRecord = {
   score: number;
   sample_count?: number;
   run_ids: string[];
+  competence_value_kind?: string;
+  predictability_boundary?: number;
+  time_points?: CompetenceTimePointRecord[];
+};
+
+export type CompetenceTimePointRecord = {
+  time: number;
+  bits: number;
+  gate_decision?: string;
 };
 
 export type TrainingEstimateComparisonPointRecord = {
@@ -440,6 +449,18 @@ function parseCompetencePoint(value: unknown, path: string): CompetencePointReco
     score: requireNumber(record.score, `${path}.score`, transportError),
     sample_count: optionalNumber(record.sample_count, `${path}.sample_count`, transportError),
     run_ids: stringArray(record.run_ids, `${path}.run_ids`),
+    competence_value_kind: optional(record.competence_value_kind, `${path}.competence_value_kind`, (item, itemPath) => requireString(item, itemPath, transportError)),
+    predictability_boundary: optionalNumber(record.predictability_boundary, `${path}.predictability_boundary`, transportError),
+    time_points: optional(record.time_points, `${path}.time_points`, (item, itemPath) => arrayOf(item, itemPath, parseCompetenceTimePoint)),
+  };
+}
+
+function parseCompetenceTimePoint(value: unknown, path: string): CompetenceTimePointRecord {
+  const record = requireRecord(value, path, transportError);
+  return {
+    time: requireNumber(record.time, `${path}.time`, transportError),
+    bits: requireNumber(record.bits, `${path}.bits`, transportError),
+    gate_decision: optional(record.gate_decision, `${path}.gate_decision`, (item, itemPath) => requireString(item, itemPath, transportError)),
   };
 }
 

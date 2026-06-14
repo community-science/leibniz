@@ -109,9 +109,15 @@ function modelResult({
     model_key: modelKey,
     points: [
       {
+        competence_value_kind: 'validated-bits',
         log2_volume: score,
+        predictability_boundary: 0.5,
         score,
         run_ids: runIds,
+        time_points: [
+          { bits: score / 2, gate_decision: 'passed', time: 0.25 },
+          { bits: score, gate_decision: 'passed', time: 0.5 },
+        ],
       },
     ],
     result_status: 'accepted',
@@ -674,6 +680,10 @@ const parsedResultViews = parseResultViewRecords([
     source_path: 'results/views/digits/benchmark_results.json',
   },
 ]);
+const parsedPoint = parsedResultViews[0].benchmark_results[0].leaderboard[0].points[0];
+assertEqual(parsedPoint.competence_value_kind, 'validated-bits', 'competence value kind');
+assertEqual(parsedPoint.predictability_boundary, 0.5, 'predictability boundary');
+assertEqual(parsedPoint.time_points?.[1]?.bits, 0.75, 'time point bits');
 const parsedBenchmarkResult = parsedResultViews[0];
 if (parsedBenchmarkResult?.format !== 'leibniz.console.benchmark-results') {
   throw new Error('parsed benchmark result view must keep its discriminant');
