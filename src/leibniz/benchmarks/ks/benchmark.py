@@ -58,7 +58,7 @@ _placeholder_outcome_space_id = ProtocolIdentifier.parse(
     "benchmarks.ks.placeholder-outcomes@0.1.0"
 )
 _residual_operator_id = "benchmarks.ks.residual-operator@0.1.0"
-_space_count = 32
+_default_space_count = 32
 _time_count = 9
 _box_length = 22.0
 _horizon = 1.0
@@ -159,13 +159,16 @@ class Benchmark:
         seed: int,
         sample_indices: tuple[int, ...],
         window: int,
+        spatial_points: int | None = None,
     ) -> Any:
+        resolved_spatial_points = _spatial_points(spatial_points)
         return _ks_reference_trajectory(
             runtime=runtime,
             sample_count=sample_count,
             seed=seed,
             sample_indices=sample_indices,
             window=window,
+            spatial_points=resolved_spatial_points,
         )
 
 
@@ -196,6 +199,7 @@ class Generator:
         include_artifacts: bool = False,
         volume_request: StateSpaceVolumeRequest | None = None,
         sample_indices: Sequence[int] | None = None,
+        spatial_points: int | None = None,
         memory_limit_bytes: int | None = None,
         runtime: TensorRuntime | None = None,
         outcome_ids: tuple[str, ...] | None = None,
@@ -214,6 +218,7 @@ class Generator:
         )
         sample_shape = _sample_shape(shape)
         sample_count = _sample_count(sample_shape)
+        resolved_spatial_points = _spatial_points(spatial_points)
         resolved_sample_indices = _sample_indices(
             sample_count=sample_count,
             sample_indices=sample_indices,
@@ -229,10 +234,13 @@ class Generator:
                 volume_request=volume_request,
                 request_outcome=GenerationRequestOutcome(
                     kind="unrepresentable-below-minimum",
-                    minimum_region=_ks_region(window=0),
+                    minimum_region=_ks_region(
+                        window=0,
+                        spatial_points=resolved_spatial_points,
+                    ),
                 ),
             )
-        region = _ks_region(window=window)
+        region = _ks_region(window=window, spatial_points=resolved_spatial_points)
         tensor_runtime = runtime if runtime is not None else resolve_host_tensor_runtime()
         fields, targets = _ks_tensors(
             runtime=tensor_runtime,
@@ -240,12 +248,14 @@ class Generator:
             seed=seed,
             sample_indices=resolved_sample_indices,
             window=window,
+            spatial_points=resolved_spatial_points,
         )
         samples = (
             _ks_samples(
                 seed=seed,
                 sample_indices=resolved_sample_indices,
                 window=window,
+                spatial_points=resolved_spatial_points,
             )
             if include_metadata
             else ()
@@ -302,7 +312,7 @@ def _target_contract() -> TargetContract:
     )
 
 
-def _ks_ambient() -> StateSpaceAmbient:
+def _ks_ambient(*, spatial_points: int = _default_space_count) -> StateSpaceAmbient:
     return StateSpaceAmbient(
         field_domain_kind="box-2d",
         field_domain={
@@ -311,7 +321,7 @@ def _ks_ambient() -> StateSpaceAmbient:
             "boundary_id": "periodic-space-initial-time",
             "space_axis": "x",
             "time_axis": "t",
-            "space_resolution": _box_length / _space_count,
+            "space_resolution": _box_length / spatial_points,
             "time_resolution": _horizon / (_time_count - 1),
         },
         field_codomain_id="scalar-field",
@@ -324,7 +334,11 @@ def _ks_ambient() -> StateSpaceAmbient:
     )
 
 
-def _ks_region(*, window: int) -> StateSpaceRegion:
+def _ks_region(
+    *,
+    window: int,
+    spatial_points: int = _default_space_count,
+) -> StateSpaceRegion:
     volume = 2**window
     estimate = _ks_measure_estimate(window=window)
     component = ProductRegion(
@@ -342,7 +356,7 @@ def _ks_region(*, window: int) -> StateSpaceRegion:
     )
     return StateSpaceRegion(
         id=f"benchmarks.ks.realized-window-{window}",
-        ambient=_ks_ambient(),
+        ambient=_ks_ambient(spatial_points=spatial_points),
         components=(component,),
         union_rule="disjoint-union",
         volume=volume,
@@ -375,7 +389,7 @@ def _ks_capacity_region() -> StateSpaceRegion:
     )
     return StateSpaceRegion(
         id="benchmarks.ks.accessible-capacity",
-        ambient=_ks_ambient(),
+        ambient=_ks_ambient(spatial_points=_default_space_count),
         components=(component,),
         union_rule="disjoint-union",
         volume=volume,
@@ -400,6 +414,7 @@ def _ks_tensors(
     seed: int,
     sample_indices: tuple[int, ...],
     window: int,
+    spatial_points: int = _default_space_count,
 ) -> tuple[Any, Any]:
     initial = _ks_initial_fields(
         runtime=runtime,
@@ -407,6 +422,7 @@ def _ks_tensors(
         seed=seed,
         sample_indices=sample_indices,
         window=window,
+        spatial_points=spatial_points,
     )
     fields = initial.float()
     targets = initial[:, 0:1, :].repeat(1, _time_count, 1).float()
@@ -420,6 +436,7 @@ def _ks_reference_trajectory(
     seed: int,
     sample_indices: tuple[int, ...],
     window: int,
+    spatial_points: int = _default_space_count,
 ) -> Any:
     return tensor_runtime_solve_tensor_trajectory(
         runtime,
@@ -428,14 +445,15 @@ def _ks_reference_trajectory(
                 seed=seed,
                 sample_indices=sample_indices,
                 window=window,
+                spatial_points=spatial_points,
             ),
             step_kernel=_ks_step_kernel,
             step_count=_time_count - 1,
-            parameters=_ks_solver_parameters(),
+            parameters=_ks_solver_parameters(spatial_points=spatial_points),
             dtype="float64",
-            cache_key=("ks-reference-etdrk4-step", _space_count, _time_count),
+            cache_key=("ks-reference-etdrk4-step", spatial_points, _time_count),
         ),
-        shape=(sample_count, 1, _space_count),
+        shape=(sample_count, 1, spatial_points),
     )
 
 
@@ -446,16 +464,18 @@ def _ks_initial_fields(
     seed: int,
     sample_indices: tuple[int, ...],
     window: int,
+    spatial_points: int = _default_space_count,
 ) -> Any:
     initial_program = _ks_initial_program(
         seed=seed,
         sample_indices=sample_indices,
         window=window,
+        spatial_points=spatial_points,
     )
     return tensor_runtime_construct_tensor(
         runtime,
         recipe=TensorElementRecipe(
-            shape=(sample_count, 1, _space_count),
+            shape=(sample_count, 1, spatial_points),
             dtype="float64",
             program=initial_program,
         ),
@@ -467,6 +487,7 @@ def _ks_initial_program(
     seed: int,
     sample_indices: tuple[int, ...],
     window: int,
+    spatial_points: int = _default_space_count,
 ) -> TensorBatchProgram:
     return TensorBatchProgram(
         kernel=_ks_initial_condition_kernel,
@@ -474,8 +495,9 @@ def _ks_initial_program(
             seed=seed,
             sample_indices=sample_indices,
             window=window,
+            spatial_points=spatial_points,
         ),
-        cache_key=("ks-initial-condition",),
+        cache_key=("ks-initial-condition", spatial_points),
     )
 
 
@@ -484,6 +506,7 @@ def _ks_initial_parameters(
     seed: int,
     sample_indices: tuple[int, ...],
     window: int,
+    spatial_points: int,
 ) -> dict[str, TensorElementParameter]:
     return {
         "sample_indices": TensorElementParameter(
@@ -498,13 +521,21 @@ def _ks_initial_parameters(
             shape=(),
             values=(0.15 + 0.01 * float(window),),
         ),
+        "spatial_points": TensorElementParameter(
+            dtype="float64",
+            shape=(),
+            values=(float(spatial_points),),
+        ),
     }
 
 
-def _ks_solver_parameters() -> dict[str, TensorElementParameter]:
+def _ks_solver_parameters(
+    *,
+    spatial_points: int = _default_space_count,
+) -> dict[str, TensorElementParameter]:
     frequencies = tuple(
-        index if index <= _space_count // 2 else index - _space_count
-        for index in range(_space_count)
+        index if index <= spatial_points // 2 else index - spatial_points
+        for index in range(spatial_points)
     )
     wave_numbers = tuple(2.0 * math.pi * frequency / _box_length for frequency in frequencies)
     dt = _horizon / (_time_count - 1)
@@ -526,48 +557,48 @@ def _ks_solver_parameters() -> dict[str, TensorElementParameter]:
     f3_coefficients = tuple(row[3] for row in coefficient_rows)
     derivative_coefficients = tuple(complex(0.0, wave_number) for wave_number in wave_numbers)
     dealias_mask = tuple(
-        1.0 if abs(frequency) <= _space_count // 3 else 0.0
+        1.0 if abs(frequency) <= spatial_points // 3 else 0.0
         for frequency in frequencies
     )
     return {
         "linear_factors": TensorElementParameter(
             dtype="complex128",
-            shape=(_space_count,),
+            shape=(spatial_points,),
             values=linear_factors,
         ),
         "half_linear_factors": TensorElementParameter(
             dtype="complex128",
-            shape=(_space_count,),
+            shape=(spatial_points,),
             values=half_linear_factors,
         ),
         "q_coefficients": TensorElementParameter(
             dtype="complex128",
-            shape=(_space_count,),
+            shape=(spatial_points,),
             values=q_coefficients,
         ),
         "f1_coefficients": TensorElementParameter(
             dtype="complex128",
-            shape=(_space_count,),
+            shape=(spatial_points,),
             values=f1_coefficients,
         ),
         "f2_coefficients": TensorElementParameter(
             dtype="complex128",
-            shape=(_space_count,),
+            shape=(spatial_points,),
             values=f2_coefficients,
         ),
         "f3_coefficients": TensorElementParameter(
             dtype="complex128",
-            shape=(_space_count,),
+            shape=(spatial_points,),
             values=f3_coefficients,
         ),
         "derivative_coefficients": TensorElementParameter(
             dtype="complex128",
-            shape=(_space_count,),
+            shape=(spatial_points,),
             values=derivative_coefficients,
         ),
         "dealias_mask": TensorElementParameter(
             dtype="float64",
-            shape=(_space_count,),
+            shape=(spatial_points,),
             values=dealias_mask,
         ),
     }
@@ -622,11 +653,12 @@ def _ks_initial_condition_kernel(
     sample_indices: Any,
     seed_value: Any,
     amplitude: Any,
+    spatial_points: Any,
 ) -> Any:
     sample, channel, x = coordinates
     _ = channel
     phase = (sample_indices[sample] + seed_value).reshape((-1, 1, 1)) * 0.173
-    spatial = x.reshape((1, 1, -1)) * (2.0 * math.pi / _space_count)
+    spatial = x.reshape((1, 1, -1)) * (2.0 * math.pi / spatial_points)
     return amplitude * (
         (spatial + phase).sin()
         + 0.5 * (2.0 * spatial - phase).cos()
@@ -728,7 +760,8 @@ def _ks_residual_certificate_mass(predictions: Any, targets: Any) -> Any:
 
 
 def _ks_discrete_residual(predictions: Any) -> Any:
-    dx = _box_length / _space_count
+    spatial_points = predictions.shape[-1]
+    dx = _box_length / spatial_points
     dt = _horizon / (_time_count - 1)
     u = predictions[:, :-1, :]
     u_t = (predictions[:, 1:, :] - u) / dt
@@ -765,6 +798,7 @@ def _ks_samples(
     seed: int,
     sample_indices: tuple[int, ...],
     window: int,
+    spatial_points: int = _default_space_count,
 ) -> tuple[GeneratedSample, ...]:
     return tuple(
         GeneratedSample(
@@ -778,6 +812,7 @@ def _ks_samples(
                 {
                     "chart": "cartesian-fourier",
                     "sample_index": sample_index,
+                    "spatial_points": spatial_points,
                     "window": window,
                 },
             ),
@@ -822,6 +857,21 @@ def _sample_count(shape: Sequence[int]) -> int:
     for axis in shape:
         count *= axis
     return count
+
+
+def _spatial_points(value: int | None) -> int:
+    if value is None:
+        return _default_space_count
+    if type(value) is not int or value < _default_space_count:
+        raise ObservationGenerationError(
+            f"spatial_points must be a power-of-two multiple of {_default_space_count}"
+        )
+    multiple = value // _default_space_count
+    if value % _default_space_count != 0 or multiple & (multiple - 1):
+        raise ObservationGenerationError(
+            f"spatial_points must be a power-of-two multiple of {_default_space_count}"
+        )
+    return value
 
 
 def _sample_indices(

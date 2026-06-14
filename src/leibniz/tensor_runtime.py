@@ -60,6 +60,7 @@ __all__ = [
     "tensor_runtime_available_memory_bytes",
     "tensor_runtime_capture_operations",
     "tensor_runtime_broadcast_zeros",
+    "tensor_runtime_concat",
     "tensor_runtime_construct_tensor",
     "tensor_runtime_default_device",
     "tensor_runtime_device_choices",
@@ -1336,6 +1337,13 @@ def make_long_tensor(runtime: TensorRuntime, values: Any, *, device: Any) -> Any
     _ = runtime
     torch = _torch()
     return torch.tensor(values, dtype=torch.long, device=device)
+
+
+def tensor_runtime_concat(runtime: TensorRuntime, tensors: Sequence[Any], *, dim: int) -> Any:
+    """Concatenate runtime tensors along an axis."""
+
+    _ = runtime
+    return _torch().cat(tuple(tensors), dim=dim)
 
 
 def _calibrated_roofline_record(runtime: TensorRuntime) -> dict[str, object]:

@@ -100,6 +100,7 @@ from leibniz.tensor_runtime import (
     softmax_target_masses,
     synchronize_runtime,
     tensor_element_compile_fallback_records,
+    tensor_runtime_concat,
     tensor_runtime_device_kinds,
     tensor_runtime_has_fixed_device_memory,
     tensor_runtime_total_memory_bytes,
@@ -1823,11 +1824,7 @@ def _validate_architecture_for_batch(
     )
     if input_reason is not None:
         raise BenchmarkRunnerError(input_reason)
-    field_shape = (
-        _batch_target_field_shape(batch=batch)
-        if target_contract.kind == "field-valued"
-        else None
-    )
+    field_shape = sample_shape if target_contract.kind == "field-valued" else None
     try:
         expected_output_shape = target_contract.expected_output_shape(field_shape)
     except TargetContractError as error:
@@ -2493,6 +2490,7 @@ def _checkpoint_inference_cost_measurement(
     predictor: CheckpointModelPredictor,
     batch: GeneratedSampleSet,
     outcome_ids: tuple[str, ...],
+    target_contract: TargetContract,
 ) -> CostMeasurement:
     fields, _labels = _batch_tensors(
         runtime=predictor.runtime,
@@ -2504,7 +2502,12 @@ def _checkpoint_inference_cost_measurement(
 
     def program(input_fields: Any) -> object:
         with no_grad_context(predictor.runtime):
-            return predictor.module(input_fields)
+            return _model_inference_for_cost(
+                runtime=predictor.runtime,
+                module=predictor.module,
+                fields=input_fields,
+                target_contract=target_contract,
+            )
 
     return measure_program_cost(
         predictor.runtime,
@@ -2515,18 +2518,120 @@ def _checkpoint_inference_cost_measurement(
     ).without_operation_trace()
 
 
+def _model_predictions(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    fields: Any,
+    labels: Any,
+    target_contract: TargetContract,
+) -> Any:
+    if target_contract.kind == "finite-outcome":
+        return module(fields)
+    return _field_valued_model_trajectory(
+        runtime=runtime,
+        module=module,
+        fields=fields,
+        labels=labels,
+    )
+
+
+def _model_inference_for_cost(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    fields: Any,
+    target_contract: TargetContract,
+) -> Any:
+    if target_contract.kind == "finite-outcome":
+        return module(fields)
+    return _field_valued_model_state_at_horizon(
+        runtime=runtime,
+        module=module,
+        fields=fields,
+        horizon=1.0,
+    )
+
+
+def _field_valued_model_trajectory(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    fields: Any,
+    labels: Any,
+) -> Any:
+    if len(tuple(fields.shape)) != 3:
+        raise BenchmarkRunnerError(
+            "field-valued operator input must have shape (batch, channel, spatial)"
+        )
+    if len(tuple(labels.shape)) != 3:
+        raise BenchmarkRunnerError(
+            "field-valued training targets must have shape (batch, time, spatial)"
+        )
+    if int(fields.shape[1]) != 1:
+        raise BenchmarkRunnerError("field-valued operator input must contain one state channel")
+    if int(labels.shape[0]) != int(fields.shape[0]):
+        raise BenchmarkRunnerError("field-valued target batch size must match input batch size")
+    if int(labels.shape[-1]) != int(fields.shape[-1]):
+        raise BenchmarkRunnerError("field-valued target spatial length must match input length")
+    time_count = int(labels.shape[1])
+    if time_count < 1:
+        raise BenchmarkRunnerError("field-valued trajectory target must contain at least one time")
+    states = [fields]
+    if time_count == 1:
+        return fields
+    for index in range(1, time_count):
+        horizon = index / float(time_count - 1)
+        states.append(
+            _field_valued_model_state_at_horizon(
+                runtime=runtime,
+                module=module,
+                fields=fields,
+                horizon=horizon,
+            )
+        )
+    return tensor_runtime_concat(runtime, states, dim=1)
+
+
+def _field_valued_model_state_at_horizon(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    fields: Any,
+    horizon: float,
+) -> Any:
+    _ = runtime
+    try:
+        state = module(fields, float(horizon))
+    except TypeError:
+        state = module(fields)
+    if tuple(state.shape) != tuple(fields.shape):
+        raise BenchmarkRunnerError(
+            "field-valued operator must return state shape "
+            f"{tuple(fields.shape)}, got {tuple(state.shape)}"
+        )
+    return state
+
+
 def _module_inference_cost_measurement(
     *,
     runtime: TensorRuntime,
     module: Any,
     fields: Any,
+    labels: Any,
+    target_contract: TargetContract,
 ) -> CostMeasurement:
     was_training = bool(module.training)
     module.eval()
 
     def program(input_fields: Any) -> object:
         with no_grad_context(runtime):
-            return module(input_fields)
+            return _model_inference_for_cost(
+                runtime=runtime,
+                module=module,
+                fields=input_fields,
+                target_contract=target_contract,
+            )
 
     try:
         return measure_program_cost(
@@ -2944,6 +3049,7 @@ def _checkpoint_evaluation_chunks(
                     predictor=predictor,
                     batch=batch,
                     outcome_ids=outcome_ids,
+                    target_contract=target_contract,
                 )
         if inference_cost_measurement is None:
             raise BenchmarkRunnerError("checkpoint evaluation could not measure inference cost")
@@ -3013,16 +3119,6 @@ def _batch_sample_input_shape(
     raise BenchmarkRunnerError(
         "tensor benchmark generator must return tensors or inspectable field metadata"
     )
-
-
-def _batch_target_field_shape(
-    *,
-    batch: GeneratedSampleSet,
-) -> tuple[int, ...]:
-    tensor_target_shape = _tensor_input_shape(batch.targets)
-    if tensor_target_shape is not None:
-        return tensor_target_shape
-    return _batch_sample_input_shape(batch=batch)
 
 
 def _tensor_input_shape(fields: Any) -> tuple[int, ...] | None:
@@ -3436,6 +3532,8 @@ def _train_until_convergence(
                 runtime=runtime,
                 module=module,
                 fields=fields,
+                labels=labels,
+                target_contract=target_contract,
             )
         max_validation_inference_cost = _max_cost_measurement(
             max_validation_inference_cost,
@@ -3447,7 +3545,13 @@ def _train_until_convergence(
             was_training = bool(module.training)
             module.eval()
             with no_grad_context(runtime):
-                logits = module(fields)
+                logits = _model_predictions(
+                    runtime=runtime,
+                    module=module,
+                    fields=fields,
+                    labels=labels,
+                    target_contract=target_contract,
+                )
                 validation_loss = float(loss_function(logits, labels).item())
                 accepted_mass = competence.training_logit_masses(runtime, logits, labels)
             if was_training:
@@ -3558,7 +3662,13 @@ def _train_until_convergence(
                 with phase_timings.span("training_zero_grad"):
                     optimizer.zero_grad(set_to_none=True)
                 with phase_timings.span("training_forward_loss", samples=actual_batch_size):
-                    logits = module(fields)
+                    logits = _model_predictions(
+                        runtime=runtime,
+                        module=module,
+                        fields=fields,
+                        labels=labels,
+                        target_contract=target_contract,
+                    )
                     loss = loss_function(logits, labels)
                 if first_logits is None:
                     detach_logits = getattr(logits, "detach", None)
