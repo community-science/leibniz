@@ -170,6 +170,12 @@ const ROOTS: RootTree[] = [
             text: 'Three parts: how you sample the universe (access), how the input fixes the answer (binding), and what shape the answer takes (target).',
           },
           {
+            level: 1,
+            kind: 'add',
+            tag: 'benchmarks',
+            text: 'A finite readout task can let the input vary while keeping the answer fixed by the benchmark label. A field prediction task asks for $f(t)$ itself, so the input field and predicted future field both scale with spatial resolution.',
+          },
+          {
             level: 2,
             kind: 'horizon',
             tag: 'open',
@@ -249,22 +255,22 @@ const ROOTS: RootTree[] = [
             level: 3,
             kind: 'add',
             tag: 'measured ruler',
-            text: '$\\varepsilon$ is not declared. It is the Richardson field error $\\varepsilon_{field}$ on the finest gated rung. The current implementation scores the declared query horizon on a fixed nested ladder; sweeping the horizon and finding the predictability boundary remains open.',
+            text: '$\\varepsilon$ is not declared. It is the Richardson field error $\\varepsilon_{field}$ on the finest gated rung. The field benchmark now scores the contiguous time prefix where the convergence gate holds, so the predictability boundary is measured rather than chosen.',
           },
           {
             level: 3,
             kind: 'add',
             tag: 'formal objects',
-            text: 'Formally: query $\\hat\\Phi(x_h, T)$ across refined grids, restrict each rung to the common grid, estimate observed order and limit by Richardson, and use the residual limit plus field error to decide what is validated.',
+            text: 'Formally: query $\\hat\\Phi(x_h, t)$ across refined grids, restrict each rung to the common grid, estimate observed order and limit by Richardson, and credit only the time-prefix that stays inside the residual plus field-error gate.',
           },
           {
             level: 4,
             kind: 'horizon',
             tag: 'open',
-            text: 'The remaining open rung is the statistical convergence decision: the current gate uses $|R_\\infty| \\le 1\\cdot u_\\infty$ and emits a k-sensitivity report so the effect of that provisional choice is visible.',
+            text: 'Open rungs remain: the IC distribution is provisional, the spatial ladder is fixed-depth rather than swept to its own boundary, the observed-order tolerance and rung count are still decision parameters, and the next PR needs an architecture that actually climbs the boundary.',
           },
         ],
-        verdict: { tone: 'partial', text: 'Implemented for convergence-grounded field scoring; the parameter-free convergence decision is still an open statistical refinement.' },
+        verdict: { tone: 'partial', text: 'Implemented for field predictability scoring; the statistical gate and architecture frontier remain open.' },
       },
       {
         id: 'R-territory',
@@ -384,7 +390,7 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'the two entries',
-            text: 'Credit is validated bits: $N_{dof}\\log_2(\\sigma/\\varepsilon_{field})$ where $\\sigma$ is the measured signal scale and $\\varepsilon_{field}$ is the Richardson field error. Debit is the bits it took to describe and run the operator.',
+            text: 'Credit is validated bits: $N_{dof}\\log_2(\\sigma/\\varepsilon_{field})$ where $\\sigma$ is the field evolution scale beyond the initial condition and $\\varepsilon_{field}$ is the Richardson field error. Debit is the bits it took to describe and run the operator.',
           },
           {
             level: 2,
@@ -467,7 +473,7 @@ const STEPS: RoadmapStep[] = [
     id: 'ladder',
     title: 'Refinement-ladder records and convergence-grounded scoring',
     outcome:
-      'Emit convergence diagnostics for the ladder, score validated bits from Richardson field error where the law residual extrapolates to zero, and report k-sensitivity for the remaining convergence-decision knob.',
+      'Emit convergence diagnostics for the ladder, score field prediction as validated evolution bits over the measured predictability boundary, and surface the provisional gate parameters in diagnostics.',
   },
   {
     id: 'cost',

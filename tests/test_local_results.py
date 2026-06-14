@@ -662,6 +662,56 @@ def test_metrology_model_cost_uses_point_cost_measurement() -> None:
     assert {term.kind for term in cost_integral.terms} == {"metrology-compute-cost"}
 
 
+def test_field_competence_diagnostics_flow_into_result_points() -> None:
+    sampled_competence = {
+        "kind": "sampled-competence-curriculum",
+        "competence_value_kind": "validated-bits",
+        "log2_volume": 1.0,
+        "sample_count": 2,
+        "mean_accepted_mass": 12.0,
+        "points": [
+            {
+                "kind": "sampled-state-space-volume-window",
+                "competence_value_kind": "validated-bits",
+                "log2_volume": 1.0,
+                "sample_count": 2,
+                "mean_accepted_mass": 12.0,
+            }
+        ],
+    }
+    estimate = {
+        "sampled_competence": sampled_competence,
+        "competence_diagnostics": [
+            {
+                "kind": "ks-convergence-diagnostics",
+                "predictability_boundary": 0.5,
+                "time_points": [
+                    {"time": 0.25, "bits": 4.0, "gate_decision": "passed"},
+                    {"time": 0.5, "bits": 8.0, "gate_decision": "passed"},
+                ],
+            }
+        ],
+    }
+
+    enriched = cast(Any, local_results)._sampled_competence_with_diagnostics(
+        sampled_competence=sampled_competence,
+        estimate=estimate,
+    )
+    point = cast(Any, local_results)._competence_point_from_sampled_record(
+        cast(list[dict[str, object]], enriched["points"])[0]
+    )
+    compact = cast(Any, local_results)._compact_sampled_competence_record(enriched)
+
+    assert enriched["competence_value_kind"] == "validated-bits"
+    assert enriched["predictability_boundary"] == 0.5
+    assert cast(list[dict[str, object]], enriched["time_points"])[-1]["bits"] == 8.0
+    assert point["competence_value_kind"] == "validated-bits"
+    assert point["predictability_boundary"] == 0.5
+    assert cast(list[dict[str, object]], point["time_points"])[0]["time"] == 0.25
+    assert compact["competence_value_kind"] == "validated-bits"
+    assert compact["predictability_boundary"] == 0.5
+
+
 def test_training_estimate_comparison_uses_selected_checkpoint_estimate(
     tmp_path: Path,
 ) -> None:

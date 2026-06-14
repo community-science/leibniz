@@ -69,6 +69,7 @@ _convergence_rung_count = 3
 _convergence_gate_uncertainty_scale = 1.0
 _convergence_expected_observed_order = 2.0
 _convergence_observed_order_tolerance = 0.5
+_initial_condition_mode_count = 4
 _maximum_window = 8
 _window_axis = StateSpaceAxis(
     id="ks-space-time-log2-window",
@@ -250,12 +251,16 @@ class Generator:
         )
         sample_shape = _sample_shape(shape)
         sample_count = _sample_count(sample_shape)
-        resolved_spatial_points = _spatial_points(spatial_points)
         resolved_sample_indices = _sample_indices(
             sample_count=sample_count,
             sample_indices=sample_indices,
         )
         window = _requested_window(volume_request)
+        resolved_spatial_points = (
+            _spatial_points(spatial_points)
+            if spatial_points is not None
+            else _spatial_points_for_window(window)
+        )
         if window is None:
             return GeneratedSampleSet(
                 benchmark_id=self.manifest.id,
@@ -344,7 +349,7 @@ def _target_contract() -> TargetContract:
     )
 
 
-def _ks_ambient(*, spatial_points: int = _default_space_count) -> StateSpaceAmbient:
+def _ks_ambient() -> StateSpaceAmbient:
     return StateSpaceAmbient(
         field_domain_kind="box-2d",
         field_domain={
@@ -353,7 +358,6 @@ def _ks_ambient(*, spatial_points: int = _default_space_count) -> StateSpaceAmbi
             "boundary_id": "periodic-space-initial-time",
             "space_axis": "x",
             "time_axis": "t",
-            "space_resolution": _box_length / spatial_points,
             "time_resolution": _horizon / (_time_count - 1),
         },
         field_codomain_id="scalar-field",
@@ -388,7 +392,7 @@ def _ks_region(
     )
     return StateSpaceRegion(
         id=f"benchmarks.ks.realized-window-{window}",
-        ambient=_ks_ambient(spatial_points=spatial_points),
+        ambient=_ks_ambient(),
         components=(component,),
         union_rule="disjoint-union",
         volume=volume,
@@ -421,7 +425,7 @@ def _ks_capacity_region() -> StateSpaceRegion:
     )
     return StateSpaceRegion(
         id="benchmarks.ks.accessible-capacity",
-        ambient=_ks_ambient(spatial_points=_default_space_count),
+        ambient=_ks_ambient(),
         components=(component,),
         union_rule="disjoint-union",
         volume=volume,
@@ -555,6 +559,8 @@ def _ks_initial_parameters(
     window: int,
     spatial_points: int,
 ) -> dict[str, TensorElementParameter]:
+    mode_numbers = tuple(float(mode) for mode in range(1, _initial_condition_mode_count + 1))
+    mode_decay = tuple(1.0 / (mode * mode) for mode in mode_numbers)
     return {
         "sample_indices": TensorElementParameter(
             dtype="int64",
@@ -566,12 +572,22 @@ def _ks_initial_parameters(
         "amplitude": TensorElementParameter(
             dtype="float64",
             shape=(),
-            values=(0.15 + 0.01 * float(window),),
+            values=(0.15,),
         ),
         "spatial_points": TensorElementParameter(
             dtype="float64",
             shape=(),
             values=(float(spatial_points),),
+        ),
+        "mode_numbers": TensorElementParameter(
+            dtype="float64",
+            shape=(_initial_condition_mode_count,),
+            values=mode_numbers,
+        ),
+        "mode_decay": TensorElementParameter(
+            dtype="float64",
+            shape=(_initial_condition_mode_count,),
+            values=mode_decay,
         ),
     }
 
@@ -702,15 +718,33 @@ def _ks_initial_condition_kernel(
     seed_value: Any,
     amplitude: Any,
     spatial_points: Any,
+    mode_numbers: Any,
+    mode_decay: Any,
 ) -> Any:
     sample, channel, x = coordinates
     _ = channel
-    phase = (sample_indices[sample] + seed_value).reshape((-1, 1, 1)) * 0.173
+    sample_key = sample_indices[sample].reshape((-1, 1, 1))
+    modes = mode_numbers.reshape((1, -1, 1))
+    decay = mode_decay.reshape((1, -1, 1))
     spatial = x.reshape((1, 1, -1)) * (2.0 * math.pi / spatial_points)
-    return amplitude * (
-        (spatial + phase).sin()
-        + 0.5 * (2.0 * spatial - phase).cos()
+    random_key = seed_value.reshape((1, 1, 1)) + (0.173 * sample_key)
+    sine_coefficients = (
+        (random_key * 12.9898 + modes * 78.233 + 0.37).sin()
+        * decay
     )
+    cosine_coefficients = (
+        (random_key * 4.1414 + modes * 31.416 + 1.91).sin()
+        * decay
+    )
+    energy = (
+        (sine_coefficients * sine_coefficients)
+        + (cosine_coefficients * cosine_coefficients)
+    ).sum(dim=1, keepdim=True).sqrt().clamp_min(math.ulp(1.0))
+    field = (
+        (sine_coefficients * (modes * spatial).sin())
+        + (cosine_coefficients * (modes * spatial).cos())
+    ).sum(dim=1, keepdim=True)
+    return amplitude * field / energy
 
 
 def _ks_step_kernel(
@@ -930,6 +964,73 @@ def _ks_ladder_convergence_bits(
 ) -> Any:
     if len(ladder) < _convergence_rung_count:
         return _zero_bits(runtime=runtime, predictions=ladder[-1])
+    measured_ladder = tuple(_float64_tensor(trajectory) for trajectory in ladder)
+    base_time_count = int(measured_ladder[0].shape[1])
+    if base_time_count < 2:
+        return _zero_bits(runtime=runtime, predictions=measured_ladder[-1])
+    factor = _convergence_refinement_factor
+    boundary_bits = [0.0 for _sample in range(int(ladder[-1].shape[0]))]
+    prefix_open = [True for _sample in boundary_bits]
+    boundaries = [0.0 for _sample in boundary_bits]
+    time_points: list[list[Mapping[str, object]]] = [[] for _sample in boundary_bits]
+    latest_records: list[Mapping[str, object] | None] = [None for _sample in boundary_bits]
+    boundary_records: list[Mapping[str, object] | None] = [None for _sample in boundary_bits]
+    for base_time_index in range(1, base_time_count):
+        time_value = horizon * float(base_time_index) / float(base_time_count - 1)
+        prefix_ladder = tuple(
+            trajectory[:, : (base_time_index * (factor**rung_index)) + 1, :]
+            for rung_index, trajectory in enumerate(measured_ladder)
+        )
+        point_values, point_records = _ks_ladder_prefix_convergence_bits(
+            runtime=runtime,
+            ladder=prefix_ladder,
+            horizon=time_value,
+        )
+        for sample_index, point_record in enumerate(point_records):
+            latest_records[sample_index] = point_record
+            point_bits = float(point_values[sample_index])
+            gated = point_record.get("gate_decision") == "passed" and point_bits > 0.0
+            time_points[sample_index].append(
+                {
+                    "time": time_value,
+                    "bits": point_bits if prefix_open[sample_index] and gated else 0.0,
+                    "gate_decision": point_record.get("gate_decision"),
+                }
+            )
+            if not prefix_open[sample_index]:
+                continue
+            if gated:
+                boundary_bits[sample_index] = point_bits
+                boundaries[sample_index] = time_value
+                boundary_records[sample_index] = point_record
+            else:
+                prefix_open[sample_index] = False
+    diagnostics: list[Mapping[str, object]] = []
+    for sample_index, total in enumerate(boundary_bits):
+        latest = dict(boundary_records[sample_index] or latest_records[sample_index] or {})
+        latest["kind"] = "ks-convergence-diagnostics"
+        latest["sample_index"] = sample_index
+        latest["predictability_boundary"] = boundaries[sample_index]
+        latest["time_points"] = [dict(point) for point in time_points[sample_index]]
+        latest["gate_decision"] = "passed" if total > 0.0 else "failed"
+        latest["bits"] = total
+        diagnostics.append(latest)
+    result = measured_ladder[-1].new_tensor(boundary_bits)
+    result.leibniz_competence_diagnostics = tuple(diagnostics)
+    return result
+
+
+def _float64_tensor(tensor: Any) -> Any:
+    convert = getattr(tensor, "double", None)
+    return convert() if callable(convert) else tensor
+
+
+def _ks_ladder_prefix_convergence_bits(
+    *,
+    runtime: TensorRuntime,
+    ladder: tuple[Any, ...],
+    horizon: float,
+) -> tuple[Any, tuple[Mapping[str, object], ...]]:
     factor = _convergence_refinement_factor
     residual_norms = tuple(
         _per_sample_residual_norm(trajectory, horizon=horizon) for trajectory in ladder
@@ -944,7 +1045,8 @@ def _ks_ladder_convergence_bits(
         factor=factor,
     )
     finest = ladder[-1]
-    signal = finest.std(dim=(1, 2), unbiased=False)
+    evolution = finest - finest[:, 0:1, :]
+    signal = evolution.std(dim=(1, 2), unbiased=False)
     finest_nodes = int(finest.shape[1]) * int(finest.shape[2])
     values: list[float] = []
     diagnostics: list[Mapping[str, object]] = []
@@ -986,9 +1088,7 @@ def _ks_ladder_convergence_bits(
                 bits=values[-1],
             )
         )
-    result = finest.new_tensor(values)
-    result.leibniz_competence_diagnostics = tuple(diagnostics)
-    return result
+    return finest.new_tensor(values), tuple(diagnostics)
 
 
 def _ks_convergence_diagnostic_record(
@@ -1011,7 +1111,7 @@ def _ks_convergence_diagnostic_record(
         "expected_observed_order": _convergence_expected_observed_order,
         "observed_order_tolerance": _convergence_observed_order_tolerance,
         "field_error": field_error,
-        "signal_scale": signal,
+        "evolution_scale": signal,
         "node_count": node_count,
         "rung_count": _convergence_rung_count,
         "gate_decision": "passed" if bits > 0.0 else "failed",
@@ -1348,6 +1448,12 @@ def _spatial_points(value: int | None) -> int:
             f"spatial_points must be a power-of-two multiple of {_default_space_count}"
         )
     return value
+
+
+def _spatial_points_for_window(window: int | None) -> int:
+    if window is None:
+        return _default_space_count
+    return _default_space_count * (2**window)
 
 
 def _sample_indices(

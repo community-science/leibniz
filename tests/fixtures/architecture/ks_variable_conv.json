@@ -1,0 +1,63 @@
+{
+  "input_shape": [
+    1,
+    32
+  ],
+  "input_conditioning": {
+    "kind": "horizon-channel"
+  },
+  "model_scale_contract": {
+    "kind": "positive-variable-shape-envelope",
+    "axis_symbol": "S",
+    "anchor_shape": [
+      1,
+      32
+    ],
+    "axes": [
+      {
+        "index": 0,
+        "kind": "fixed",
+        "size": 1
+      },
+      {
+        "index": 1,
+        "kind": "scaled",
+        "symbol": "S"
+      }
+    ],
+    "scale_domain": {
+      "minimum": 32
+    }
+  },
+  "output_shape": [
+    1,
+    32
+  ],
+  "layers": [
+    {
+      "kind": "convolution",
+      "parameters": {
+        "dimension": 1,
+        "size": 3,
+        "out_channels": 8,
+        "stride": 1,
+        "padding": 1,
+        "padding_mode": "periodic"
+      }
+    },
+    {
+      "kind": "relu"
+    },
+    {
+      "kind": "convolution",
+      "parameters": {
+        "dimension": 1,
+        "size": 3,
+        "out_channels": 1,
+        "stride": 1,
+        "padding": 1,
+        "padding_mode": "periodic"
+      }
+    }
+  ]
+}

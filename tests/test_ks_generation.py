@@ -34,8 +34,8 @@ def test_ks_generator_emits_initial_fields_and_space_time_targets() -> None:
     assert batch.region.measure_estimate is not None
     assert batch.region.measure_estimate.kind == "estimated"
     assert batch.region.log2_volume == 2.0
-    assert fields.shape == (3, 1, 32)
-    assert targets.shape == (3, 1, 32)
+    assert fields.shape == (3, 1, 128)
+    assert targets.shape == (3, 1, 128)
     assert fields.dtype == runtime.torch.float32
     assert targets.dtype == runtime.torch.float32
     assert targets.allclose(fields.to(dtype=targets.dtype))
@@ -65,9 +65,55 @@ def test_ks_generator_threads_spatial_resolution() -> None:
     assert coarse_fields.shape == (2, 1, 32)
     assert fine_fields.shape == (2, 1, 64)
     assert fine.region is not None
-    assert fine.region.ambient.field_domain["space_resolution"] == 22.0 / 64
+    assert fine.region.ambient == coarse.region.ambient
     assert fine_fields[:, :, ::2].allclose(coarse_fields, atol=1e-6)
     assert fine_targets[:, :, ::2].allclose(coarse_targets, atol=1e-6)
+
+
+def test_ks_generator_maps_volume_window_to_spatial_resolution() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    generator = cast(Any, load_benchmark(_ks_benchmark_root).generator)
+
+    coarse = generator(
+        seed=101,
+        shape=2,
+        volume_request=StateSpaceVolumeRequest(0.0, 1.0),
+        runtime=runtime,
+    )
+    refined = generator(
+        seed=101,
+        shape=2,
+        volume_request=StateSpaceVolumeRequest(1.0, 2.0),
+        runtime=runtime,
+    )
+    coarse_fields, _coarse_targets = coarse.require_tensors()
+    refined_fields, _refined_targets = refined.require_tensors()
+
+    assert coarse_fields.shape == (2, 1, 32)
+    assert refined_fields.shape == (2, 1, 64)
+    assert refined.region is not None
+    assert refined.region.ambient == coarse.region.ambient
+    assert refined_fields[:, :, ::2].allclose(coarse_fields, atol=1e-6)
+
+
+def test_ks_generator_samples_distinct_band_limited_mode_content() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    generator = cast(Any, load_benchmark(_ks_benchmark_root).generator)
+
+    batch = generator(
+        seed=101,
+        shape=4,
+        sample_indices=(0, 1, 2, 3),
+        spatial_points=64,
+        runtime=runtime,
+    )
+    fields, _targets = batch.require_tensors()
+    spectrum = runtime.torch.fft.rfft(fields[:, 0, :], dim=-1).abs()
+    low_mode_magnitudes = spectrum[:, 1:5]
+    high_mode_magnitudes = spectrum[:, 5:]
+
+    assert not low_mode_magnitudes[0].allclose(low_mode_magnitudes[1], atol=1e-4)
+    assert high_mode_magnitudes.max() < low_mode_magnitudes.max() * 1e-5
 
 
 def test_ks_generator_rejects_non_ladder_spatial_resolution() -> None:
@@ -364,6 +410,12 @@ def test_ks_convergence_bits_reward_planted_convergent_ladder(monkeypatch: Any) 
     assert diagnostics[0]["kind"] == "ks-convergence-diagnostics"
     assert diagnostics[0]["gate_decision"] == "passed"
     assert len(diagnostics[0]["k_sensitivity"]) >= 2
+    assert diagnostics[0]["predictability_boundary"] == 1.0
+    expected_bits = cast(int, diagnostics[0]["node_count"]) * math.log2(
+        cast(float, diagnostics[0]["evolution_scale"])
+        / cast(float, diagnostics[0]["field_error"])
+    )
+    assert math.isclose(float(bits[0]), expected_bits)
 
 
 def test_ks_convergence_bits_reward_finer_field_resolution(monkeypatch: Any) -> None:
@@ -389,6 +441,77 @@ def test_ks_convergence_bits_reward_finer_field_resolution(monkeypatch: Any) -> 
     )
 
     assert float(fine_bits[0]) > float(coarse_bits[0])
+
+
+def test_ks_convergence_bits_stop_at_first_time_gate_failure(monkeypatch: Any) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _loaded_ks_module()
+    ladder = _planted_field_ladder(runtime, coefficient=0.25)
+    residual_by_time_and_space = {
+        (2, 4): 4.0,
+        (3, 8): 1.0,
+        (5, 16): 0.25,
+        (3, 4): 4.0,
+        (5, 8): 2.0,
+        (9, 16): 1.0,
+    }
+
+    def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
+        _ = dx
+        _ = dt
+        key = (int(trajectory.shape[1]), int(trajectory.shape[-1]))
+        return trajectory * 0.0 + residual_by_time_and_space[key]
+
+    monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
+
+    bits = module._ks_ladder_convergence_bits(
+        runtime=runtime,
+        ladder=ladder,
+        horizon=1.0,
+    )
+    diagnostics = bits.leibniz_competence_diagnostics
+    time_points = diagnostics[0]["time_points"]
+
+    assert float(bits[0]) > 0.0
+    assert diagnostics[0]["predictability_boundary"] == 0.5
+    assert time_points[0]["gate_decision"] == "passed"
+    assert time_points[1]["gate_decision"] == "failed"
+    assert time_points[1]["bits"] == 0.0
+
+
+def test_ks_convergence_bits_require_evolution_beyond_initial_state(
+    monkeypatch: Any,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _loaded_ks_module()
+    torch = runtime.torch
+    initial = torch.linspace(0.0, 1.0, 4, dtype=torch.float32, device=runtime.device).reshape(
+        1,
+        1,
+        4,
+    )
+    ladder = tuple(
+        initial.repeat_interleave(2**rung, dim=-1).repeat(1, 3 * (2**rung), 1)
+        for rung in range(3)
+    )
+
+    def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
+        _ = dx
+        _ = dt
+        return trajectory * 0.0 + {4: 4.0, 8: 1.0, 16: 0.25}[int(trajectory.shape[-1])]
+
+    monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
+
+    bits = module._ks_ladder_convergence_bits(
+        runtime=runtime,
+        ladder=ladder,
+        horizon=1.0,
+    )
+    diagnostics = bits.leibniz_competence_diagnostics
+
+    assert float(bits[0]) == 0.0
+    assert diagnostics[0]["gate_decision"] == "failed"
+    assert diagnostics[0]["evolution_scale"] == 0.0
 
 
 def test_ks_convergence_bits_rejects_wrong_observed_order(monkeypatch: Any) -> None:

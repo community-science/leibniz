@@ -129,6 +129,7 @@ export function BenchmarkResultDashboard({
         sort={leaderboardSort}
         title="Leaderboard"
       />
+      <PredictabilityBoundaryTable models={frontierModels} />
     </section>
   );
 }
@@ -477,6 +478,47 @@ function ModelResultTable({
             <span role="cell">{scoreLabel(scoreValue(model))}</span>
             <span role="cell">{formatCost(costValue(model.cost_summary))}</span>
           </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PredictabilityBoundaryTable({
+  models,
+}: {
+  models: ModelResultRecord[];
+}) {
+  const rows = models.flatMap((model) =>
+    model.points
+      .filter((point) => point.competence_value_kind === 'validated-bits')
+      .map((point) => ({
+        boundary: point.predictability_boundary,
+        model,
+        point,
+      })),
+  );
+  if (rows.length === 0) {
+    return null;
+  }
+  return (
+    <section className="benchmark-result-table-section">
+      <div className="benchmark-result-table" role="table" aria-label="Predictability boundary">
+        <div className="benchmark-result-row benchmark-model-result-row header" role="row">
+          <span role="columnheader">Model</span>
+          <span role="columnheader">Boundary</span>
+          <span role="columnheader">Validated bits</span>
+        </div>
+        {rows.map(({ boundary, model, point }) => (
+          <div
+            className="benchmark-result-row benchmark-model-result-row"
+            key={`${model.model_key}-${point.log2_volume}`}
+            role="row"
+          >
+            <span role="cell">{shortDigest(model.architecture_digest)}</span>
+            <span role="cell">{boundary === undefined ? 'gate not reached' : boundary.toFixed(3)}</span>
+            <span role="cell">{scoreLabel(point.score)}</span>
+          </div>
         ))}
       </div>
     </section>

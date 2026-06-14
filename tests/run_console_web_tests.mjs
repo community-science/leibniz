@@ -133,6 +133,8 @@ function assertArchitecturePanel() {
     "id: 'D'",
     'architecture-roadmap',
     'Closing the delta',
+    'field benchmark now scores the contiguous time prefix',
+    'field evolution scale beyond the initial condition',
     'const STEPS',
   ]) {
     if (!panel.includes(marker)) {
@@ -278,6 +280,8 @@ function assertBenchmarkFrontierPlotStructure() {
     '<clipPath id={plotClipId}>',
     '<g clipPath={`url(#${plotClipId})`}>',
     'models={frontierModels}',
+    'aria-label="Predictability boundary"',
+    "competence_value_kind === 'validated-bits'",
     'const renderedPoints = [...visiblePoints].sort(comparePlotPointRenderOrder)',
     'left.frontier ? 1 : -1',
   ];
