@@ -410,6 +410,12 @@ def test_ks_convergence_bits_reward_planted_convergent_ladder(monkeypatch: Any) 
     assert diagnostics[0]["kind"] == "ks-convergence-diagnostics"
     assert diagnostics[0]["gate_decision"] == "passed"
     assert len(diagnostics[0]["k_sensitivity"]) >= 2
+    assert diagnostics[0]["predictability_boundary"] == 1.0
+    expected_bits = cast(int, diagnostics[0]["node_count"]) * math.log2(
+        cast(float, diagnostics[0]["evolution_scale"])
+        / cast(float, diagnostics[0]["field_error"])
+    )
+    assert math.isclose(float(bits[0]), expected_bits)
 
 
 def test_ks_convergence_bits_reward_finer_field_resolution(monkeypatch: Any) -> None:

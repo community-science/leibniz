@@ -608,6 +608,27 @@ def test_claim_chain_rejects_accessible_subspace_exclusions() -> None:
         )
 
 
+def test_claim_chain_overlap_treats_different_ambients_as_separate_scopes() -> None:
+    digits_region = load_benchmark(_digits_benchmark_root).generator(
+        seed=101,
+        shape=1,
+        volume_request=StateSpaceVolumeRequest(0.0, 1.0),
+    ).region
+    ks_region = load_benchmark(_ks_benchmark_root).generator(
+        seed=101,
+        shape=1,
+        volume_request=StateSpaceVolumeRequest(0.0, 1.0),
+    ).region
+
+    assert digits_region is not None
+    assert ks_region is not None
+    assert digits_region.ambient != ks_region.ambient
+    assert not cast(Any, benchmark_runner)._state_space_regions_overlap(
+        digits_region,
+        ks_region,
+    )
+
+
 def test_claim_chain_rejects_cumulative_bracket_mismatch() -> None:
     benchmark = load_digits_benchmark(_digits_benchmark_root)
     architecture = ArchitectureManifestDocument.from_bytes(

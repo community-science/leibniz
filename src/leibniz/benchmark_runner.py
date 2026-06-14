@@ -1874,6 +1874,9 @@ def _state_space_regions_overlap(left: StateSpaceRegion, right: StateSpaceRegion
         return not state_space_regions_are_disjoint(left, right)
     except StateSpaceError as error:
         if "regions in different ambients are not comparable" in str(error):
+            # Claim-chain overlap is only meaningful inside one state-space ambient.
+            # Incomparable ambients are separate capacity scopes, so cumulative
+            # volume brackets still constrain the chain but no state can be shared.
             return False
         raise
 

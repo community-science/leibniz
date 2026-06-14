@@ -969,11 +969,12 @@ def _ks_ladder_convergence_bits(
     if base_time_count < 2:
         return _zero_bits(runtime=runtime, predictions=measured_ladder[-1])
     factor = _convergence_refinement_factor
-    totals = [0.0 for _sample in range(int(ladder[-1].shape[0]))]
-    prefix_open = [True for _sample in totals]
-    boundaries = [0.0 for _sample in totals]
-    time_points: list[list[Mapping[str, object]]] = [[] for _sample in totals]
-    latest_records: list[Mapping[str, object] | None] = [None for _sample in totals]
+    boundary_bits = [0.0 for _sample in range(int(ladder[-1].shape[0]))]
+    prefix_open = [True for _sample in boundary_bits]
+    boundaries = [0.0 for _sample in boundary_bits]
+    time_points: list[list[Mapping[str, object]]] = [[] for _sample in boundary_bits]
+    latest_records: list[Mapping[str, object] | None] = [None for _sample in boundary_bits]
+    boundary_records: list[Mapping[str, object] | None] = [None for _sample in boundary_bits]
     for base_time_index in range(1, base_time_count):
         time_value = horizon * float(base_time_index) / float(base_time_count - 1)
         prefix_ladder = tuple(
@@ -999,13 +1000,14 @@ def _ks_ladder_convergence_bits(
             if not prefix_open[sample_index]:
                 continue
             if gated:
-                totals[sample_index] += point_bits
+                boundary_bits[sample_index] = point_bits
                 boundaries[sample_index] = time_value
+                boundary_records[sample_index] = point_record
             else:
                 prefix_open[sample_index] = False
     diagnostics: list[Mapping[str, object]] = []
-    for sample_index, total in enumerate(totals):
-        latest = dict(latest_records[sample_index] or {})
+    for sample_index, total in enumerate(boundary_bits):
+        latest = dict(boundary_records[sample_index] or latest_records[sample_index] or {})
         latest["kind"] = "ks-convergence-diagnostics"
         latest["sample_index"] = sample_index
         latest["predictability_boundary"] = boundaries[sample_index]
@@ -1013,7 +1015,7 @@ def _ks_ladder_convergence_bits(
         latest["gate_decision"] = "passed" if total > 0.0 else "failed"
         latest["bits"] = total
         diagnostics.append(latest)
-    result = measured_ladder[-1].new_tensor(totals)
+    result = measured_ladder[-1].new_tensor(boundary_bits)
     result.leibniz_competence_diagnostics = tuple(diagnostics)
     return result
 
