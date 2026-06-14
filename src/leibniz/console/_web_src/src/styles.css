@@ -1629,8 +1629,18 @@ p {
 }
 .architecture-forest {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: var(--space-3xl);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-lg);
+}
+@media (max-width: 1080px) {
+  .architecture-forest {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 600px) {
+  .architecture-forest {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .architecture-root {
   --arch-accent: var(--neon-blue);
@@ -1874,4 +1884,124 @@ p {
   font-size: 0.84rem;
   line-height: 1.55;
   max-width: 92ch;
+}
+.architecture-roadmap {
+  margin-top: var(--space-5xl);
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: var(--space-xl) var(--space-2xl);
+}
+.architecture-roadmap h3 {
+  margin: 0 0 var(--space-2xs);
+  font-size: 0.95rem;
+}
+.architecture-roadmap-note {
+  margin: 0 0 var(--space-lg);
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.55;
+  max-width: 92ch;
+}
+.architecture-steps {
+  list-style: none;
+  counter-reset: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-md);
+}
+.architecture-step {
+  border: var(--line-thin) solid var(--border-color);
+  border-left: var(--line-thick) solid var(--accent-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel-bg-subtle);
+  padding: var(--space-md) var(--space-lg);
+}
+.architecture-step-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+}
+.architecture-step-index {
+  flex: none;
+  width: 1.4em;
+  height: 1.4em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  border: var(--line-thin) solid var(--accent-border);
+  color: var(--neon-blue);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.architecture-step-title {
+  font-weight: 650;
+  font-size: 0.9rem;
+}
+.architecture-step-outcome {
+  margin: var(--space-xs) 0 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  max-width: 92ch;
+}
+.architecture-step-closes {
+  list-style: none;
+  margin: var(--space-md) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+.architecture-closes-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+.architecture-closes-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  padding: 2px var(--space-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.architecture-closes-chip:hover {
+  background: var(--control-bg-hover);
+}
+.architecture-closes-glyph {
+  font-weight: 800;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+.architecture-closes-chip[data-root='U'] .architecture-closes-glyph {
+  color: #4aa3ff;
+}
+.architecture-closes-chip[data-root='Q'] .architecture-closes-glyph {
+  color: #2dd4bf;
+}
+.architecture-closes-chip[data-root='R'] .architecture-closes-glyph {
+  color: #a78bfa;
+}
+.architecture-closes-chip[data-root='D'] .architecture-closes-glyph {
+  color: var(--frontier-accent);
+}
+.architecture-closes-anchor {
+  color: var(--text-dim);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.72rem;
+}
+.architecture-step-infra {
+  margin-top: var(--space-sm);
+  color: var(--text-dim);
+  font-size: 0.76rem;
+  font-style: italic;
 }

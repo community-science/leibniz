@@ -21,6 +21,8 @@ type ConceptNode = {
   gist: string;
   meta: string;
   status: NodeStatus;
+  anchor: string;
+  step?: string;
   defaultOpen?: boolean;
   rungs: Rung[];
   verdict: Verdict;
@@ -43,6 +45,12 @@ type CouplingEdge = {
   body: string;
 };
 
+type RoadmapStep = {
+  id: string;
+  title: string;
+  outcome: string;
+};
+
 const PRECISION_LEVELS: { value: number; label: string }[] = [
   { value: 0, label: 'gist' },
   { value: 1, label: '+1' },
@@ -62,6 +70,7 @@ const ROOTS: RootTree[] = [
         gist: 'A universe is states on a domain, under a law.',
         meta: 'An evolving field on a mesh, a board game’s positions, a labeled glyph.',
         status: 'implemented',
+        anchor: 'state_space.py — StateSpaceAmbient, StateSpaceAxis',
         rungs: [
           {
             level: 1,
@@ -89,6 +98,8 @@ const ROOTS: RootTree[] = [
         gist: 'A universe carries a law, or only a convention.',
         meta: 'A field equation or game rules carry a law; a glyph’s label rests on convention.',
         status: 'direction',
+        anchor: 'target contract — law status on the universe',
+        step: 'signature',
         rungs: [
           {
             level: 1,
@@ -110,6 +121,8 @@ const ROOTS: RootTree[] = [
         gist: 'Three levels: reality, law, tasks.',
         meta: 'Experiment validates the law; it never defines a task’s answer.',
         status: 'direction',
+        anchor: 'multi-scale universe records',
+        step: 'discovery',
         rungs: [
           {
             level: 1,
@@ -144,6 +157,8 @@ const ROOTS: RootTree[] = [
         gist: 'A task is a question put to a universe.',
         meta: 'One universe supports many tasks — more than a classification-vs-prediction split.',
         status: 'direction',
+        anchor: 'target contract — task signature',
+        step: 'signature',
         rungs: [
           {
             level: 1,
@@ -165,6 +180,8 @@ const ROOTS: RootTree[] = [
         gist: 'Binding: evolution, equilibrium, or inverse.',
         meta: 'Step forward in time · settle to an extremal state · infer a cause.',
         status: 'direction',
+        anchor: 'target contract — binding relation',
+        step: 'signature',
         rungs: [
           {
             level: 1,
@@ -186,6 +203,8 @@ const ROOTS: RootTree[] = [
         gist: 'Target: a state, or a readout.',
         meta: 'A field or position, vs a label, scalar, or decision.',
         status: 'direction',
+        anchor: 'target contract — target shape',
+        step: 'signature',
         rungs: [
           {
             level: 1,
@@ -208,6 +227,8 @@ const ROOTS: RootTree[] = [
         gist: 'Correctness is convergence, not an oracle.',
         meta: 'When no exact answer exists, refinement decides correctness.',
         status: 'direction',
+        anchor: 'refinement-ladder records + runner scoring',
+        step: 'ladder',
         defaultOpen: true,
         rungs: [
           {
@@ -248,6 +269,8 @@ const ROOTS: RootTree[] = [
         gist: 'One operator, many territories.',
         meta: 'Correctness, the score hierarchy, and the bootstrap share one mechanism.',
         status: 'direction',
+        anchor: 'partition-tree scoring',
+        step: 'hierarchy',
         rungs: [
           {
             level: 1,
@@ -281,6 +304,8 @@ const ROOTS: RootTree[] = [
         gist: 'Trusted ground is a ratchet.',
         meta: 'Truth is an unreached limit the community tightens toward.',
         status: 'direction',
+        anchor: 'trusted-ground persistence',
+        step: 'bootstrap',
         rungs: [
           {
             level: 1,
@@ -315,6 +340,7 @@ const ROOTS: RootTree[] = [
         gist: 'Volume is a distinguishable-state count; bits add.',
         meta: 'The unit the whole score is built on.',
         status: 'implemented',
+        anchor: 'state_space.py — Distinguishability, RegionFiltration',
         rungs: [
           {
             level: 1,
@@ -348,6 +374,8 @@ const ROOTS: RootTree[] = [
         gist: 'One ledger: value (credit) minus cost (debit).',
         meta: 'Value and cost share one unit, opposite signs.',
         status: 'direction',
+        anchor: 'score — validated bits per unit cost',
+        step: 'cost',
         rungs: [
           {
             level: 1,
@@ -375,6 +403,8 @@ const ROOTS: RootTree[] = [
         gist: 'Cost = description length + log2(operations).',
         meta: 'Levin complexity: Occam’s razor made computable; plain compute drops the description-length term.',
         status: 'mixed',
+        anchor: 'cost metrology — operation count (in code) + description length',
+        step: 'cost',
         rungs: [
           {
             level: 1,
@@ -423,6 +453,50 @@ const EDGES: CouplingEdge[] = [
   },
 ];
 
+const STEPS: RoadmapStep[] = [
+  {
+    id: 'signature',
+    title: 'Task signature in the contract grammar',
+    outcome:
+      'Add (access, binding, target) and a law-status as typed contract fields, and re-express the existing benchmarks against them. Verifier-grounded scoring is the zero-gap case of convergence.',
+  },
+  {
+    id: 'ladder',
+    title: 'Refinement-ladder records and convergence-grounded scoring',
+    outcome:
+      'A ladder and convergence-gap record with its ruler, scored in the runner as predictive mass within ε of the settled value, replacing the trajectory comparison. Discriminating law: two queries past the horizon both score where the ladder settles and neither where it does not.',
+  },
+  {
+    id: 'cost',
+    title: 'Algorithmic cost',
+    outcome:
+      'Read description length from the submitted program and add it to the machine-independent operation count; recast the score as validated bits per unit cost. Discriminating law: equal predictions with different description length receive different scores.',
+  },
+  {
+    id: 'hierarchy',
+    title: 'Hierarchical query-space scoring',
+    outcome:
+      'The recursive partition, problem-space refinement, and the adversarial stopping rule; the score becomes a tree whose contraction is the scalar.',
+  },
+  {
+    id: 'bootstrap',
+    title: 'Trusted-ground persistence',
+    outcome: 'Carried convergent regions and agreement-on-overlap certification of newly reached ground.',
+  },
+  {
+    id: 'reexpress',
+    title: 'Re-express the toy field benchmark',
+    outcome:
+      'Move the existing field benchmark onto the new instrument, with its tests written against the instrument rather than a substitute metric.',
+  },
+  {
+    id: 'discovery',
+    title: 'Readout and unknown-law universes (reserved)',
+    outcome:
+      'A readout-valued convergence-grounded task and the scaffolding for unknown-law, multi-scale universes; held until the resolution case is solid.',
+  },
+];
+
 const STATUS_LABEL: Record<NodeStatus, string> = {
   implemented: 'implemented',
   direction: 'design direction',
@@ -436,6 +510,10 @@ export function ArchitecturePanel() {
   );
   const [highlightRoot, setHighlightRoot] = useState<RootId | null>(null);
   const rootRefs = useRef<Partial<Record<RootId, HTMLElement | null>>>({});
+
+  const annotatedNodes = ROOTS.flatMap((root) => root.nodes.map((node) => ({ ...node, rootId: root.id })));
+  const totalCount = annotatedNodes.length;
+  const implementedCount = annotatedNodes.filter((node) => node.step === undefined).length;
 
   useEffect(() => {
     if (highlightRoot === null) {
@@ -486,7 +564,8 @@ export function ArchitecturePanel() {
         <p className="architecture-intro-provenance">
           Each node is marked <span className="architecture-status implemented">implemented</span> &mdash; backed by
           working code &mdash; or <span className="architecture-status direction">design direction</span> &mdash;
-          planned, with open questions noted inline.
+          planned, with open questions noted inline. The roadmap at the end is the ordered sequence that brings the
+          second kind into code.
         </p>
         <div className="architecture-controls" role="group" aria-label="Precision level">
           <span className="architecture-controls-label">Show precision up to</span>
@@ -584,6 +663,49 @@ export function ArchitecturePanel() {
             <p className="architecture-edge-body">{edge.body}</p>
           </div>
         ))}
+      </section>
+
+      <section className="architecture-roadmap" aria-label="Closing the delta">
+        <h3>Closing the delta</h3>
+        <p className="architecture-roadmap-note">
+          {implementedCount} of {totalCount} concepts are specified in code; the rest are reached by the ordered
+          sequence below. Each step is a single pull request that lands the named code and flips its concepts to
+          implemented here &mdash; contributing is editing this panel and the code it points to.
+        </p>
+        <ol className="architecture-steps">
+          {STEPS.map((step, index) => {
+            const closes = annotatedNodes.filter((node) => node.step === step.id);
+            return (
+              <li className="architecture-step" key={step.id}>
+                <div className="architecture-step-head">
+                  <span className="architecture-step-index">{index + 1}</span>
+                  <span className="architecture-step-title">{step.title}</span>
+                </div>
+                <p className="architecture-step-outcome">{step.outcome}</p>
+                {closes.length > 0 ? (
+                  <ul className="architecture-step-closes">
+                    {closes.map((node) => (
+                      <li className="architecture-closes-item" key={node.id}>
+                        <button
+                          className="architecture-closes-chip"
+                          data-root={node.rootId}
+                          onClick={() => jumpToRoot(node.rootId)}
+                          type="button"
+                        >
+                          <span className="architecture-closes-glyph">{node.rootId}</span>
+                          {node.gist}
+                        </button>
+                        <span className="architecture-closes-anchor">{node.anchor}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="architecture-step-infra">applies the instrument; closes no new concept</div>
+                )}
+              </li>
+            );
+          })}
+        </ol>
       </section>
     </div>
   );

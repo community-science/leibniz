@@ -131,6 +131,9 @@ function assertArchitecturePanel() {
     "id: 'Q'",
     "id: 'R'",
     "id: 'D'",
+    'architecture-roadmap',
+    'Closing the delta',
+    'const STEPS',
   ]) {
     if (!panel.includes(marker)) {
       throw new Error(`ArchitecturePanel must render the adaptive precision tree: ${marker}`);
