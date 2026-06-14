@@ -134,6 +134,7 @@ _inspection_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
         "architecture": FieldSpec(kind="record"),
+        "model_source": FieldSpec(kind="record", required=False),
         "input_shape": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
         "output_shape": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
         "components": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
@@ -141,6 +142,7 @@ _inspection_record = RecordSpec(
         "architecture_trace": FieldSpec(kind="record"),
         "architecture_graph": FieldSpec(kind="record"),
         "architecture_summary": FieldSpec(kind="record"),
+        "program_graph": FieldSpec(kind="record", required=False),
         "node_evidence": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
         "model_manifest": FieldSpec(kind="record", required=False),
         "submission_package": FieldSpec(kind="record", required=False),
@@ -736,6 +738,8 @@ class ModelInspectionRecord:
     architecture_summary: ModelInspectionGraphSummary
     node_evidence: tuple[ModelGraphNodeEvidence, ...]
     model_manifest: ArtifactReference | None = None
+    model_source: ArtifactReference | None = None
+    program_graph: Mapping[str, object] | None = None
     submission_package: ArtifactReference | None = None
     benchmark_manifest: ArtifactReference | None = None
     measurement_dataset: ArtifactReference | None = None
@@ -753,6 +757,18 @@ class ModelInspectionRecord:
             raise ModelInspectionValidationError(
                 "architecture reference must have kind architecture-manifest"
             )
+        if self.model_source is not None and self.model_source.kind not in {
+            "architecture-manifest",
+            "program-graph",
+        }:
+            raise ModelInspectionValidationError(
+                "model_source reference must have kind architecture-manifest or program-graph"
+            )
+        if self.program_graph is not None:
+            try:
+                ContentDigest.from_value(self.program_graph)
+            except ContentEncodingError as error:
+                raise ModelInspectionValidationError(str(error)) from error
         _require_shape(self.input_shape, field="input_shape")
         _require_shape(self.output_shape, field="output_shape")
         if not self.components:
@@ -865,6 +881,7 @@ class ModelInspectionRecord:
         return cls(
             id=id,
             architecture=architecture_reference,
+            model_source=architecture_reference,
             input_shape=architecture_manifest.input_shape,
             output_shape=architecture_manifest.output_shape,
             components=components,
@@ -897,6 +914,7 @@ class ModelInspectionRecord:
         return cls(
             id=record.id,
             architecture=record.architecture,
+            model_source=model_manifest.model_source or record.model_source,
             input_shape=record.input_shape,
             output_shape=record.output_shape,
             components=record.components,
@@ -938,6 +956,7 @@ class ModelInspectionRecord:
         return cls(
             id=record.id,
             architecture=record.architecture,
+            model_source=record.model_source,
             input_shape=record.input_shape,
             output_shape=record.output_shape,
             components=record.components,
@@ -1002,6 +1021,7 @@ class ModelInspectionRecord:
             architecture=ArtifactReference.from_record(
                 _extract.mapping(validated["architecture"], "architecture")
             ),
+            model_source=_optional_reference(validated.get("model_source"), "model_source"),
             input_shape=_as_shape(validated["input_shape"], field="input_shape"),
             output_shape=_as_shape(validated["output_shape"], field="output_shape"),
             components=components,
@@ -1016,6 +1036,10 @@ class ModelInspectionRecord:
             ),
             architecture_summary=ModelInspectionGraphSummary.from_record(
                 _extract.mapping(validated["architecture_summary"], "architecture_summary")
+            ),
+            program_graph=_extract.optional_mapping(
+                validated.get("program_graph"),
+                "program_graph",
             ),
             node_evidence=tuple(
                 ModelGraphNodeEvidence.from_record(
@@ -1074,6 +1098,10 @@ class ModelInspectionRecord:
                 evidence.to_record() for evidence in self.node_evidence
             ],
         }
+        if self.model_source is not None:
+            record["model_source"] = self.model_source.to_record()
+        if self.program_graph is not None:
+            record["program_graph"] = dict(self.program_graph)
         if self.model_manifest is not None:
             record["model_manifest"] = self.model_manifest.to_record()
         if self.submission_package is not None:

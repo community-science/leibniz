@@ -1,20 +1,24 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from leibniz.documents import canonical_document_bytes
 from leibniz.program_graphs import (
     ProgramAdd,
     ProgramConcat,
     ProgramGraph,
+    ProgramGraphDocument,
     ProgramGraphEdge,
     ProgramGraphError,
     ProgramGraphNode,
     ProgramIdentity,
     ProgramResampleLike,
     ProgramTensorContract,
+    load_program_graph,
 )
 from leibniz.tensor_runtime import resolve_tensor_runtime
 
@@ -48,6 +52,72 @@ def test_classification_program_graph_composes_trainable_open_node() -> None:
     assert report.output_shapes == (((3,),),)
     assert output.shape == (2, 3)
     assert graph.digest == graph.digest
+
+
+def test_program_graph_spec_round_trips_and_rebinds_open_operations() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    graph = ProgramGraph(
+        contract_kind="classification",
+        inputs=(ProgramTensorContract("x", (4,)),),
+        outputs=(ProgramTensorContract("y", (4,)),),
+        nodes=(ProgramGraphNode("identity", ProgramIdentity(), "identity"),),
+        edges=(ProgramGraphEdge("x", "identity"), ProgramGraphEdge("identity", "y")),
+    )
+    document = ProgramGraphDocument.from_bytes(canonical_document_bytes(graph.to_record()))
+    rebound = ProgramGraph.from_spec(
+        document.spec,
+        operations={"identity": torch.nn.Identity()},
+    )
+
+    assert document.digest == graph.spec.digest == graph.digest
+    assert rebound.to_record() == graph.to_record()
+    assert rebound.build_module(runtime)(torch.zeros(2, 4)).shape == (2, 4)
+
+
+def test_program_graph_loader_records_source_and_graph_identity(tmp_path: Path) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    program_path = tmp_path / "submitted_program.py"
+    program_path.write_text(
+        "\n".join(
+            (
+                "from leibniz.program_graphs import (",
+                "    ProgramGraph,",
+                "    ProgramGraphEdge,",
+                "    ProgramGraphNode,",
+                "    ProgramTensorContract,",
+                ")",
+                "",
+                "def build_program_graph(runtime):",
+                "    backend = runtime.torch",
+                "    return ProgramGraph(",
+                "        contract_kind='classification',",
+                "        inputs=(ProgramTensorContract('x', (4,)),),",
+                "        outputs=(ProgramTensorContract('y', (4,)),),",
+                "        nodes=(",
+                "            ProgramGraphNode(",
+                "                id='identity',",
+                "                kind='submitted-identity',",
+                "                operation=backend.nn.Identity(),",
+                "            ),",
+                "        ),",
+                "        edges=(",
+                "            ProgramGraphEdge('x', 'identity'),",
+                "            ProgramGraphEdge('identity', 'y'),",
+                "        ),",
+                "    )",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_program_graph(program_path, runtime)
+
+    assert loaded.source.path == program_path
+    assert loaded.source.graph_digest == loaded.graph.digest
+    assert loaded.source.to_record()["kind"] == "program-graph-source"
+    assert loaded.graph.validate(runtime, input_shapes=((4,),)).output_shapes == (((4,),),)
 
 
 def test_prediction_program_graph_validates_skip_add_across_scales() -> None:

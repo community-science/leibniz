@@ -79,6 +79,16 @@ def test_model_artifact_manifest_sorts_artifacts_and_provenance() -> None:
     assert manifest.training_provenance == (first_training, second_training)
 
 
+def test_model_artifact_manifest_records_generic_model_source() -> None:
+    record = _model_manifest_record()
+    record["model_source"] = _program_graph_reference().to_record()
+
+    manifest = ModelArtifactManifest.from_record(record)
+
+    assert manifest.model_source == _program_graph_reference()
+    assert manifest.to_record()["model_source"] == _program_graph_reference().to_record()
+
+
 def test_model_artifact_manifest_validates_embedded_public_sources() -> None:
     manifest = ModelArtifactManifest.from_record(_model_manifest_record())
 
@@ -123,6 +133,12 @@ def test_model_artifact_manifest_rejects_missing_and_malformed_references() -> N
     assert str(
         capture_model_manifest_error(lambda: ModelArtifactManifest.from_record(record))
     ) == "interface reference must have kind model-interface"
+
+    record = _model_manifest_record()
+    record["model_source"] = _interface_reference().to_record()
+    assert str(
+        capture_model_manifest_error(lambda: ModelArtifactManifest.from_record(record))
+    ) == "model_source reference must have kind architecture-manifest or program-graph"
 
     record = _model_manifest_record()
     del record["execution_family"]
@@ -215,6 +231,15 @@ def _checkpoint_reference() -> ArtifactReference:
         {
             "kind": "model-checkpoint",
             "content_digest": str(ContentDigest.from_value({"weights": [1, 2, 3]})),
+        }
+    )
+
+
+def _program_graph_reference() -> ArtifactReference:
+    return ArtifactReference.from_record(
+        {
+            "kind": "program-graph",
+            "record_digest": str(ContentDigest.from_value({"nodes": []})),
         }
     )
 

@@ -1232,6 +1232,11 @@ def run_benchmark(
         "training_run": _training_run_artifact_record(training_result.training_run),
         "throughput": training_result.throughput,
         "architecture": model_inspection.architecture.to_record(),
+        "model_source": (
+            None
+            if model_inspection.model_source is None
+            else model_inspection.model_source.to_record()
+        ),
         "cost_summary": _training_cost_summary(
             inspection=model_inspection,
             training_estimate=completed_training_estimate,
@@ -4898,6 +4903,9 @@ def _training_progress_record(
         "evaluation_curriculum": dict(evaluation_curriculum),
         "training_curriculum": dict(training_curriculum),
         "architecture": inspection.architecture.to_record(),
+        "model_source": (
+            None if inspection.model_source is None else inspection.model_source.to_record()
+        ),
         "cost_summary": _training_cost_summary(
             inspection=inspection,
             training_estimate=training_estimate,
@@ -5091,15 +5099,17 @@ def _write_model_checkpoint_artifact(
         kind="model-checkpoint",
         content_digest=checkpoint_digest,
     )
+    architecture_reference = reference_for_record(
+        kind="architecture-manifest",
+        record=architecture.to_record(),
+    )
     manifest = ModelArtifactManifest(
         id=ProtocolIdentifier.parse(
             f"model-manifests.{_identifier_atom(summary.benchmark_id)}."
             f"{summary.run_slug}.{stem}@0.1.0"
         ),
-        architecture=reference_for_record(
-            kind="architecture-manifest",
-            record=architecture.to_record(),
-        ),
+        architecture=architecture_reference,
+        model_source=architecture_reference,
         interface=reference_for_record(
             kind="model-interface",
             record=model_interface.to_record(),

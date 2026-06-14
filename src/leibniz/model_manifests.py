@@ -39,6 +39,7 @@ _model_artifact_manifest_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
         "architecture": FieldSpec(kind="record"),
+        "model_source": FieldSpec(kind="record", required=False),
         "interface": FieldSpec(kind="record"),
         "execution_family": FieldSpec(kind="record"),
         "model_artifacts": FieldSpec(
@@ -127,6 +128,7 @@ class ModelArtifactManifest:
     execution_family: ModelExecutionFamily
     model_artifacts: tuple[ArtifactReference, ...]
     training_provenance: tuple[ArtifactReference, ...] = ()
+    model_source: ArtifactReference | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -138,6 +140,13 @@ class ModelArtifactManifest:
         if self.architecture.kind != "architecture-manifest":
             raise ModelArtifactManifestValidationError(
                 "architecture reference must have kind architecture-manifest"
+            )
+        if self.model_source is not None and self.model_source.kind not in {
+            "architecture-manifest",
+            "program-graph",
+        }:
+            raise ModelArtifactManifestValidationError(
+                "model_source reference must have kind architecture-manifest or program-graph"
             )
         if self.interface.kind != "model-interface":
             raise ModelArtifactManifestValidationError(
@@ -196,6 +205,13 @@ class ModelArtifactManifest:
             architecture=ArtifactReference.from_record(
                 _record.mapping(validated["architecture"], "architecture")
             ),
+            model_source=(
+                None
+                if validated.get("model_source") is None
+                else ArtifactReference.from_record(
+                    _record.mapping(validated["model_source"], "model_source")
+                )
+            ),
             interface=ArtifactReference.from_record(
                 _record.mapping(validated["interface"], "interface")
             ),
@@ -235,6 +251,8 @@ class ModelArtifactManifest:
             "execution_family": self.execution_family.to_record(),
             "model_artifacts": [artifact.to_record() for artifact in self.model_artifacts],
         }
+        if self.model_source is not None:
+            record["model_source"] = self.model_source.to_record()
         if self.training_provenance:
             record["training_provenance"] = [
                 reference.to_record() for reference in self.training_provenance
@@ -267,5 +285,4 @@ class ModelArtifactManifestDocument:
             model_interface=model_interface,
         )
         return cls(manifest=manifest, digest=manifest.digest)
-
 

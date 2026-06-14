@@ -2,26 +2,37 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
+from types import ModuleType
 from typing import Any, Literal, TypeAlias, cast
 
 from leibniz.content import ContentDigest
-from leibniz.documents import ContentEncodingError
+from leibniz.documents import ContentEncodingError, load_object_document
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 from leibniz.tensor_runtime import TensorRuntime, make_empty_float_tensor
 
 __all__ = [
+    "LoadedProgramGraph",
     "ProgramAdd",
     "ProgramAxis",
     "ProgramConcat",
     "ProgramGraph",
+    "ProgramGraphDocument",
     "ProgramGraphEdge",
     "ProgramGraphError",
     "ProgramGraphNode",
+    "ProgramGraphNodeSpec",
+    "ProgramGraphSource",
+    "ProgramGraphSpec",
     "ProgramGraphValidationReport",
     "ProgramIdentity",
     "ProgramResampleLike",
     "ProgramTensorContract",
+    "load_program_graph",
 ]
 
 ProgramAxis: TypeAlias = int | str
@@ -30,6 +41,32 @@ _ContractKind: TypeAlias = Literal["classification", "prediction"]
 
 class ProgramGraphError(ValueError):
     """Raised when a submitted model program graph is invalid."""
+
+
+_extract = RecordExtractor(error_type=ProgramGraphError)
+_node_spec_record = RecordSpec(
+    fields={
+        "id": FieldSpec(kind="string"),
+        "kind": FieldSpec(kind="string"),
+        "parameters": FieldSpec(kind="record", required=False),
+    }
+)
+_edge_record = RecordSpec(
+    fields={
+        "source_id": FieldSpec(kind="string"),
+        "target_id": FieldSpec(kind="string"),
+        "target_input_index": FieldSpec(kind="integer"),
+    }
+)
+_graph_spec_record = RecordSpec(
+    fields={
+        "contract_kind": FieldSpec(kind="string"),
+        "inputs": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
+        "outputs": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
+        "nodes": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
+        "edges": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +131,56 @@ class ProgramTensorContract:
     def to_record(self) -> dict[str, object]:
         return {"name": self.name, "axes": list(self.axes)}
 
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> ProgramTensorContract:
+        return cls(
+            name=_extract.string(record.get("name"), "name"),
+            axes=tuple(
+                _as_program_axis(axis, field="axes")
+                for axis in _unparsed_sequence(record.get("axes"), "axes")
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramGraphNodeSpec:
+    """Serializable identity for one open computation node."""
+
+    id: str
+    kind: str
+    parameters: Mapping[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            raise ProgramGraphError("program node id must be nonempty")
+        if "." in self.id:
+            raise ProgramGraphError("program node id must not contain '.'")
+        if not self.kind:
+            raise ProgramGraphError("program node kind must be nonempty")
+        try:
+            ContentDigest.from_value(self.to_record())
+        except ContentEncodingError as error:
+            raise ProgramGraphError(str(error)) from error
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> ProgramGraphNodeSpec:
+        try:
+            validated = _node_spec_record.validate(record)
+        except ValueError as error:
+            raise ProgramGraphError(str(error)) from error
+        return cls(
+            id=_extract.string(validated["id"], "id"),
+            kind=_extract.string(validated["kind"], "kind"),
+            parameters=_extract.optional_mapping(validated.get("parameters"), "parameters"),
+        )
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "parameters": dict(self.parameters or {}),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class ProgramGraphNode:
@@ -114,16 +201,20 @@ class ProgramGraphNode:
         if not callable(self.operation):
             raise ProgramGraphError(f"program node {self.id!r} operation must be callable")
         try:
-            ContentDigest.from_value(self.to_record())
+            ContentDigest.from_value(self.spec.to_record())
         except ContentEncodingError as error:
             raise ProgramGraphError(str(error)) from error
 
+    @property
+    def spec(self) -> ProgramGraphNodeSpec:
+        return ProgramGraphNodeSpec(
+            id=self.id,
+            kind=self.kind,
+            parameters=self.parameters,
+        )
+
     def to_record(self) -> dict[str, object]:
-        return {
-            "id": self.id,
-            "kind": self.kind,
-            "parameters": dict(self.parameters or {}),
-        }
+        return self.spec.to_record()
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +241,21 @@ class ProgramGraphEdge:
             "target_id": self.target_id,
             "target_input_index": self.target_input_index,
         }
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> ProgramGraphEdge:
+        try:
+            validated = _edge_record.validate(record)
+        except ValueError as error:
+            raise ProgramGraphError(str(error)) from error
+        return cls(
+            source_id=_extract.string(validated["source_id"], "source_id"),
+            target_id=_extract.string(validated["target_id"], "target_id"),
+            target_input_index=_extract.integer(
+                validated["target_input_index"],
+                "target_input_index",
+            ),
+        )
 
 
 class ProgramIdentity:
@@ -219,46 +325,49 @@ class ProgramGraphValidationReport:
 
 
 @dataclass(frozen=True, slots=True)
-class ProgramGraph:
-    """An open-node model program with declared tensor-shaped I/O."""
+class ProgramGraphSpec:
+    """Serializable identity for an open-node model program graph."""
 
-    nodes: tuple[ProgramGraphNode, ...]
+    nodes: tuple[ProgramGraphNodeSpec, ...]
     edges: tuple[ProgramGraphEdge, ...]
     inputs: tuple[ProgramTensorContract, ...]
     outputs: tuple[ProgramTensorContract, ...]
     contract_kind: _ContractKind
 
     def __post_init__(self) -> None:
-        if self.contract_kind not in {"classification", "prediction"}:
-            raise ProgramGraphError("contract_kind must be classification or prediction")
-        if not self.nodes:
-            raise ProgramGraphError("program graph nodes must not be empty")
-        if not self.inputs:
-            raise ProgramGraphError("program graph inputs must not be empty")
-        if not self.outputs:
-            raise ProgramGraphError("program graph outputs must not be empty")
-        _require_unique("program node ids", tuple(node.id for node in self.nodes))
-        _require_unique("program input names", tuple(input_.name for input_ in self.inputs))
-        _require_unique("program output names", tuple(output.name for output in self.outputs))
-        node_ids = frozenset(node.id for node in self.nodes)
-        input_ids = frozenset(input_.name for input_ in self.inputs)
-        output_ids = frozenset(output.name for output in self.outputs)
-        overlap = node_ids & input_ids
-        if overlap:
-            raise ProgramGraphError(f"program node id duplicates input name {sorted(overlap)[0]!r}")
-        overlap = (node_ids | input_ids) & output_ids
-        if overlap:
-            duplicate = sorted(overlap)[0]
-            raise ProgramGraphError(f"program output name duplicates graph id {duplicate!r}")
-        known_sources = node_ids | input_ids
-        known_targets = node_ids | output_ids
-        for edge in self.edges:
-            if edge.source_id not in known_sources:
-                raise ProgramGraphError(f"edge source_id {edge.source_id!r} is not known")
-            if edge.target_id not in known_targets:
-                raise ProgramGraphError(f"edge target_id {edge.target_id!r} is not known")
-        self.topological_order()
-        self._require_boundary_edges()
+        _validate_graph_shape(
+            nodes=tuple(node.id for node in self.nodes),
+            edges=self.edges,
+            inputs=self.inputs,
+            outputs=self.outputs,
+            contract_kind=self.contract_kind,
+        )
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> ProgramGraphSpec:
+        try:
+            validated = _graph_spec_record.validate(record)
+        except ValueError as error:
+            raise ProgramGraphError(str(error)) from error
+        return cls(
+            contract_kind=_as_contract_kind(validated["contract_kind"]),
+            inputs=tuple(
+                ProgramTensorContract.from_record(_extract.mapping(input_, "inputs"))
+                for input_ in _extract.sequence(validated["inputs"], "inputs")
+            ),
+            outputs=tuple(
+                ProgramTensorContract.from_record(_extract.mapping(output, "outputs"))
+                for output in _extract.sequence(validated["outputs"], "outputs")
+            ),
+            nodes=tuple(
+                ProgramGraphNodeSpec.from_record(_extract.mapping(node, "nodes"))
+                for node in _extract.sequence(validated["nodes"], "nodes")
+            ),
+            edges=tuple(
+                ProgramGraphEdge.from_record(_extract.mapping(edge, "edges"))
+                for edge in _extract.sequence(validated["edges"], "edges")
+            ),
+        )
 
     @property
     def digest(self) -> ContentDigest:
@@ -272,6 +381,122 @@ class ProgramGraph:
             "nodes": [node.to_record() for node in self.nodes],
             "edges": [edge.to_record() for edge in self.edges],
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramGraphDocument:
+    """A loaded program graph spec and its canonical digest."""
+
+    spec: ProgramGraphSpec
+    digest: ContentDigest
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> ProgramGraphDocument:
+        try:
+            record = load_object_document(data, description="program graph document")
+        except ContentEncodingError as error:
+            raise ProgramGraphError(str(error)) from error
+        spec = ProgramGraphSpec.from_record(record)
+        return cls(spec=spec, digest=spec.digest)
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramGraphSource:
+    """Durable identity for the source file that produced a program graph."""
+
+    path: Path
+    source_digest: ContentDigest
+    graph_digest: ContentDigest
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "kind": "program-graph-source",
+            "path": self.path.as_posix(),
+            "source_digest": str(self.source_digest),
+            "graph_digest": str(self.graph_digest),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedProgramGraph:
+    """A program graph loaded from source with its durable identity."""
+
+    graph: ProgramGraph
+    source: ProgramGraphSource
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "source": self.source.to_record(),
+            "graph": self.graph.to_record(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramGraph:
+    """An open-node model program with declared tensor-shaped I/O."""
+
+    nodes: tuple[ProgramGraphNode, ...]
+    edges: tuple[ProgramGraphEdge, ...]
+    inputs: tuple[ProgramTensorContract, ...]
+    outputs: tuple[ProgramTensorContract, ...]
+    contract_kind: _ContractKind
+
+    def __post_init__(self) -> None:
+        _validate_graph_shape(
+            nodes=tuple(node.id for node in self.nodes),
+            edges=self.edges,
+            inputs=self.inputs,
+            outputs=self.outputs,
+            contract_kind=self.contract_kind,
+        )
+        self.topological_order()
+        self._require_boundary_edges()
+        missing_operations = tuple(node.id for node in self.nodes if not callable(node.operation))
+        if missing_operations:
+            raise ProgramGraphError(f"program node {missing_operations[0]!r} operation is missing")
+
+    @property
+    def digest(self) -> ContentDigest:
+        return ContentDigest.from_value(self.to_record())
+
+    @property
+    def spec(self) -> ProgramGraphSpec:
+        return ProgramGraphSpec(
+            nodes=tuple(node.spec for node in self.nodes),
+            edges=self.edges,
+            inputs=self.inputs,
+            outputs=self.outputs,
+            contract_kind=self.contract_kind,
+        )
+
+    @classmethod
+    def from_spec(
+        cls,
+        spec: ProgramGraphSpec,
+        *,
+        operations: Mapping[str, Any],
+    ) -> ProgramGraph:
+        missing = tuple(node.id for node in spec.nodes if node.id not in operations)
+        if missing:
+            raise ProgramGraphError(f"missing operation for program node {missing[0]!r}")
+        return cls(
+            nodes=tuple(
+                ProgramGraphNode(
+                    id=node.id,
+                    kind=node.kind,
+                    parameters=node.parameters,
+                    operation=operations[node.id],
+                )
+                for node in spec.nodes
+            ),
+            edges=spec.edges,
+            inputs=spec.inputs,
+            outputs=spec.outputs,
+            contract_kind=spec.contract_kind,
+        )
+
+    def to_record(self) -> dict[str, object]:
+        return self.spec.to_record()
 
     def build_module(self, runtime: TensorRuntime) -> Any:
         """Compose this graph into a trainable backend module."""
@@ -484,6 +709,80 @@ def _incoming_edges(edges: Sequence[ProgramGraphEdge]) -> dict[str, tuple[Progra
     return {target_id: tuple(target_edges) for target_id, target_edges in incoming.items()}
 
 
+def load_program_graph(path: Path, runtime: TensorRuntime) -> LoadedProgramGraph:
+    """Load a submitted program graph from a source file factory."""
+
+    source = path.read_bytes()
+    digest = ContentDigest(algorithm="sha256", hex=hashlib.sha256(source).hexdigest())
+    module = _load_source_module(path, digest=digest)
+    factory = getattr(module, "build_program_graph", None)
+    if not callable(factory):
+        factory = getattr(module, "program_graph", None)
+    if not callable(factory):
+        raise ProgramGraphError("program source must define build_program_graph(runtime)")
+    graph = factory(runtime)
+    if not isinstance(graph, ProgramGraph):
+        raise ProgramGraphError("program graph factory must return ProgramGraph")
+    return LoadedProgramGraph(
+        graph=graph,
+        source=ProgramGraphSource(
+            path=path,
+            source_digest=digest,
+            graph_digest=graph.digest,
+        ),
+    )
+
+
+def _load_source_module(path: Path, *, digest: ContentDigest) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        f"_leibniz_program_graph_{digest.hex}",
+        path,
+    )
+    if spec is None or spec.loader is None:
+        raise ProgramGraphError(f"could not load program source: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _validate_graph_shape(
+    *,
+    nodes: tuple[str, ...],
+    edges: tuple[ProgramGraphEdge, ...],
+    inputs: tuple[ProgramTensorContract, ...],
+    outputs: tuple[ProgramTensorContract, ...],
+    contract_kind: _ContractKind,
+) -> None:
+    if contract_kind not in {"classification", "prediction"}:
+        raise ProgramGraphError("contract_kind must be classification or prediction")
+    if not nodes:
+        raise ProgramGraphError("program graph nodes must not be empty")
+    if not inputs:
+        raise ProgramGraphError("program graph inputs must not be empty")
+    if not outputs:
+        raise ProgramGraphError("program graph outputs must not be empty")
+    _require_unique("program node ids", nodes)
+    _require_unique("program input names", tuple(input_.name for input_ in inputs))
+    _require_unique("program output names", tuple(output.name for output in outputs))
+    node_ids = frozenset(nodes)
+    input_ids = frozenset(input_.name for input_ in inputs)
+    output_ids = frozenset(output.name for output in outputs)
+    overlap = node_ids & input_ids
+    if overlap:
+        raise ProgramGraphError(f"program node id duplicates input name {sorted(overlap)[0]!r}")
+    overlap = (node_ids | input_ids) & output_ids
+    if overlap:
+        duplicate = sorted(overlap)[0]
+        raise ProgramGraphError(f"program output name duplicates graph id {duplicate!r}")
+    known_sources = node_ids | input_ids
+    known_targets = node_ids | output_ids
+    for edge in edges:
+        if edge.source_id not in known_sources:
+            raise ProgramGraphError(f"edge source_id {edge.source_id!r} is not known")
+        if edge.target_id not in known_targets:
+            raise ProgramGraphError(f"edge target_id {edge.target_id!r} is not known")
+
+
 def _require_unique(field: str, values: tuple[str, ...]) -> None:
     if len(values) == len(set(values)):
         return
@@ -498,6 +797,26 @@ def _as_tuple(value: Any) -> tuple[Any, ...]:
     if isinstance(value, tuple):
         return cast(tuple[Any, ...], value)
     return (value,)
+
+
+def _as_program_axis(value: object, *, field: str) -> ProgramAxis:
+    if isinstance(value, bool):
+        raise ProgramGraphError(f"{field}: expected integer or string")
+    if isinstance(value, int | str):
+        return value
+    raise ProgramGraphError(f"{field}: expected integer or string")
+
+
+def _as_contract_kind(value: object) -> _ContractKind:
+    if value == "classification" or value == "prediction":
+        return cast(_ContractKind, value)
+    raise ProgramGraphError("contract_kind must be classification or prediction")
+
+
+def _unparsed_sequence(value: object, field: str) -> tuple[object, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        raise ProgramGraphError(f"{field}: expected sequence")
+    return tuple(cast(Sequence[object], value))
 
 
 def _validate_output_count(outputs: tuple[Any, ...], *, expected: int) -> None:

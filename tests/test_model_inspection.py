@@ -27,8 +27,13 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
         id=ProtocolIdentifier.parse("model-inspections.digits-pool@0.1.0"),
         architecture_manifest=_architecture_manifest(),
     )
+    architecture_reference = reference_for_record(
+        kind="architecture-manifest",
+        record=_architecture_manifest().to_record(),
+    )
 
     assert inspection.input_shape == (1, 24, 24)
+    assert inspection.model_source == architecture_reference
     assert inspection.output_shape == (10,)
     assert tuple(component.kind for component in inspection.components) == (
         "adaptive-pooling",
@@ -123,8 +128,10 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
 
 
 def test_model_inspection_includes_model_manifest_sources() -> None:
+    record = _model_manifest_record()
+    record["model_source"] = _program_graph_reference().to_record()
     model_manifest = ModelArtifactManifest.from_record(
-        _model_manifest_record(),
+        record,
         architecture_manifest=_architecture_manifest(),
         model_interface=_model_interface(),
     )
@@ -139,6 +146,7 @@ def test_model_inspection_includes_model_manifest_sources() -> None:
         kind="model-manifest",
         record=model_manifest.to_record(),
     )
+    assert inspection.model_source == _program_graph_reference()
     assert inspection.model_artifacts == (_checkpoint_reference(),)
     assert inspection.training_provenance == (_training_reference(),)
     assert {
@@ -314,6 +322,15 @@ def _checkpoint_reference() -> ArtifactReference:
         {
             "kind": "model-checkpoint",
             "content_digest": str(ContentDigest.from_value({"weights": [1, 2, 3]})),
+        }
+    )
+
+
+def _program_graph_reference() -> ArtifactReference:
+    return ArtifactReference.from_record(
+        {
+            "kind": "program-graph",
+            "record_digest": str(ContentDigest.from_value({"nodes": []})),
         }
     )
 
