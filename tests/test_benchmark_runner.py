@@ -70,6 +70,7 @@ _ks_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "ks"
 _digits_architecture = (
     _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool.json"
 )
+_digits_program = _repository_root / "tests" / "fixtures" / "programs" / "digits_pool.py"
 _digits_convnet_architecture = (
     _repository_root / "tests" / "fixtures" / "architecture" / "digits_convnet.json"
 )
@@ -506,6 +507,7 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
     summary = run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
+            program_path=_digits_program,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
             train_steps=1,
@@ -515,9 +517,8 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
 
     assert summary.dry_run is True
     assert summary.measurement_count == 0
-    assert summary.run_slug.startswith(
-        "digits-arch-186021388794-seed101-steps1-train-"
-    )
+    assert summary.run_slug.startswith("digits-program-")
+    assert "-seed101-steps1-train-" in summary.run_slug
     assert "-samples" not in summary.run_slug
     assert not (tmp_path / "results").exists()
 
@@ -879,6 +880,7 @@ def test_digits_benchmark_runner_dry_run_does_not_discover_runtime(
     summary = run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
+            program_path=_digits_program,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
             train_steps=1,
@@ -898,6 +900,7 @@ def test_benchmark_run_plan_requires_positive_model_checkpoint_gate_interval(
     ):
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
+            program_path=_digits_program,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
             model_checkpoint_gate_interval=0,
@@ -1268,6 +1271,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     summary = run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
+            program_path=_digits_program,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
             seed=101,
@@ -1300,6 +1304,11 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         evaluation_bundle.measurement_dataset.digest
     )
     assert evaluation_bundle.model_inspection.cost_summary.parameter_count == 50
+    assert evaluation_bundle.model_manifest.model_source is not None
+    assert evaluation_bundle.model_manifest.model_source.kind == "program-graph"
+    assert str(evaluation_bundle.model_checkpoint["program_path"]).endswith(
+        "tests/fixtures/programs/digits_pool.py"
+    )
     assert evaluation_bundle.model_inspection.cost_summary.inference_cost_measurement is not None
     assert (
         evaluation_bundle.model_inspection.cost_summary.inference_cost_measurement.abstract_flops
@@ -1639,6 +1648,7 @@ def test_benchmark_evaluation_rejects_checkpoint_artifact_for_wrong_benchmark(
     summary = run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
+            program_path=_digits_program,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
             seed=101,
