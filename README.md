@@ -4,6 +4,10 @@ Leibniz is a protocol for scientific work: a way to make identity, frame,
 statement, measurement, record, and program artifacts explicit, addressable,
 validated, and composable without a central authority.
 
+[ARCHITECTURE.md](ARCHITECTURE.md) describes how the protocol measures
+scientific work — universes, tasks, correctness, and scoring — in both an
+informal and a formal register.
+
 ## Principles
 
 1. **Protocol, not platform.** Leibniz is defined by artifact formats,
