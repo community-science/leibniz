@@ -978,7 +978,8 @@ def _ks_ladder_convergence_bits(
         factor=factor,
     )
     finest = ladder[-1]
-    signal = finest.std(dim=(1, 2), unbiased=False)
+    evolution = finest - finest[:, 0:1, :]
+    signal = evolution.std(dim=(1, 2), unbiased=False)
     finest_nodes = int(finest.shape[1]) * int(finest.shape[2])
     values: list[float] = []
     diagnostics: list[Mapping[str, object]] = []
@@ -1045,7 +1046,7 @@ def _ks_convergence_diagnostic_record(
         "expected_observed_order": _convergence_expected_observed_order,
         "observed_order_tolerance": _convergence_observed_order_tolerance,
         "field_error": field_error,
-        "signal_scale": signal,
+        "evolution_scale": signal,
         "node_count": node_count,
         "rung_count": _convergence_rung_count,
         "gate_decision": "passed" if bits > 0.0 else "failed",

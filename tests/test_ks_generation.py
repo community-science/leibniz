@@ -437,6 +437,41 @@ def test_ks_convergence_bits_reward_finer_field_resolution(monkeypatch: Any) -> 
     assert float(fine_bits[0]) > float(coarse_bits[0])
 
 
+def test_ks_convergence_bits_require_evolution_beyond_initial_state(
+    monkeypatch: Any,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _loaded_ks_module()
+    torch = runtime.torch
+    initial = torch.linspace(0.0, 1.0, 4, dtype=torch.float32, device=runtime.device).reshape(
+        1,
+        1,
+        4,
+    )
+    ladder = tuple(
+        initial.repeat_interleave(2**rung, dim=-1).repeat(1, 3 * (2**rung), 1)
+        for rung in range(3)
+    )
+
+    def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
+        _ = dx
+        _ = dt
+        return trajectory * 0.0 + {4: 4.0, 8: 1.0, 16: 0.25}[int(trajectory.shape[-1])]
+
+    monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
+
+    bits = module._ks_ladder_convergence_bits(
+        runtime=runtime,
+        ladder=ladder,
+        horizon=1.0,
+    )
+    diagnostics = bits.leibniz_competence_diagnostics
+
+    assert float(bits[0]) == 0.0
+    assert diagnostics[0]["gate_decision"] == "failed"
+    assert diagnostics[0]["evolution_scale"] == 0.0
+
+
 def test_ks_convergence_bits_rejects_wrong_observed_order(monkeypatch: Any) -> None:
     runtime = resolve_tensor_runtime("cpu")
     module = _loaded_ks_module()
