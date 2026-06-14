@@ -161,6 +161,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
             "tests/fixtures/architecture/digits_perf_conv.json",
         ),
         ("architecture-manifest", "tests/fixtures/architecture/digits_pool.json"),
+        ("architecture-manifest", "tests/fixtures/architecture/ks_variable_conv.json"),
         ("benchmark-manifest", "tests/fixtures/finite_outcome/manifest.json"),
         ("materialization-plan", "tests/fixtures/digits/materialization_plan_l1.json"),
         ("materialization-plan", "tests/fixtures/digits/materialization_plan_l3.json"),
@@ -225,6 +226,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         "tests/fixtures/architecture/digits_convnet.json",
         "tests/fixtures/architecture/digits_perf_conv.json",
         "tests/fixtures/architecture/digits_pool.json",
+        "tests/fixtures/architecture/ks_variable_conv.json",
     ]
     model_inspection = next(
         inspection

@@ -251,12 +251,16 @@ class Generator:
         )
         sample_shape = _sample_shape(shape)
         sample_count = _sample_count(sample_shape)
-        resolved_spatial_points = _spatial_points(spatial_points)
         resolved_sample_indices = _sample_indices(
             sample_count=sample_count,
             sample_indices=sample_indices,
         )
         window = _requested_window(volume_request)
+        resolved_spatial_points = (
+            _spatial_points(spatial_points)
+            if spatial_points is not None
+            else _spatial_points_for_window(window)
+        )
         if window is None:
             return GeneratedSampleSet(
                 benchmark_id=self.manifest.id,
@@ -345,7 +349,7 @@ def _target_contract() -> TargetContract:
     )
 
 
-def _ks_ambient(*, spatial_points: int = _default_space_count) -> StateSpaceAmbient:
+def _ks_ambient() -> StateSpaceAmbient:
     return StateSpaceAmbient(
         field_domain_kind="box-2d",
         field_domain={
@@ -354,7 +358,6 @@ def _ks_ambient(*, spatial_points: int = _default_space_count) -> StateSpaceAmbi
             "boundary_id": "periodic-space-initial-time",
             "space_axis": "x",
             "time_axis": "t",
-            "space_resolution": _box_length / spatial_points,
             "time_resolution": _horizon / (_time_count - 1),
         },
         field_codomain_id="scalar-field",
@@ -389,7 +392,7 @@ def _ks_region(
     )
     return StateSpaceRegion(
         id=f"benchmarks.ks.realized-window-{window}",
-        ambient=_ks_ambient(spatial_points=spatial_points),
+        ambient=_ks_ambient(),
         components=(component,),
         union_rule="disjoint-union",
         volume=volume,
@@ -422,7 +425,7 @@ def _ks_capacity_region() -> StateSpaceRegion:
     )
     return StateSpaceRegion(
         id="benchmarks.ks.accessible-capacity",
-        ambient=_ks_ambient(spatial_points=_default_space_count),
+        ambient=_ks_ambient(),
         components=(component,),
         union_rule="disjoint-union",
         volume=volume,
@@ -569,7 +572,7 @@ def _ks_initial_parameters(
         "amplitude": TensorElementParameter(
             dtype="float64",
             shape=(),
-            values=(0.15 + 0.01 * float(window),),
+            values=(0.15,),
         ),
         "spatial_points": TensorElementParameter(
             dtype="float64",
@@ -1379,6 +1382,12 @@ def _spatial_points(value: int | None) -> int:
             f"spatial_points must be a power-of-two multiple of {_default_space_count}"
         )
     return value
+
+
+def _spatial_points_for_window(window: int | None) -> int:
+    if window is None:
+        return _default_space_count
+    return _default_space_count * (2**window)
 
 
 def _sample_indices(

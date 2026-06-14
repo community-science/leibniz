@@ -80,6 +80,13 @@ _burgers_spectral_stub_architecture = (
     / "architecture"
     / "burgers_spectral_stub.json"
 )
+_ks_variable_conv_architecture = (
+    _repository_root
+    / "tests"
+    / "fixtures"
+    / "architecture"
+    / "ks_variable_conv.json"
+)
 _chess_linear_architecture = (
     _repository_root
     / "tests"
@@ -959,6 +966,44 @@ def test_field_output_architecture_validates_against_field_target_contract() -> 
     )
 
 
+def test_ks_scale_contract_accepts_refined_field_shape() -> None:
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _ks_variable_conv_architecture.read_bytes()
+    ).manifest
+    generator = cast(Any, load_benchmark(_ks_benchmark_root).generator)
+    batch = generator(
+        seed=101,
+        shape=2,
+        volume_request=StateSpaceVolumeRequest(1.0, 2.0),
+    )
+
+    cast(Any, benchmark_runner)._validate_architecture_for_batch(
+        architecture=architecture,
+        batch=batch,
+        target_contract=cast(Any, load_benchmark(_ks_benchmark_root)).target_contract,
+    )
+
+
+def test_ks_benchmark_runner_rejects_fixed_shape_architecture(
+    tmp_path: Path,
+) -> None:
+    architecture_path = _write_ks_architecture(
+        tmp_path / "inputs" / "ks_fixed_support.json"
+    )
+
+    with pytest.raises(BenchmarkRunnerError, match="variable-shape scale contract"):
+        run_benchmark(
+            BenchmarkRunPlan(
+                architecture_path=architecture_path,
+                benchmark_root=_ks_benchmark_root,
+                results_root=tmp_path / "results",
+                seed=101,
+                train_steps=1,
+                dry_run=True,
+            )
+        )
+
+
 def test_field_output_architecture_rejects_finite_outcome_target_contract() -> None:
     architecture = ArchitectureManifestDocument.from_bytes(
         _burgers_spectral_stub_architecture.read_bytes()
@@ -1635,9 +1680,7 @@ def test_ks_benchmark_runner_trains_field_model_with_residual_loss(
     tmp_path: Path,
 ) -> None:
     results_root = tmp_path / "results"
-    architecture_path = _write_ks_architecture(
-        results_root / "inputs" / "ks_fixed_support.json"
-    )
+    architecture_path = _ks_variable_conv_architecture
 
     summary = run_benchmark(
         BenchmarkRunPlan(
@@ -1674,9 +1717,7 @@ def test_ks_benchmark_runner_scores_real_requery_ladder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     results_root = tmp_path / "results"
-    architecture_path = _write_ks_architecture(
-        results_root / "inputs" / "ks_fixed_support.json"
-    )
+    architecture_path = _ks_variable_conv_architecture
     runtime = resolve_tensor_runtime("cpu")
     torch = runtime.torch
     loaded = cast(Any, load_benchmark(_ks_benchmark_root))

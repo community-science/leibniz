@@ -1839,8 +1839,13 @@ def _validate_architecture_for_batch(
     sample_shape = _batch_sample_input_shape(batch=batch)
     if (
         architecture.model_scale_contract is None
-        and batch.samples
-        and batch.samples[0].materialization_plan is not None
+        and (
+            (
+                batch.samples
+                and batch.samples[0].materialization_plan is not None
+            )
+            or (target_contract.kind == "field-valued" and batch.region is not None)
+        )
     ):
         raise BenchmarkRunnerError(
             "architecture must declare a variable-shape scale contract for generated "
@@ -1858,6 +1863,16 @@ def _validate_architecture_for_batch(
     except TargetContractError as error:
         raise BenchmarkRunnerError(str(error)) from error
     if architecture.output_shape != expected_output_shape:
+        if (
+            target_contract.kind == "field-valued"
+            and architecture.model_scale_contract is not None
+            and _shape_matches_scale_contract(
+                contract=architecture.model_scale_contract,
+                sample_shape=expected_output_shape,
+            )
+            and architecture.output_shape == architecture.model_scale_contract.anchor_shape
+        ):
+            return
         raise BenchmarkRunnerError(
             f"architecture output_shape {architecture.output_shape} does not match "
             f"target contract output shape {expected_output_shape}"

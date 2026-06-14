@@ -34,8 +34,8 @@ def test_ks_generator_emits_initial_fields_and_space_time_targets() -> None:
     assert batch.region.measure_estimate is not None
     assert batch.region.measure_estimate.kind == "estimated"
     assert batch.region.log2_volume == 2.0
-    assert fields.shape == (3, 1, 32)
-    assert targets.shape == (3, 1, 32)
+    assert fields.shape == (3, 1, 128)
+    assert targets.shape == (3, 1, 128)
     assert fields.dtype == runtime.torch.float32
     assert targets.dtype == runtime.torch.float32
     assert targets.allclose(fields.to(dtype=targets.dtype))
@@ -65,9 +65,35 @@ def test_ks_generator_threads_spatial_resolution() -> None:
     assert coarse_fields.shape == (2, 1, 32)
     assert fine_fields.shape == (2, 1, 64)
     assert fine.region is not None
-    assert fine.region.ambient.field_domain["space_resolution"] == 22.0 / 64
+    assert fine.region.ambient == coarse.region.ambient
     assert fine_fields[:, :, ::2].allclose(coarse_fields, atol=1e-6)
     assert fine_targets[:, :, ::2].allclose(coarse_targets, atol=1e-6)
+
+
+def test_ks_generator_maps_volume_window_to_spatial_resolution() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    generator = cast(Any, load_benchmark(_ks_benchmark_root).generator)
+
+    coarse = generator(
+        seed=101,
+        shape=2,
+        volume_request=StateSpaceVolumeRequest(0.0, 1.0),
+        runtime=runtime,
+    )
+    refined = generator(
+        seed=101,
+        shape=2,
+        volume_request=StateSpaceVolumeRequest(1.0, 2.0),
+        runtime=runtime,
+    )
+    coarse_fields, _coarse_targets = coarse.require_tensors()
+    refined_fields, _refined_targets = refined.require_tensors()
+
+    assert coarse_fields.shape == (2, 1, 32)
+    assert refined_fields.shape == (2, 1, 64)
+    assert refined.region is not None
+    assert refined.region.ambient == coarse.region.ambient
+    assert refined_fields[:, :, ::2].allclose(coarse_fields, atol=1e-6)
 
 
 def test_ks_generator_samples_distinct_band_limited_mode_content() -> None:
