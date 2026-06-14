@@ -1,3 +1,5 @@
+import { renderToString } from 'katex';
+import 'katex/dist/katex.min.css';
 import { useEffect, useRef, useState } from 'react';
 
 type RungKind = 'add' | 'code' | 'horizon';
@@ -77,7 +79,7 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'ambient vs chart',
-            text: 'The states form an ambient field space; a benchmark reaches them by turning a few measured chart axes (a generator g: Θ → X).',
+            text: 'The states form an ambient field space; a benchmark reaches them by turning a few measured chart axes (a generator $g: \\Theta \\to X$).',
           },
           {
             level: 2,
@@ -241,7 +243,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'ladder and ruler',
-            text: 'Compute at coarser, then finer resolution and compare on shared features. If the sequence settles (Cauchy), the settled value is the answer and the leftover gap is the ruler ε. If it never settles, the answer is undefined and no model scores there.',
+            text: 'Compute at coarser, then finer resolution and compare on shared features. If the sequence settles (Cauchy), the settled value is the answer and the leftover gap is the ruler $\\varepsilon$. If it never settles, the answer is undefined and no model scores there.',
           },
           {
             level: 3,
@@ -253,7 +255,7 @@ const ROOTS: RootTree[] = [
             level: 3,
             kind: 'add',
             tag: 'formal objects',
-            text: 'r_k = R_ℓ Φ̂(refine_k(in)), gaps g_k = ‖r_{k+1} − r_k‖, Cauchy when g_k → 0 within tolerance, answer = r_∞, ruler ε = g_∞.',
+            text: 'Formally: $r_k = R_\\ell\\,\\hat\\Phi(\\mathrm{refine}_k(\\mathrm{in}))$, gaps $g_k = \\lVert r_{k+1} - r_k \\rVert$, Cauchy when $g_k \\to 0$ within tolerance, answer $= r_\\infty$, ruler $\\varepsilon = g_\\infty$.',
           },
           {
             level: 4,
@@ -347,13 +349,13 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'defines “different”',
-            text: 'Two states differ only when distinguishable at the declared resolution; bits = log2(count), so doubling the variety adds one bit.',
+            text: 'Two states differ only when distinguishable at the declared resolution; bits $= \\log_2(\\text{count})$, so doubling the variety adds one bit.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'locates it, justifies invariance',
-            text: 'An ε-covering count under the declared metric, taken in the ambient space rather than the chart — invariant to parameterization; bits add because independent axes form a product measure.',
+            text: 'An $\\varepsilon$-covering count under the declared metric, taken in the ambient space rather than the chart — invariant to parameterization; bits add because independent axes form a product measure.',
           },
           {
             level: 2,
@@ -388,7 +390,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'one quantity to minimize',
-            text: 'The single quantity is the total codelength of validated reality — description length + log2(operations) + unpredicted residual. The frontier is validated bits of prediction per unit of algorithmic cost.',
+            text: 'The single quantity is the total codelength of validated reality: $\\text{description length} + \\log_2(\\text{operations}) + \\text{residual}$. The frontier is validated bits of prediction per unit of algorithmic cost.',
           },
           {
             level: 2,
@@ -401,7 +403,7 @@ const ROOTS: RootTree[] = [
       },
       {
         id: 'D-cost',
-        gist: 'Cost = description length + log2(operations).',
+        gist: 'Cost $= \\text{description length} + \\log_2(\\text{operations})$.',
         meta: 'Levin complexity: Occam’s razor made computable; plain compute drops the description-length term.',
         status: 'mixed',
         anchor: 'cost metrology — operation count (in code) + description length',
@@ -437,7 +439,7 @@ const EDGES: CouplingEdge[] = [
     id: 'edge-distinguishability',
     roots: ['U', 'D'],
     title: 'Distinguishability',
-    body: 'States belong to the universe; counting them in bits belongs to the currency. The metric (d, ε) is where the universe gives the currency something to count — a clean coupling, and a real one: counting needs a metric to count against.',
+    body: 'States belong to the universe; counting them in bits belongs to the currency. The metric $(d, \\varepsilon)$ is where the universe gives the currency something to count — a clean coupling, and a real one: counting needs a metric to count against.',
   },
   {
     id: 'edge-grounding',
@@ -450,7 +452,7 @@ const EDGES: CouplingEdge[] = [
     id: 'edge-score',
     roots: ['U', 'R', 'D'],
     title: 'The score (triple point)',
-    body: 'Competence is the predictive mass within ε (from Refinement) of the converged answer, measured in bits (Description length), integrated over the query space (Universe) — and the integral is itself a refined adaptive tree. The score is not a root but the point where all three meet, and it needs nothing more.',
+    body: 'Competence is the predictive mass within $\\varepsilon$ (from Refinement) of the converged answer, measured in bits (Description length), integrated over the query space (Universe) — and the integral is itself a refined adaptive tree. The score is not a root but the point where all three meet, and it needs nothing more.',
   },
 ];
 
@@ -465,7 +467,7 @@ const STEPS: RoadmapStep[] = [
     id: 'ladder',
     title: 'Refinement-ladder records and convergence-grounded scoring',
     outcome:
-      'A ladder and convergence-gap record with its ruler, scored in the runner as predictive mass within ε of the settled value, replacing the trajectory comparison. Discriminating law: two queries past the horizon both score where the ladder settles and neither where it does not.',
+      'A ladder and convergence-gap record with its ruler, scored in the runner as predictive mass within $\\varepsilon$ of the settled value, replacing the trajectory comparison. Discriminating law: two queries past the horizon both score where the ladder settles and neither where it does not.',
   },
   {
     id: 'cost',
@@ -503,6 +505,31 @@ const STATUS_LABEL: Record<NodeStatus, string> = {
   direction: 'design direction',
   mixed: 'mixed',
 };
+
+// Render a string with inline LaTeX spans delimited by `$...$`; prose passes
+// through untouched. Bad expressions render as KaTeX error markup rather than
+// throwing, so a typo can never crash the panel.
+function MathText({ children }: { children: string }) {
+  const segments = children.split(/(\$[^$]+\$)/g);
+  return (
+    <>
+      {segments.map((segment, index) => {
+        if (segment.length >= 2 && segment.startsWith('$') && segment.endsWith('$')) {
+          return (
+            <span
+              className="architecture-math"
+              key={index}
+              dangerouslySetInnerHTML={{
+                __html: renderToString(segment.slice(1, -1), { throwOnError: false }),
+              }}
+            />
+          );
+        }
+        return <span key={index}>{segment}</span>;
+      })}
+    </>
+  );
+}
 
 export function ArchitecturePanel() {
   const [maxLevel, setMaxLevel] = useState(4);
@@ -611,9 +638,9 @@ export function ArchitecturePanel() {
                       &#x25b6;
                     </span>
                     <span className="architecture-gist">
-                      {node.gist}
+                      <MathText>{node.gist}</MathText>
                       <span className="architecture-meta">
-                        {node.meta}
+                        <MathText>{node.meta}</MathText>
                         <span className={`architecture-status ${node.status}`}>{STATUS_LABEL[node.status]}</span>
                       </span>
                     </span>
@@ -627,11 +654,15 @@ export function ArchitecturePanel() {
                         return (
                           <div className={`architecture-rung ${rung.kind}`} key={index}>
                             <span className={`architecture-tag ${rung.kind}`}>{rung.tag}</span>
-                            <span className="architecture-rung-text">{rung.text}</span>
+                            <span className="architecture-rung-text">
+                              <MathText>{rung.text}</MathText>
+                            </span>
                           </div>
                         );
                       })}
-                      <div className={`architecture-verdict ${node.verdict.tone}`}>{node.verdict.text}</div>
+                      <div className={`architecture-verdict ${node.verdict.tone}`}>
+                        <MathText>{node.verdict.text}</MathText>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -665,7 +696,9 @@ export function ArchitecturePanel() {
               ))}
               <span className="architecture-edge-name">{edge.title}</span>
             </div>
-            <p className="architecture-edge-body">{edge.body}</p>
+            <p className="architecture-edge-body">
+              <MathText>{edge.body}</MathText>
+            </p>
           </div>
         ))}
       </section>
@@ -686,7 +719,9 @@ export function ArchitecturePanel() {
                   <span className="architecture-step-index">{index + 1}</span>
                   <span className="architecture-step-title">{step.title}</span>
                 </div>
-                <p className="architecture-step-outcome">{step.outcome}</p>
+                <p className="architecture-step-outcome">
+                  <MathText>{step.outcome}</MathText>
+                </p>
                 {closes.length > 0 ? (
                   <ul className="architecture-step-closes">
                     {closes.map((node) => (

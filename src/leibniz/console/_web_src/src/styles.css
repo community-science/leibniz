@@ -2002,6 +2002,12 @@ p {
 .architecture-step-infra {
   margin-top: var(--space-sm);
   color: var(--text-dim);
-  font-size: 0.76rem;
   font-style: italic;
+  font-size: 0.76rem;
+}
+.architecture-panel .katex {
+  font-size: 1em;
+}
+.architecture-math {
+  white-space: nowrap;
 }
