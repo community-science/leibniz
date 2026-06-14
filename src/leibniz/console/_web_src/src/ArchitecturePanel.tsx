@@ -22,6 +22,7 @@ type ConceptNode = {
   meta: string;
   status: NodeStatus;
   anchor: string;
+  verify?: { module: string; symbols: string[] };
   step?: string;
   defaultOpen?: boolean;
   rungs: Rung[];
@@ -71,6 +72,7 @@ const ROOTS: RootTree[] = [
         meta: 'An evolving field on a mesh, a board game’s positions, a labeled glyph.',
         status: 'implemented',
         anchor: 'state_space.py — StateSpaceAmbient, StateSpaceAxis',
+        verify: { module: 'leibniz.state_space', symbols: ['StateSpaceAmbient', 'StateSpaceAxis'] },
         rungs: [
           {
             level: 1,
@@ -341,6 +343,7 @@ const ROOTS: RootTree[] = [
         meta: 'The unit the whole score is built on.',
         status: 'implemented',
         anchor: 'state_space.py — Distinguishability, RegionFiltration',
+        verify: { module: 'leibniz.state_space', symbols: ['Distinguishability', 'RegionFiltration'] },
         rungs: [
           {
             level: 1,

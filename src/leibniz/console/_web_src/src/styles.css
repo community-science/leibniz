@@ -1773,7 +1773,7 @@ p {
   color: var(--text-muted);
 }
 .architecture-rung.code {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.78rem;
   color: var(--text-secondary);
 }
@@ -1798,7 +1798,7 @@ p {
 .architecture-tag.code {
   background: var(--control-bg);
   color: var(--text-secondary);
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .architecture-tag.horizon {
   background: var(--frontier-accent-bg);
@@ -1996,7 +1996,7 @@ p {
 }
 .architecture-closes-anchor {
   color: var(--text-dim);
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.72rem;
 }
 .architecture-step-infra {
