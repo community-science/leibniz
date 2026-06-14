@@ -33,6 +33,20 @@ _json_test_boundary_files = {
 }
 
 
+def _project_python_sources() -> list[Path]:
+    """Python source under ``src/leibniz``, excluding third-party ``node_modules``.
+
+    The web console vendors packages (e.g. KaTeX) that ship their own Python
+    helper scripts; those live under ``node_modules`` and are not project source.
+    """
+
+    return [
+        path
+        for path in sorted(_source_root.rglob("*.py"))
+        if "node_modules" not in path.parts
+    ]
+
+
 def test_content_digest_is_stable_for_mapping_order() -> None:
     left = {"b": 2, "a": [{"z": "last", "m": "middle"}]}
     right = {"a": [{"m": "middle", "z": "last"}], "b": 2}
@@ -148,7 +162,7 @@ def test_document_media_type_is_defined_at_document_boundary() -> None:
 def test_source_mentions_json_only_at_document_format_boundary() -> None:
     offenders = tuple(
         path.relative_to(_source_root.parents[1])
-        for path in sorted(_source_root.rglob("*.py"))
+        for path in _project_python_sources()
         if path not in _format_boundary_files
         and re.search(r"\bjson\b|\bJSON\b|_json", path.read_text(encoding="utf-8"))
     )
@@ -159,7 +173,7 @@ def test_source_mentions_json_only_at_document_format_boundary() -> None:
 def test_generated_document_filename_suffix_is_defined_only_at_document_boundary() -> None:
     offenders = tuple(
         path.relative_to(_source_root.parents[1])
-        for path in sorted(_source_root.rglob("*.py"))
+        for path in _project_python_sources()
         if path != _source_root / "documents.py"
         and _has_json_filename_suffix_literal(path.read_text(encoding="utf-8"))
     )
@@ -170,7 +184,7 @@ def test_generated_document_filename_suffix_is_defined_only_at_document_boundary
 def test_source_does_not_hide_json_filename_suffixes_by_concatenating_string_literals() -> None:
     offenders = tuple(
         path.relative_to(_source_root.parents[1])
-        for path in sorted(_source_root.rglob("*.py"))
+        for path in _project_python_sources()
         if _has_hidden_json_suffix(path.read_text(encoding="utf-8"))
     )
 

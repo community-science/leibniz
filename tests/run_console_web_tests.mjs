@@ -46,6 +46,7 @@ const generatedPayload = run(
 writeFileSync(generatedPayloadPath, generatedPayload);
 assertShellUsesGeneratedConsoleData();
 assertConsoleShellNavigation();
+assertArchitecturePanel();
 assertBenchmarkWorkbenchStructure();
 assertBenchmarkSamplePaneStructure();
 assertBenchmarkFrontierPlotStructure();
@@ -95,6 +96,48 @@ function assertShellUsesGeneratedConsoleData() {
   }
   if (shell.includes('demoArtifact')) {
     throw new Error('ConsoleShell must not import handwritten demo artifact data');
+  }
+}
+
+function assertArchitecturePanel() {
+  const shell = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/ConsoleShell.tsx'),
+    'utf8',
+  );
+  for (const marker of [
+    "import { ArchitecturePanel }",
+    "{ id: 'architecture', label: 'Architecture'",
+    "hidden={activeTab !== 'architecture'}",
+    '<ArchitecturePanel />',
+  ]) {
+    if (!shell.includes(marker)) {
+      throw new Error(`ConsoleShell must wire the Architecture tab: ${marker}`);
+    }
+  }
+  if (shell.indexOf("id: 'architecture'") > shell.indexOf("id: 'benchmarks'")) {
+    throw new Error('Architecture tab must be declared before the Benchmarks tab');
+  }
+  if (!/usePersistentState<TabId>\(\s*'leibniz\.console\.currentTab',\s*'architecture'/.test(shell)) {
+    throw new Error('Architecture must be the default console tab');
+  }
+  const panel = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/ArchitecturePanel.tsx'),
+    'utf8',
+  );
+  for (const marker of [
+    'architecture-forest',
+    'Show precision up to',
+    "id: 'U'",
+    "id: 'Q'",
+    "id: 'R'",
+    "id: 'D'",
+    'architecture-roadmap',
+    'Closing the delta',
+    'const STEPS',
+  ]) {
+    if (!panel.includes(marker)) {
+      throw new Error(`ArchitecturePanel must render the adaptive precision tree: ${marker}`);
+    }
   }
 }
 
