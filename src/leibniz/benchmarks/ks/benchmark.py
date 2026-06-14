@@ -67,6 +67,8 @@ _state_discriminability_resolution = 0.05
 _convergence_refinement_factor = 2
 _convergence_rung_count = 3
 _convergence_gate_uncertainty_scale = 1.0
+_convergence_expected_observed_order = 2.0
+_convergence_observed_order_tolerance = 0.5
 _maximum_window = 8
 _window_axis = StateSpaceAxis(
     id="ks-space-time-log2-window",
@@ -924,11 +926,7 @@ def _ks_ladder_convergence_bits(
         sigma = float(signal[sample_index])
         error = float(field_estimate.error[sample_index])
         sample_bits = _resolved_bits(signal=sigma, error=error, node_count=finest_nodes)
-        converged = (
-            residual_estimate.observed_order > 0.0
-            and abs(residual_estimate.limit)
-            <= _convergence_gate_uncertainty_scale * residual_estimate.uncertainty
-        )
+        converged = _ks_convergence_gate(residual_estimate)
         if not converged:
             values.append(0.0)
         else:
@@ -966,9 +964,12 @@ def _ks_convergence_diagnostic_record(
         "residual_observed_order": residual_estimate.observed_order,
         "residual_extrapolated_limit": residual_estimate.limit,
         "residual_extrapolation_uncertainty": residual_estimate.uncertainty,
+        "expected_observed_order": _convergence_expected_observed_order,
+        "observed_order_tolerance": _convergence_observed_order_tolerance,
         "field_error": field_error,
         "signal_scale": signal,
         "node_count": node_count,
+        "rung_count": _convergence_rung_count,
         "gate_decision": "passed" if bits > 0.0 else "failed",
         "bits": bits,
         "k_sensitivity": [
@@ -992,16 +993,26 @@ def _ks_k_sensitivity_record(
     field_error: float,
     node_count: int,
 ) -> Mapping[str, object]:
-    gated = (
-        residual_estimate.observed_order > 0.0
-        and abs(residual_estimate.limit) <= k_value * residual_estimate.uncertainty
-    )
+    gated = _ks_convergence_gate(residual_estimate, k_value=k_value)
     bits = (
         _resolved_bits(signal=signal, error=field_error, node_count=node_count)
         if gated
         else 0.0
     )
     return {"k": k_value, "gated": gated, "bits": bits}
+
+
+def _ks_convergence_gate(
+    residual_estimate: RichardsonEstimate,
+    *,
+    k_value: float = _convergence_gate_uncertainty_scale,
+) -> bool:
+    lower_order = _convergence_expected_observed_order - _convergence_observed_order_tolerance
+    upper_order = _convergence_expected_observed_order + _convergence_observed_order_tolerance
+    return (
+        lower_order <= residual_estimate.observed_order <= upper_order
+        and abs(residual_estimate.limit) <= k_value * residual_estimate.uncertainty
+    )
 
 
 def _zero_bits(*, runtime: TensorRuntime, predictions: Any) -> Any:

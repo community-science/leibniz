@@ -249,7 +249,7 @@ const ROOTS: RootTree[] = [
             level: 3,
             kind: 'add',
             tag: 'measured ruler',
-            text: '$\\varepsilon$ is not declared. It is the Richardson field error $\\varepsilon_{field}$ on the finest gated rung. The prediction horizon and resolution boundary are swept axes: the model earns score only where the gate still holds.',
+            text: '$\\varepsilon$ is not declared. It is the Richardson field error $\\varepsilon_{field}$ on the finest gated rung. The current implementation scores the declared query horizon on a fixed nested ladder; sweeping the horizon and finding the predictability boundary remains open.',
           },
           {
             level: 3,

@@ -1,4 +1,5 @@
 import math
+import sys
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -1666,6 +1667,125 @@ def test_ks_benchmark_runner_trains_field_model_with_residual_loss(
     assert cast(Mapping[str, object], record["architecture"])["kind"] == (
         "architecture-manifest"
     )
+
+
+def test_ks_benchmark_runner_scores_real_requery_ladder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results_root = tmp_path / "results"
+    architecture_path = _write_ks_architecture(
+        results_root / "inputs" / "ks_fixed_support.json"
+    )
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    loaded = cast(Any, load_benchmark(_ks_benchmark_root))
+    ks_module = sys.modules[type(loaded.implementation).__module__]
+
+    class ConvergentOperator(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()  # pyright: ignore[reportUnknownMemberType]
+            self._anchor = torch.nn.Parameter(torch.zeros((), device=runtime.device))
+
+        def forward(self, fields: Any, horizon: float = 1.0) -> Any:
+            scale = torch.exp(
+                fields.new_tensor(-float(horizon)) + (self._anchor * 0.0)
+            )
+            return fields * scale
+
+        def attach_optimizer(self, optimizer: Any) -> None:
+            self._optimizer = optimizer
+
+        def operation_fallback_records(self) -> tuple[object, ...]:
+            return ()
+
+    def deterministic_sequential(*args: Any, **kwargs: Any) -> ConvergentOperator:
+        _ = args
+        _ = kwargs
+        return ConvergentOperator()
+
+    def planted_second_order_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
+        _ = dt
+        spatial_points = int(round(22.0 / dx))
+        return trajectory * 0.0 + {32: 4.0, 64: 1.0, 128: 0.25}[spatial_points]
+
+    monkeypatch.setattr(
+        benchmark_runner,
+        "OperationFallbackSequential",
+        deterministic_sequential,
+    )
+    def load_patched_benchmark(_root: Path) -> Any:
+        return loaded
+
+    monkeypatch.setattr(benchmark_runner, "load_benchmark", load_patched_benchmark)
+    monkeypatch.setattr(ks_module, "ks_space_time_residual", planted_second_order_residual)
+
+    summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=architecture_path,
+            benchmark_root=_ks_benchmark_root,
+            results_root=results_root,
+            seed=101,
+            train_steps=0,
+            gate_check_interval=1,
+            model_checkpoint_gate_interval=1,
+            tensor_device="cpu",
+            optimizer="adam",
+            learning_rate=1e-3,
+        )
+    )
+    record = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="KS training summary",
+    )
+    score_estimate = cast(
+        Mapping[str, object],
+        record["selected_model_checkpoint_score_estimate"],
+    )
+    diagnostics = cast(list[Mapping[str, object]], score_estimate["competence_diagnostics"])
+
+    assert cast(float, score_estimate["score"]) > 0.0
+    assert diagnostics
+    assert all(item["gate_decision"] == "passed" for item in diagnostics)
+    assert all(cast(float, item["bits"]) > 0.0 for item in diagnostics)
+
+
+def test_ks_convergence_competence_rejects_persistence_through_requery_path() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    loaded = cast(Any, load_benchmark(_ks_benchmark_root))
+    ks_module = sys.modules[type(loaded.implementation).__module__]
+    batch = loaded.generator(seed=101, shape=2, runtime=runtime)
+    fields, targets = batch.require_tensors()
+
+    class PersistenceOperator:
+        def __call__(self, fields: Any, _horizon: float) -> Any:
+            return fields
+
+    predictions = ks_module._query_operator_trajectory(
+        runtime=runtime,
+        module=PersistenceOperator(),
+        fields=fields,
+        horizon=1.0,
+        time_count=targets.shape[1],
+    )
+    competence = loaded.implementation.build_training_competence(
+        runtime,
+        loaded.target_contract,
+    )
+    bits = competence(
+        SimpleNamespace(
+            runtime=runtime,
+            module=PersistenceOperator(),
+            generator=loaded.generator,
+            batch=batch,
+            sample_keys=tuple(sample.to_record() for sample in batch.samples),
+            predictions=predictions,
+            targets=targets,
+            horizons=tuple(index / 8 for index in range(1, 9)),
+        )
+    )
+
+    assert tuple(float(value) for value in bits) == (0.0, 0.0)
 
 
 def test_checkpoint_evaluation_stops_at_runtime_capacity(

@@ -3935,11 +3935,13 @@ def _training_gate_score_estimate(
         batch=batch,
         accepted_mass=accepted_mass,
         volume_axis=None,
+        bounded_mass=target_contract.kind != "field-valued",
     )
     sampled_competence = _training_sampled_competence_record(
         benchmark_id=batch.benchmark_id,
         previous_frontier_points=previous_frontier_points,
         current_point=current_point,
+        bounded_mass=target_contract.kind != "field-valued",
     )
     compact_sampled_competence = _compact_training_sampled_competence(sampled_competence)
     _assign_sampled_competence_inference_cost(
@@ -4046,17 +4048,12 @@ def _sampled_competence_record_from_accepted_mass(
     batch: GeneratedSampleSet,
     accepted_mass: tuple[float, ...],
     volume_axis: str | None,
+    bounded_mass: bool = True,
 ) -> dict[str, object]:
     """Return sampled competence from target probability mass."""
 
     if len(batch.samples) != len(accepted_mass):
         raise BenchmarkRunnerError("sampled competence requires one mass per sample")
-    finite_losses = tuple(-math.log(mass) for mass in accepted_mass if mass > 0.0)
-    mean_negative_log_score: float | str
-    if len(finite_losses) != len(accepted_mass):
-        mean_negative_log_score = "infinity"
-    else:
-        mean_negative_log_score = math.fsum(finite_losses) / len(finite_losses)
     record: dict[str, object] = {
         "kind": "sampled-state-space-volume-window",
         "sampling_rule": "generator-uniform-component-index-v1",
@@ -4067,8 +4064,17 @@ def _sampled_competence_record_from_accepted_mass(
         "seed": batch.seed,
         "sample_count": len(batch.samples),
         "mean_accepted_mass": math.fsum(accepted_mass) / len(accepted_mass),
-        "mean_negative_log_score": mean_negative_log_score,
     }
+    if bounded_mass:
+        finite_losses = tuple(-math.log(mass) for mass in accepted_mass if mass > 0.0)
+        mean_negative_log_score: float | str
+        if len(finite_losses) != len(accepted_mass):
+            mean_negative_log_score = "infinity"
+        else:
+            mean_negative_log_score = math.fsum(finite_losses) / len(finite_losses)
+        record["mean_negative_log_score"] = mean_negative_log_score
+    else:
+        record["competence_value_kind"] = "validated-bits"
     input_shape = _optional_batch_sample_input_shape(batch=batch)
     if input_shape is not None:
         record["input_shape"] = list(input_shape)
@@ -4199,6 +4205,7 @@ def _training_sampled_competence_record(
     benchmark_id: ProtocolIdentifier,
     previous_frontier_points: tuple[ValidationCompetencePoint, ...],
     current_point: Mapping[str, object],
+    bounded_mass: bool = True,
 ) -> dict[str, object]:
     points: list[Mapping[str, object]] = [
         {
@@ -4217,7 +4224,59 @@ def _training_sampled_competence_record(
         for point in previous_frontier_points
     ]
     points.append(current_point)
-    return sampled_competence_curriculum_record(points)
+    if bounded_mass:
+        return sampled_competence_curriculum_record(points)
+    return _sampled_unbounded_competence_curriculum_record(points)
+
+
+def _sampled_unbounded_competence_curriculum_record(
+    points: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    if not points:
+        raise BenchmarkRunnerError("sampled competence curriculum requires at least one point")
+    sorted_points = tuple(
+        sorted(
+            points,
+            key=lambda point: _required_float(
+                point.get("log2_volume"),
+                "sampled_competence.log2_volume",
+            ),
+        )
+    )
+    first = sorted_points[0]
+    sample_counts = tuple(
+        _required_int(point.get("sample_count"), "sampled_competence.sample_count")
+        for point in sorted_points
+    )
+    values = tuple(
+        _required_float(
+            point.get("mean_accepted_mass"),
+            "sampled_competence.mean_accepted_mass",
+        )
+        for point in sorted_points
+    )
+    total_samples = sum(sample_counts)
+    if total_samples < 1:
+        raise BenchmarkRunnerError("sampled competence sample count must be positive")
+    weighted_value = (
+        math.fsum(
+            value * sample_count
+            for value, sample_count in zip(values, sample_counts, strict=True)
+        )
+        / total_samples
+    )
+    return {
+        "kind": "sampled-competence-curriculum",
+        "sampling_rule": first.get("sampling_rule"),
+        "difficulty_assumption": first.get("difficulty_assumption"),
+        "benchmark_id": first.get("benchmark_id"),
+        "volume_axis": first.get("volume_axis"),
+        "log2_volume": first.get("log2_volume"),
+        "sample_count": total_samples,
+        "mean_accepted_mass": weighted_value,
+        "competence_value_kind": "validated-bits",
+        "points": [dict(point) for point in sorted_points],
+    }
 
 
 def _rung_log2_volume_interval(rung: _CurriculumRung) -> tuple[float, float] | None:

@@ -387,6 +387,30 @@ def test_ks_convergence_bits_reward_finer_field_resolution(monkeypatch: Any) -> 
     assert float(fine_bits[0]) > float(coarse_bits[0])
 
 
+def test_ks_convergence_bits_rejects_wrong_observed_order(monkeypatch: Any) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _loaded_ks_module()
+
+    def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
+        _ = dx
+        _ = dt
+        return trajectory * 0.0 + {4: 4.0, 8: 2.0, 16: 1.0}[int(trajectory.shape[-1])]
+
+    monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
+
+    bits = module._ks_ladder_convergence_bits(
+        runtime=runtime,
+        ladder=_planted_field_ladder(runtime, coefficient=0.25),
+        horizon=1.0,
+    )
+    diagnostics = bits.leibniz_competence_diagnostics
+
+    assert float(bits[0]) == 0.0
+    assert diagnostics[0]["gate_decision"] == "failed"
+    assert diagnostics[0]["expected_observed_order"] == 2.0
+    assert diagnostics[0]["rung_count"] == 3
+
+
 def test_ks_scoring_path_has_no_residual_certificate_constants() -> None:
     source = (_ks_benchmark_root / "benchmark.py").read_text()
 
