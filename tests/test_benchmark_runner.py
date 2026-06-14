@@ -2445,6 +2445,12 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
         step=32,
         inference_cost=(_cost_measurement(20), 2),
         training_cost=(_cost_measurement(40), 2),
+        competence_diagnostics=(
+            {
+                "kind": "ks-convergence-diagnostics",
+                "k_sensitivity": [{"k": 1.0, "gated": True, "bits": 3.0}],
+            },
+        ),
     )
 
     sampled_competence = cast(dict[str, object], estimate["sampled_competence"])
@@ -2466,6 +2472,12 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
         points[1]["inference_cost_measurement"]
     ).abstract_flops == 20
     assert points[1]["inference_cost_sample_count"] == 2
+    assert estimate["competence_diagnostics"] == [
+        {
+            "kind": "ks-convergence-diagnostics",
+            "k_sensitivity": [{"k": 1.0, "gated": True, "bits": 3.0}],
+        }
+    ]
     assert batch.region is not None
     assert state_space_region_from_record(points[1]["region"]) == batch.region
     score_terms = cast(

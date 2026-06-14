@@ -354,8 +354,12 @@ def test_ks_convergence_bits_reward_planted_convergent_ladder(monkeypatch: Any) 
         ladder=ladder,
         horizon=1.0,
     )
+    diagnostics = bits.leibniz_competence_diagnostics
 
     assert float(bits[0]) > 0.0
+    assert diagnostics[0]["kind"] == "ks-convergence-diagnostics"
+    assert diagnostics[0]["gate_decision"] == "passed"
+    assert len(diagnostics[0]["k_sensitivity"]) >= 2
 
 
 def test_ks_convergence_bits_reward_finer_field_resolution(monkeypatch: Any) -> None:

@@ -205,6 +205,12 @@ class _FieldTrainingCompetenceRequest:
     sample_keys: tuple[Mapping[str, object], ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _CompetenceEvaluation:
+    values: tuple[float, ...]
+    diagnostics: tuple[Mapping[str, object], ...] = ()
+
+
 class _BenchmarkTrainingLossFactory(Protocol):
     """Benchmark-owned tensor loss factory for non-generic target losses."""
 
@@ -3654,7 +3660,7 @@ def _train_until_convergence(
                     target_contract=target_contract,
                 )
                 validation_loss = float(loss_function(logits, labels).item())
-                accepted_mass = competence.training_logit_masses(
+                competence_evaluation = competence.training_logit_masses_with_diagnostics(
                     runtime,
                     logits,
                     labels,
@@ -3664,6 +3670,7 @@ def _train_until_convergence(
                     batch=batch,
                     generator=generator,
                 )
+                accepted_mass = competence_evaluation.values
             if was_training:
                 module.train()
         with phase_timings.span("validation_score_estimate", samples=batch.sample_count):
@@ -3679,6 +3686,7 @@ def _train_until_convergence(
                 step=step,
                 inference_cost=max_validation_inference_cost,
                 training_cost=latest_training_cost,
+                competence_diagnostics=competence_evaluation.diagnostics,
             )
         plateau_signal = _training_score_estimate_frontier_competence(
             score_estimate,
@@ -3921,6 +3929,7 @@ def _training_gate_score_estimate(
     step: int,
     inference_cost: tuple[CostMeasurement, int],
     training_cost: tuple[CostMeasurement, int] | None,
+    competence_diagnostics: tuple[Mapping[str, object], ...] = (),
 ) -> dict[str, object]:
     current_point = _sampled_competence_record_from_accepted_mass(
         batch=batch,
@@ -3974,6 +3983,8 @@ def _training_gate_score_estimate(
             training_cost[0].without_operation_trace().to_record()
         )
         record["training_cost_sample_count"] = training_cost[1]
+    if competence_diagnostics:
+        record["competence_diagnostics"] = [dict(item) for item in competence_diagnostics]
     return record
 
 
@@ -5519,27 +5530,51 @@ class _CompetenceFunctional:
         batch: GeneratedSampleSet | None = None,
         generator: _TensorBenchmarkGenerator | None = None,
     ) -> tuple[float, ...]:
+        return self.training_logit_masses_with_diagnostics(
+            runtime,
+            logits,
+            labels,
+            module=module,
+            fields=fields,
+            horizons=horizons,
+            batch=batch,
+            generator=generator,
+        ).values
+
+    def training_logit_masses_with_diagnostics(
+        self,
+        runtime: TensorRuntime,
+        logits: Any,
+        labels: Any,
+        *,
+        module: Any | None = None,
+        fields: Any | None = None,
+        horizons: tuple[float, ...] | None = None,
+        batch: GeneratedSampleSet | None = None,
+        generator: _TensorBenchmarkGenerator | None = None,
+    ) -> _CompetenceEvaluation:
         if self.kind in _field_valued_competence_kinds:
             if self.field_mass_tensor is None:
                 raise BenchmarkRunnerError(
                     f"{self.kind} requires benchmark training competence"
                 )
-            return tuple(
-                float(value)
-                for value in self.training_logit_mass_tensor(
-                    runtime,
-                    logits,
-                    labels,
-                    module=module,
-                    fields=fields,
-                    horizons=horizons,
-                    batch=batch,
-                    generator=generator,
-                )
-                .detach()
-                .tolist()
+            mass_tensor = self.training_logit_mass_tensor(
+                runtime,
+                logits,
+                labels,
+                module=module,
+                fields=fields,
+                horizons=horizons,
+                batch=batch,
+                generator=generator,
             )
-        return tuple(softmax_target_masses(runtime, logits, labels))
+            return _CompetenceEvaluation(
+                values=tuple(float(value) for value in mass_tensor.detach().tolist()),
+                diagnostics=_competence_tensor_diagnostics(mass_tensor),
+            )
+        return _CompetenceEvaluation(
+            values=tuple(softmax_target_masses(runtime, logits, labels))
+        )
 
     def training_logit_mass_tensor(
         self,
@@ -5614,6 +5649,18 @@ def _resolve_competence_functional(
             ),
         )
     return _CompetenceFunctional(kind=contract.competence.kind)
+
+
+def _competence_tensor_diagnostics(tensor: Any) -> tuple[Mapping[str, object], ...]:
+    diagnostics = getattr(tensor, "leibniz_competence_diagnostics", ())
+    if not isinstance(diagnostics, tuple):
+        return ()
+    diagnostic_items = cast(tuple[object, ...], diagnostics)
+    return tuple(
+        cast(Mapping[str, object], item)
+        for item in diagnostic_items
+        if isinstance(item, Mapping)
+    )
 
 
 def _write_document(path: Path, record: object) -> None:

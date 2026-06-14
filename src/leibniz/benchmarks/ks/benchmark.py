@@ -901,15 +901,29 @@ def _ks_ladder_convergence_bits(
     signal = finest.std(dim=(1, 2), unbiased=False)
     finest_nodes = int(finest.shape[1]) * int(finest.shape[2])
     values: list[float] = []
+    diagnostics: list[Mapping[str, object]] = []
     for sample_index in range(int(finest.shape[0])):
+        residual_values = tuple(float(norm[sample_index]) for norm in residual_norms)
         try:
             residual_estimate = richardson(
-                tuple(float(norm[sample_index]) for norm in residual_norms),
+                residual_values,
                 factor=float(factor),
             )
         except ValueError:
             values.append(0.0)
+            diagnostics.append(
+                {
+                    "kind": "ks-convergence-diagnostics",
+                    "sample_index": sample_index,
+                    "residual_norms": list(residual_values),
+                    "gate_decision": "failed-richardson",
+                    "bits": 0.0,
+                }
+            )
             continue
+        sigma = float(signal[sample_index])
+        error = float(field_estimate.error[sample_index])
+        sample_bits = _resolved_bits(signal=sigma, error=error, node_count=finest_nodes)
         converged = (
             residual_estimate.observed_order > 0.0
             and abs(residual_estimate.limit)
@@ -917,11 +931,77 @@ def _ks_ladder_convergence_bits(
         )
         if not converged:
             values.append(0.0)
-            continue
-        sigma = float(signal[sample_index])
-        error = float(field_estimate.error[sample_index])
-        values.append(_resolved_bits(signal=sigma, error=error, node_count=finest_nodes))
-    return finest.new_tensor(values)
+        else:
+            values.append(sample_bits)
+        diagnostics.append(
+            _ks_convergence_diagnostic_record(
+                sample_index=sample_index,
+                residual_values=residual_values,
+                residual_estimate=residual_estimate,
+                field_error=error,
+                signal=sigma,
+                node_count=finest_nodes,
+                bits=values[-1],
+            )
+        )
+    result = finest.new_tensor(values)
+    result.leibniz_competence_diagnostics = tuple(diagnostics)
+    return result
+
+
+def _ks_convergence_diagnostic_record(
+    *,
+    sample_index: int,
+    residual_values: tuple[float, ...],
+    residual_estimate: RichardsonEstimate,
+    field_error: float,
+    signal: float,
+    node_count: int,
+    bits: float,
+) -> Mapping[str, object]:
+    return {
+        "kind": "ks-convergence-diagnostics",
+        "sample_index": sample_index,
+        "residual_norms": list(residual_values),
+        "residual_observed_order": residual_estimate.observed_order,
+        "residual_extrapolated_limit": residual_estimate.limit,
+        "residual_extrapolation_uncertainty": residual_estimate.uncertainty,
+        "field_error": field_error,
+        "signal_scale": signal,
+        "node_count": node_count,
+        "gate_decision": "passed" if bits > 0.0 else "failed",
+        "bits": bits,
+        "k_sensitivity": [
+            _ks_k_sensitivity_record(
+                residual_estimate=residual_estimate,
+                k_value=k_value,
+                signal=signal,
+                field_error=field_error,
+                node_count=node_count,
+            )
+            for k_value in (0.5, 1.0, 2.0)
+        ],
+    }
+
+
+def _ks_k_sensitivity_record(
+    *,
+    residual_estimate: RichardsonEstimate,
+    k_value: float,
+    signal: float,
+    field_error: float,
+    node_count: int,
+) -> Mapping[str, object]:
+    gated = (
+        residual_estimate.observed_order > 0.0
+        and abs(residual_estimate.limit) <= k_value * residual_estimate.uncertainty
+    )
+    bits = (
+        _resolved_bits(signal=signal, error=field_error, node_count=node_count)
+        if gated
+        else 0.0
+    )
+    return {"k": k_value, "gated": gated, "bits": bits}
 
 
 def _zero_bits(*, runtime: TensorRuntime, predictions: Any) -> Any:
