@@ -69,6 +69,7 @@ _convergence_rung_count = 3
 _convergence_gate_uncertainty_scale = 1.0
 _convergence_expected_observed_order = 2.0
 _convergence_observed_order_tolerance = 0.5
+_initial_condition_mode_count = 4
 _maximum_window = 8
 _window_axis = StateSpaceAxis(
     id="ks-space-time-log2-window",
@@ -555,6 +556,8 @@ def _ks_initial_parameters(
     window: int,
     spatial_points: int,
 ) -> dict[str, TensorElementParameter]:
+    mode_numbers = tuple(float(mode) for mode in range(1, _initial_condition_mode_count + 1))
+    mode_decay = tuple(1.0 / (mode * mode) for mode in mode_numbers)
     return {
         "sample_indices": TensorElementParameter(
             dtype="int64",
@@ -572,6 +575,16 @@ def _ks_initial_parameters(
             dtype="float64",
             shape=(),
             values=(float(spatial_points),),
+        ),
+        "mode_numbers": TensorElementParameter(
+            dtype="float64",
+            shape=(_initial_condition_mode_count,),
+            values=mode_numbers,
+        ),
+        "mode_decay": TensorElementParameter(
+            dtype="float64",
+            shape=(_initial_condition_mode_count,),
+            values=mode_decay,
         ),
     }
 
@@ -702,15 +715,33 @@ def _ks_initial_condition_kernel(
     seed_value: Any,
     amplitude: Any,
     spatial_points: Any,
+    mode_numbers: Any,
+    mode_decay: Any,
 ) -> Any:
     sample, channel, x = coordinates
     _ = channel
-    phase = (sample_indices[sample] + seed_value).reshape((-1, 1, 1)) * 0.173
+    sample_key = sample_indices[sample].reshape((-1, 1, 1))
+    modes = mode_numbers.reshape((1, -1, 1))
+    decay = mode_decay.reshape((1, -1, 1))
     spatial = x.reshape((1, 1, -1)) * (2.0 * math.pi / spatial_points)
-    return amplitude * (
-        (spatial + phase).sin()
-        + 0.5 * (2.0 * spatial - phase).cos()
+    random_key = seed_value.reshape((1, 1, 1)) + (0.173 * sample_key)
+    sine_coefficients = (
+        (random_key * 12.9898 + modes * 78.233 + 0.37).sin()
+        * decay
     )
+    cosine_coefficients = (
+        (random_key * 4.1414 + modes * 31.416 + 1.91).sin()
+        * decay
+    )
+    energy = (
+        (sine_coefficients * sine_coefficients)
+        + (cosine_coefficients * cosine_coefficients)
+    ).sum(dim=1, keepdim=True).sqrt().clamp_min(math.ulp(1.0))
+    field = (
+        (sine_coefficients * (modes * spatial).sin())
+        + (cosine_coefficients * (modes * spatial).cos())
+    ).sum(dim=1, keepdim=True)
+    return amplitude * field / energy
 
 
 def _ks_step_kernel(

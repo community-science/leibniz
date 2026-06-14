@@ -70,6 +70,26 @@ def test_ks_generator_threads_spatial_resolution() -> None:
     assert fine_targets[:, :, ::2].allclose(coarse_targets, atol=1e-6)
 
 
+def test_ks_generator_samples_distinct_band_limited_mode_content() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    generator = cast(Any, load_benchmark(_ks_benchmark_root).generator)
+
+    batch = generator(
+        seed=101,
+        shape=4,
+        sample_indices=(0, 1, 2, 3),
+        spatial_points=64,
+        runtime=runtime,
+    )
+    fields, _targets = batch.require_tensors()
+    spectrum = runtime.torch.fft.rfft(fields[:, 0, :], dim=-1).abs()
+    low_mode_magnitudes = spectrum[:, 1:5]
+    high_mode_magnitudes = spectrum[:, 5:]
+
+    assert not low_mode_magnitudes[0].allclose(low_mode_magnitudes[1], atol=1e-4)
+    assert high_mode_magnitudes.max() < low_mode_magnitudes.max() * 1e-5
+
+
 def test_ks_generator_rejects_non_ladder_spatial_resolution() -> None:
     generator = cast(Any, load_benchmark(_ks_benchmark_root).generator)
 
