@@ -636,6 +636,10 @@ def _local_training_estimate_records(
             estimate.get("sampled_competence"),
             "training_estimate.sampled_competence",
         )
+        sampled_competence = _sampled_competence_with_diagnostics(
+            sampled_competence=sampled_competence,
+            estimate=estimate,
+        )
         architecture = _architecture_manifest_from_training_record(
             repository_root=repository_root,
             training_summary=summary,
@@ -1689,8 +1693,73 @@ def _compact_sampled_competence_record(
         "standard_error",
         "confidence_half_width",
         "converged",
+        "competence_value_kind",
+        "predictability_boundary",
+        "time_points",
     )
     return {key: sampled_competence[key] for key in keys if key in sampled_competence}
+
+
+def _sampled_competence_with_diagnostics(
+    *,
+    sampled_competence: Mapping[str, object],
+    estimate: Mapping[str, object],
+) -> Mapping[str, object]:
+    diagnostics = estimate.get("competence_diagnostics")
+    if not isinstance(diagnostics, Sequence) or isinstance(diagnostics, str | bytes):
+        return sampled_competence
+    raw_diagnostics = cast(Sequence[object], diagnostics)
+    diagnostic_records = tuple(
+        dict(cast(Mapping[str, object], item))
+        for item in raw_diagnostics
+        if isinstance(item, Mapping)
+    )
+    if not diagnostic_records:
+        return sampled_competence
+    record = dict(sampled_competence)
+    record["competence_diagnostics"] = [dict(item) for item in diagnostic_records]
+    _copy_competence_diagnostic_fields(record, diagnostic_records)
+    points = record.get("points")
+    if isinstance(points, Sequence) and not isinstance(points, str | bytes):
+        point_records = [
+            dict(cast(Mapping[str, object], point))
+            for point in cast(Sequence[object], points)
+            if isinstance(point, Mapping)
+        ]
+        if len(point_records) == len(diagnostic_records):
+            for point, diagnostic in zip(point_records, diagnostic_records, strict=True):
+                point["competence_diagnostics"] = [dict(diagnostic)]
+                _copy_competence_diagnostic_fields(point, (diagnostic,))
+            record["points"] = point_records
+    return record
+
+
+def _copy_competence_diagnostic_fields(
+    target: dict[str, object],
+    diagnostics: Sequence[Mapping[str, object]],
+) -> None:
+    boundaries: list[float] = []
+    for diagnostic in diagnostics:
+        raw_boundary = diagnostic.get("predictability_boundary")
+        if raw_boundary is None:
+            continue
+        boundary = _optional_nonnegative_number(
+            raw_boundary,
+            "competence_diagnostics.predictability_boundary",
+        )
+        if boundary is not None:
+            boundaries.append(boundary)
+    if boundaries:
+        target["predictability_boundary"] = max(boundaries)
+    for diagnostic in diagnostics:
+        time_points = diagnostic.get("time_points")
+        if isinstance(time_points, Sequence) and not isinstance(time_points, str | bytes):
+            target["time_points"] = [
+                dict(cast(Mapping[str, object], point))
+                for point in cast(Sequence[object], time_points)
+                if isinstance(point, Mapping)
+            ]
+            break
 
 
 def _compact_training_record(training_summary: Mapping[str, object]) -> dict[str, object]:
@@ -2165,6 +2234,7 @@ def _competence_points(
                 tuple[int, ...] | None,
                 tuple[CostMeasurement, int] | None,
                 Mapping[str, object] | None,
+                Mapping[str, object],
             ]
         ],
     ] = {}
@@ -2191,18 +2261,34 @@ def _competence_points(
             )
             region = _extract.optional_mapping(point.get("region"), "point.region")
             by_interval.setdefault((log2_volume, minimum, maximum), []).append(
-                (run, score, sample_count, input_shape, inference_cost, region)
+                (run, score, sample_count, input_shape, inference_cost, region, point)
             )
     points: list[dict[str, object]] = []
     for (log2_volume, minimum, maximum), evidence in by_interval.items():
         total_samples = sum(
             sample_count
-            for _run, _score, sample_count, _input_shape, _inference_cost, _region in evidence
+            for (
+                _run,
+                _score,
+                sample_count,
+                _input_shape,
+                _inference_cost,
+                _region,
+                _point,
+            ) in evidence
         )
         score = (
             sum(
                 score * sample_count
-                for _run, score, sample_count, _input_shape, _inference_cost, _region in evidence
+                for (
+                    _run,
+                    score,
+                    sample_count,
+                    _input_shape,
+                    _inference_cost,
+                    _region,
+                    _point,
+                ) in evidence
             )
             / total_samples
         )
@@ -2222,6 +2308,7 @@ def _competence_points(
                             _input_shape,
                             _inference_cost,
                             _region,
+                            _point,
                         ) in evidence
                     }.values(),
                     key=_run_sort_key,
@@ -2230,7 +2317,15 @@ def _competence_points(
         }
         input_shapes = {
             input_shape
-            for _run, _score, _sample_count, input_shape, _inference_cost, _region in evidence
+            for (
+                _run,
+                _score,
+                _sample_count,
+                input_shape,
+                _inference_cost,
+                _region,
+                _point,
+            ) in evidence
             if input_shape is not None
         }
         if len(input_shapes) > 1:
@@ -2248,6 +2343,7 @@ def _competence_points(
                 _input_shape,
                 inference_cost,
                 _region,
+                _point,
             ) in evidence
             if inference_cost is not None
         ]
@@ -2260,7 +2356,15 @@ def _competence_points(
             point["inference_cost_sample_count"] = inference_cost[1]
         regions = {
             canonical_document_bytes(region): region
-            for _run, _score, _sample_count, _input_shape, _inference_cost, region in evidence
+            for (
+                _run,
+                _score,
+                _sample_count,
+                _input_shape,
+                _inference_cost,
+                region,
+                _point,
+            ) in evidence
             if region is not None
         }
         if len(regions) == 1:
@@ -2269,6 +2373,10 @@ def _competence_points(
             point["log2_volume_minimum"] = minimum
         if maximum is not None:
             point["log2_volume_maximum"] = maximum
+        _copy_point_metadata(
+            point,
+            tuple(source_point for *_unused, source_point in evidence),
+        )
         points.append(point)
     return tuple(sorted(points, key=_point_log2_volume))
 
@@ -2328,7 +2436,43 @@ def _competence_point_from_sampled_record(point: Mapping[str, object]) -> dict[s
     if inference_cost is not None:
         record["inference_cost_measurement"] = inference_cost[0].to_record()
         record["inference_cost_sample_count"] = inference_cost[1]
+    _copy_point_metadata(record, (point,))
     return record
+
+
+def _copy_point_metadata(
+    target: dict[str, object],
+    points: Sequence[Mapping[str, object]],
+) -> None:
+    value_kinds = {
+        str(point["competence_value_kind"])
+        for point in points
+        if isinstance(point.get("competence_value_kind"), str)
+    }
+    if len(value_kinds) == 1:
+        target["competence_value_kind"] = next(iter(value_kinds))
+    boundaries: list[float] = []
+    for point in points:
+        raw_boundary = point.get("predictability_boundary")
+        if raw_boundary is None:
+            continue
+        boundary = _optional_nonnegative_number(
+            raw_boundary,
+            "competence_point.predictability_boundary",
+        )
+        if boundary is not None:
+            boundaries.append(boundary)
+    if boundaries:
+        target["predictability_boundary"] = max(boundaries)
+    for point in points:
+        time_points = point.get("time_points")
+        if isinstance(time_points, Sequence) and not isinstance(time_points, str | bytes):
+            target["time_points"] = [
+                dict(cast(Mapping[str, object], value))
+                for value in cast(Sequence[object], time_points)
+                if isinstance(value, Mapping)
+            ]
+            break
 
 
 def competence_integral(
