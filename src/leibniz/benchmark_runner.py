@@ -2612,9 +2612,9 @@ def _field_valued_target_horizons(
     time_count = int(labels.shape[1])
     if time_count < 1:
         raise BenchmarkRunnerError("field-valued trajectory target must contain at least one time")
-    if time_count == 1:
-        return ()
     if batch.region is None:
+        if time_count == 1:
+            return ()
         raise BenchmarkRunnerError("field-valued trajectory horizons require a sample region")
     horizon = batch.region.ambient.field_domain.get("length_y")
     if horizon is None:
@@ -2628,8 +2628,35 @@ def _field_valued_target_horizons(
         raise BenchmarkRunnerError(
             "field-valued ambient field_domain.length_y must be positive and finite"
         )
+    if time_count == 1:
+        return _field_valued_ambient_horizons(batch=batch, horizon=result_horizon)
     step = result_horizon / float(time_count - 1)
     return tuple(step * index for index in range(1, time_count))
+
+
+def _field_valued_ambient_horizons(
+    *,
+    batch: GeneratedSampleSet,
+    horizon: float,
+) -> tuple[float, ...]:
+    if batch.region is None:
+        return ()
+    time_resolution = batch.region.ambient.field_domain.get("time_resolution")
+    if time_resolution is None:
+        return ()
+    if isinstance(time_resolution, bool) or not isinstance(time_resolution, int | float):
+        raise BenchmarkRunnerError(
+            "field-valued ambient field_domain.time_resolution must be numeric"
+        )
+    step = float(time_resolution)
+    if not math.isfinite(step) or step <= 0.0:
+        raise BenchmarkRunnerError(
+            "field-valued ambient field_domain.time_resolution must be positive and finite"
+        )
+    step_count = round(horizon / step)
+    if step_count < 1:
+        return ()
+    return tuple((horizon * index) / float(step_count) for index in range(1, step_count + 1))
 
 
 def _field_valued_cost_horizon(horizons: tuple[float, ...] | None) -> float:
@@ -2660,15 +2687,16 @@ def _field_valued_model_trajectory(
         raise BenchmarkRunnerError("field-valued target batch size must match input batch size")
     if int(labels.shape[-1]) != int(fields.shape[-1]):
         raise BenchmarkRunnerError("field-valued target spatial length must match input length")
-    time_count = int(labels.shape[1])
-    if time_count < 1:
+    label_time_count = int(labels.shape[1])
+    if label_time_count < 1:
         raise BenchmarkRunnerError("field-valued trajectory target must contain at least one time")
+    time_count = 1 + len(horizons) if horizons else label_time_count
     states = [fields]
     if time_count == 1:
         return fields
     if horizons is None:
         raise BenchmarkRunnerError("field-valued trajectory requires target horizons")
-    if len(horizons) != time_count - 1:
+    if label_time_count > 1 and len(horizons) != label_time_count - 1:
         raise BenchmarkRunnerError(
             "field-valued target horizon count must match target time steps after "
             "the initial state"

@@ -35,13 +35,10 @@ def test_ks_generator_emits_initial_fields_and_space_time_targets() -> None:
     assert batch.region.measure_estimate.kind == "estimated"
     assert batch.region.log2_volume == 2.0
     assert fields.shape == (3, 1, 32)
-    assert targets.shape == (3, 9, 32)
+    assert targets.shape == (3, 1, 32)
     assert fields.dtype == runtime.torch.float32
     assert targets.dtype == runtime.torch.float32
-    assert targets[:, 0:1, :].allclose(fields.to(dtype=targets.dtype))
-    assert targets[:, 1:, :].allclose(
-        fields.to(dtype=targets.dtype).repeat(1, targets.shape[1] - 1, 1)
-    )
+    assert targets.allclose(fields.to(dtype=targets.dtype))
 
 
 def test_ks_generator_threads_spatial_resolution() -> None:
@@ -132,8 +129,15 @@ def test_ks_benchmark_builds_residual_training_loss() -> None:
     fields, targets = batch.require_tensors()
     loss = cast(Any, loaded).build_training_loss(runtime, loaded.target_contract)
 
-    exact_loss = float(loss(targets, targets))
-    perturbed = targets.clone()
+    trajectory = cast(Any, loaded).reference_trajectory(
+        runtime=runtime,
+        sample_count=2,
+        seed=17,
+        sample_indices=(0, 1),
+        window=0,
+    )[:, 0, :, :].float()
+    exact_loss = float(loss(trajectory, targets))
+    perturbed = trajectory.clone()
     perturbed[:, 0:1, :] = fields + 0.5
     perturbed_loss = float(loss(perturbed, targets))
 

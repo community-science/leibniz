@@ -457,7 +457,7 @@ def _ks_tensors(
         spatial_points=spatial_points,
     )
     fields = initial.float()
-    targets = initial[:, 0:1, :].repeat(1, _time_count, 1).float()
+    targets = initial[:, 0:1, :].float()
     return fields, targets
 
 
@@ -785,11 +785,16 @@ def _ks_nonlinear_spectrum(
 
 
 def _ks_residual_loss(predictions: Any, targets: Any) -> Any:
-    if tuple(predictions.shape) != tuple(targets.shape):
-        raise ValueError("KS residual loss requires prediction and target shape match")
+    _validate_initial_condition_target(
+        predictions=predictions,
+        targets=targets,
+        context="KS residual loss",
+    )
+    if int(predictions.shape[1]) < 2:
+        raise ValueError("KS residual loss requires a predicted trajectory")
     residual = _ks_discrete_residual(predictions)
     residual_loss = (residual * residual).mean()
-    initial_error = predictions[:, 0, :] - targets[:, 0, :]
+    initial_error = predictions[:, 0:1, :] - targets[:, 0:1, :]
     initial_loss = (initial_error * initial_error).mean()
     return residual_loss + initial_loss
 
@@ -797,8 +802,11 @@ def _ks_residual_loss(predictions: Any, targets: Any) -> Any:
 def _ks_convergence_resolved_bits(request: Any) -> Any:
     predictions = request.predictions
     targets = request.targets
-    if tuple(predictions.shape) != tuple(targets.shape):
-        raise ValueError("KS convergence competence requires prediction and target shape match")
+    _validate_initial_condition_target(
+        predictions=predictions,
+        targets=targets,
+        context="KS convergence competence",
+    )
     try:
         ladder = _ks_prediction_ladder(request)
     except ValueError:
@@ -808,6 +816,22 @@ def _ks_convergence_resolved_bits(request: Any) -> Any:
         ladder=ladder,
         horizon=_request_horizon(request),
     )
+
+
+def _validate_initial_condition_target(
+    *,
+    predictions: Any,
+    targets: Any,
+    context: str,
+) -> None:
+    prediction_shape = tuple(predictions.shape)
+    target_shape = tuple(targets.shape)
+    if len(prediction_shape) != 3 or len(target_shape) != 3:
+        raise ValueError(f"{context} requires rank-3 prediction and target tensors")
+    if int(target_shape[1]) < 1:
+        raise ValueError(f"{context} requires an initial-condition target")
+    if prediction_shape[0] != target_shape[0] or prediction_shape[-1] != target_shape[-1]:
+        raise ValueError(f"{context} requires matching batch and spatial dimensions")
 
 
 def _ks_prediction_ladder(request: Any) -> tuple[Any, ...]:

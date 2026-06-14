@@ -1766,7 +1766,7 @@ def test_ks_convergence_competence_rejects_persistence_through_requery_path() ->
         module=PersistenceOperator(),
         fields=fields,
         horizon=1.0,
-        time_count=targets.shape[1],
+        time_count=9,
     )
     competence = loaded.implementation.build_training_competence(
         runtime,
@@ -1836,7 +1836,7 @@ def test_ks_convergence_competence_accepts_reference_solver_through_real_residua
         module=ReferenceOperator(),
         fields=fields,
         horizon=full_horizon,
-        time_count=targets.shape[1],
+        time_count=base_step_count + 1,
     )
     competence = loaded.implementation.build_training_competence(
         runtime,
