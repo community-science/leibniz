@@ -46,6 +46,12 @@ try {
     });
     await page.goto(`http://${host}:${port}/`, { waitUntil: 'networkidle' });
     await page.locator('#root').waitFor({ state: 'attached' });
+    await page.locator('.architecture-forest').waitFor({ state: 'visible', timeout: 5_000 });
+    const architectureRoots = await page.locator('.architecture-root').count();
+    if (architectureRoots !== 4) {
+      throw new Error(`expected four architecture roots on the default tab, found ${architectureRoots}`);
+    }
+    await page.getByRole('button', { name: 'Benchmarks' }).click();
     try {
       await page.locator('.benchmark-workbench').waitFor({ state: 'visible', timeout: 5_000 });
     } catch (error) {

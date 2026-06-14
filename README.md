@@ -4,9 +4,10 @@ Leibniz is a protocol for scientific work: a way to make identity, frame,
 statement, measurement, record, and program artifacts explicit, addressable,
 validated, and composable without a central authority.
 
-[ARCHITECTURE.md](ARCHITECTURE.md) describes how the protocol measures
-scientific work — universes, tasks, correctness, and scoring — in both an
-informal and a formal register.
+How the protocol measures scientific work — universes, tasks, correctness, and
+scoring — is described in the **Architecture tab of the console**, an interactive
+adaptive precision tree and the console's default view. See [Console](#console)
+below to run it.
 
 ## Principles
 
@@ -50,6 +51,16 @@ console extra and cache pip downloads in CI:
 
 ```bash
 python -m pip install -e '.[console]'
+```
+
+### Console
+
+The web console's default view is the Architecture tab — an interactive adaptive
+precision tree describing universes, tasks, correctness, and scoring. With the
+environment loaded, start the development server with:
+
+```bash
+leibniz console dev
 ```
 
 Run the full local check set before review:
