@@ -24,7 +24,6 @@ type ConceptNode = {
   anchor: string;
   verify?: { module: string; symbols: string[] };
   step?: string;
-  defaultOpen?: boolean;
   rungs: Rung[];
   verdict: Verdict;
 };
@@ -231,7 +230,6 @@ const ROOTS: RootTree[] = [
         status: 'direction',
         anchor: 'refinement-ladder records + runner scoring',
         step: 'ladder',
-        defaultOpen: true,
         rungs: [
           {
             level: 1,
@@ -508,9 +506,7 @@ const STATUS_LABEL: Record<NodeStatus, string> = {
 
 export function ArchitecturePanel() {
   const [maxLevel, setMaxLevel] = useState(4);
-  const [openNodes, setOpenNodes] = useState<Set<string>>(
-    () => new Set(ROOTS.flatMap((root) => root.nodes).filter((node) => node.defaultOpen).map((node) => node.id)),
-  );
+  const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(() => new Set());
   const [highlightRoot, setHighlightRoot] = useState<RootId | null>(null);
   const rootRefs = useRef<Partial<Record<RootId, HTMLElement | null>>>({});
 
@@ -528,11 +524,11 @@ export function ArchitecturePanel() {
 
   const selectLevel = (value: number) => {
     setMaxLevel(value);
-    setOpenNodes(new Set());
+    setCollapsedNodes(new Set());
   };
 
   const toggleNode = (id: string) => {
-    setOpenNodes((previous) => {
+    setCollapsedNodes((previous) => {
       const next = new Set(previous);
       if (next.has(id)) {
         next.delete(id);
@@ -602,10 +598,15 @@ export function ArchitecturePanel() {
               <span className="architecture-root-ask">{root.ask}</span>
             </div>
             {root.nodes.map((node) => {
-              const isOpen = openNodes.has(node.id);
+              const isCollapsed = collapsedNodes.has(node.id);
               return (
-                <div className={`architecture-node ${isOpen ? 'open' : ''}`} key={node.id}>
-                  <button className="architecture-node-head" onClick={() => toggleNode(node.id)} type="button" aria-expanded={isOpen}>
+                <div className={`architecture-node ${isCollapsed ? 'collapsed' : 'open'}`} key={node.id}>
+                  <button
+                    className="architecture-node-head"
+                    onClick={() => toggleNode(node.id)}
+                    type="button"
+                    aria-expanded={!isCollapsed}
+                  >
                     <span className="architecture-twist" aria-hidden="true">
                       &#x25b6;
                     </span>
@@ -617,21 +618,22 @@ export function ArchitecturePanel() {
                       </span>
                     </span>
                   </button>
-                  <div className="architecture-rungs">
-                    {node.rungs.map((rung, index) => {
-                      const visible = isOpen || rung.level <= maxLevel;
-                      if (!visible) {
-                        return null;
-                      }
-                      return (
-                        <div className={`architecture-rung ${rung.kind}`} key={index}>
-                          <span className={`architecture-tag ${rung.kind}`}>{rung.tag}</span>
-                          <span className="architecture-rung-text">{rung.text}</span>
-                        </div>
-                      );
-                    })}
-                    <div className={`architecture-verdict ${node.verdict.tone}`}>{node.verdict.text}</div>
-                  </div>
+                  {isCollapsed ? null : (
+                    <div className="architecture-rungs">
+                      {node.rungs.map((rung, index) => {
+                        if (rung.level > maxLevel) {
+                          return null;
+                        }
+                        return (
+                          <div className={`architecture-rung ${rung.kind}`} key={index}>
+                            <span className={`architecture-tag ${rung.kind}`}>{rung.tag}</span>
+                            <span className="architecture-rung-text">{rung.text}</span>
+                          </div>
+                        );
+                      })}
+                      <div className={`architecture-verdict ${node.verdict.tone}`}>{node.verdict.text}</div>
+                    </div>
+                  )}
                 </div>
               );
             })}
