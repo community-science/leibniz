@@ -95,6 +95,7 @@ def _write_ks_architecture(path: Path) -> Path:
             {
                 "input_shape": [1, 32],
                 "output_shape": [1, 32],
+                "input_conditioning": {"kind": "horizon-channel"},
                 "layers": [
                     {
                         "kind": "fixed-support-affine",

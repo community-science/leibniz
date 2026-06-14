@@ -608,6 +608,7 @@ class OperationFallbackSequential:
         *,
         runtime: TensorRuntime,
         operations: Sequence[Any],
+        input_conditioning: Mapping[str, object] | None = None,
     ) -> Any:
         torch = runtime.torch
 
@@ -641,8 +642,13 @@ class OperationFallbackSequential:
             def operation_fallback_records(self) -> tuple[dict[str, object], ...]:
                 return tuple(dict(record) for record in self._fallback_records)
 
-            def forward(self, value: Any) -> Any:
-                current = value
+            def forward(self, value: Any, horizon: float | None = None) -> Any:
+                current = _conditioned_model_input(
+                    runtime,
+                    value,
+                    input_conditioning=input_conditioning,
+                    horizon=horizon,
+                )
                 for index, operation in enumerate(self._operations):
                     placement = self._placements[index]
                     current = current.to(placement.device)
@@ -854,7 +860,7 @@ def build_architecture_modules(
         raise TensorRuntimeError("canonical_layer_kinds length must match architecture layers")
     torch = _torch()
     modules: list[Any] = []
-    shape = architecture.input_shape
+    shape = _conditioned_input_shape(architecture)
     for layer, kind in zip(architecture.layers, canonical_layer_kinds, strict=True):
         parameters = layer.parameters
         if kind == "local-aggregation":
@@ -940,6 +946,48 @@ def build_architecture_sequential(
     torch = _torch()
     modules = build_architecture_modules(architecture, canonical_layer_kinds=canonical_layer_kinds)
     return torch.nn.Sequential(*modules)
+
+
+def _conditioned_input_shape(architecture: ArchitectureManifest) -> tuple[int, ...]:
+    conditioning = architecture.input_conditioning
+    if conditioning is None:
+        return architecture.input_shape
+    if conditioning.get("kind") != "horizon-channel":
+        raise TensorRuntimeError("unsupported architecture input conditioning")
+    if len(architecture.input_shape) < 2:
+        raise TensorRuntimeError("horizon-channel input conditioning requires a channel axis")
+    return (
+        *architecture.input_shape[:-2],
+        architecture.input_shape[-2] + 1,
+        architecture.input_shape[-1],
+    )
+
+
+def _conditioned_model_input(
+    runtime: TensorRuntime,
+    value: Any,
+    *,
+    input_conditioning: Mapping[str, object] | None,
+    horizon: float | None,
+) -> Any:
+    if input_conditioning is None:
+        if horizon is not None:
+            raise TensorRuntimeError("unconditioned model does not accept a horizon")
+        return value
+    if input_conditioning.get("kind") != "horizon-channel":
+        raise TensorRuntimeError("unsupported architecture input conditioning")
+    if horizon is None:
+        raise TensorRuntimeError("horizon-channel input conditioning requires a horizon")
+    if len(tuple(value.shape)) < 3:
+        raise TensorRuntimeError("horizon-channel input conditioning requires rank >= 3")
+    torch = _torch()
+    horizon_channel = torch.full(
+        (*tuple(value.shape[:-2]), 1, value.shape[-1]),
+        float(horizon),
+        dtype=value.dtype,
+        device=value.device,
+    )
+    return torch.cat((value, horizon_channel), dim=-2)
 
 
 def synchronize_runtime(runtime: TensorRuntime) -> None:

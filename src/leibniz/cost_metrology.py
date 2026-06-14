@@ -915,9 +915,11 @@ _reduction_ops = frozenset(
 _movement_ops = frozenset(
     {
         "aten.clone.default",
+        "aten.cat.default",
         "aten.copy.default",
         "aten.copy_.default",
         "aten.detach.default",
+        "aten.full.default",
         "aten.gather.default",
         "aten.index_select.default",
         "aten.lift_fresh.default",

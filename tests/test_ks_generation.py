@@ -3,13 +3,15 @@ import sys
 from pathlib import Path
 from typing import Any, cast
 
+from leibniz.architectures import ArchitectureManifest
 from leibniz.benchmark_implementations import load_benchmark
 from leibniz.benchmark_runner import (
     BenchmarkRunnerError,
     _field_valued_model_trajectory,  # pyright: ignore[reportPrivateUsage]
 )
+from leibniz.model_operators import ExecutableModelOperator
 from leibniz.observation_generation import ObservationGenerationError, StateSpaceVolumeRequest
-from leibniz.tensor_runtime import resolve_tensor_runtime
+from leibniz.tensor_runtime import OperationFallbackSequential, resolve_tensor_runtime
 
 _repository_root = Path(__file__).parents[1]
 _ks_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "ks"
@@ -182,6 +184,7 @@ def test_field_valued_runner_queries_operator_at_horizons() -> None:
         module=HorizonModule(),
         fields=fields,
         labels=labels,
+        horizons=(1 / 3, 2 / 3, 1.0),
     )
 
     assert horizons == [1 / 3, 2 / 3, 1.0]
@@ -206,11 +209,101 @@ def test_field_valued_runner_rejects_length_changing_operator() -> None:
             module=BadModule(),
             fields=fields,
             labels=labels,
+            horizons=(1 / 3, 2 / 3, 1.0),
         )
     except BenchmarkRunnerError as error:
         assert "must return state shape" in str(error)
     else:
         raise AssertionError("expected length-changing field operator to be rejected")
+
+
+def test_field_valued_runner_presents_horizon_to_real_operator() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    architecture = ArchitectureManifest.from_record(
+        {
+            "input_shape": [1, 32],
+            "output_shape": [1, 32],
+            "input_conditioning": {"kind": "horizon-channel"},
+            "layers": [
+                {
+                    "kind": "fixed-support-affine",
+                    "parameters": {
+                        "dimension": 1,
+                        "out_channels": 1,
+                        "out_length": 32,
+                    },
+                }
+            ],
+        }
+    )
+    executable = ExecutableModelOperator(architecture)
+    module = OperationFallbackSequential(
+        runtime=runtime,
+        operations=executable.operation_modules(),
+        input_conditioning=architecture.input_conditioning,
+    )
+    conv = module._operations[0][1]
+    with runtime.torch.no_grad():
+        conv.weight.zero_()
+        conv.bias.zero_()
+        conv.weight[0, 1, 0] = 1.0
+    fields = runtime.torch.zeros((2, 1, 32), dtype=runtime.torch.float32)
+    labels = runtime.torch.zeros((2, 4, 32), dtype=runtime.torch.float32)
+
+    trajectory = _field_valued_model_trajectory(
+        runtime=runtime,
+        module=module,
+        fields=fields,
+        labels=labels,
+        horizons=(0.25, 0.5, 1.0),
+    )
+
+    assert trajectory.shape == labels.shape
+    assert trajectory[:, 0:1, :].allclose(fields)
+    assert trajectory[:, 1, :].allclose(fields[:, 0, :] + 0.25)
+    assert trajectory[:, 2, :].allclose(fields[:, 0, :] + 0.5)
+    assert trajectory[:, 3, :].allclose(fields[:, 0, :] + 1.0)
+
+
+def test_field_valued_runner_rejects_real_operator_without_horizon_conditioning() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    architecture = ArchitectureManifest.from_record(
+        {
+            "input_shape": [1, 32],
+            "output_shape": [1, 32],
+            "layers": [
+                {
+                    "kind": "fixed-support-affine",
+                    "parameters": {
+                        "dimension": 1,
+                        "out_channels": 1,
+                        "out_length": 32,
+                    },
+                }
+            ],
+        }
+    )
+    executable = ExecutableModelOperator(architecture)
+    module = OperationFallbackSequential(
+        runtime=runtime,
+        operations=executable.operation_modules(),
+        input_conditioning=architecture.input_conditioning,
+    )
+    fields = runtime.torch.zeros((2, 1, 32), dtype=runtime.torch.float32)
+    labels = runtime.torch.zeros((2, 4, 32), dtype=runtime.torch.float32)
+
+    try:
+        _field_valued_model_trajectory(
+            runtime=runtime,
+            module=module,
+            fields=fields,
+            labels=labels,
+            horizons=(0.25, 0.5, 1.0),
+        )
+    except BenchmarkRunnerError as error:
+        assert "unconditioned model does not accept a horizon" in str(error)
+    else:
+        raise AssertionError("expected field operator without horizon conditioning to fail")
 
 
 def test_ks_residual_certificate_scores_reference_and_rejects_bad_solutions() -> None:

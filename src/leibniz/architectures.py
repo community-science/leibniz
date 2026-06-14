@@ -369,6 +369,7 @@ class ArchitectureManifest:
     output_shape: tuple[int, ...]
     layers: tuple[ArchitectureLayer, ...]
     model_scale_contract: ModelScaleContract | None = None
+    input_conditioning: Mapping[str, object] | None = None
 
     @classmethod
     def record_contract(cls) -> RecordContract:
@@ -395,6 +396,11 @@ class ArchitectureManifest:
                 ),
                 FieldContract(
                     name="model_scale_contract",
+                    kind="record",
+                    required=False,
+                ),
+                FieldContract(
+                    name="input_conditioning",
                     kind="record",
                     required=False,
                 ),
@@ -461,6 +467,9 @@ class ArchitectureManifest:
             scale_contract = _optional_scale_contract(
                 validated.get("model_scale_contract")
             )
+            input_conditioning = _optional_input_conditioning(
+                validated.get("input_conditioning")
+            )
         except ValueError as error:
             raise ArchitectureManifestValidationError(str(error)) from error
         content_record = _architecture_content_record(
@@ -468,6 +477,7 @@ class ArchitectureManifest:
             output_shape=output_shape,
             layers=layers,
             model_scale_contract=scale_contract,
+            input_conditioning=input_conditioning,
         )
         derived_id = _architecture_id(content_record)
         identifier = validated.get("id", derived_id)
@@ -477,6 +487,7 @@ class ArchitectureManifest:
             output_shape=output_shape,
             layers=layers,
             model_scale_contract=scale_contract,
+            input_conditioning=input_conditioning,
         )
 
     @property
@@ -510,6 +521,7 @@ class ArchitectureManifest:
             output_shape=self.output_shape,
             layers=self.layers,
             model_scale_contract=self.model_scale_contract,
+            input_conditioning=self.input_conditioning,
         )
 
 
@@ -574,6 +586,7 @@ def _architecture_content_record(
     output_shape: tuple[int, ...],
     layers: tuple[ArchitectureLayer, ...],
     model_scale_contract: ModelScaleContract | None,
+    input_conditioning: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     record: dict[str, object] = {
         "input_shape": list(input_shape),
@@ -582,6 +595,8 @@ def _architecture_content_record(
     }
     if model_scale_contract is not None:
         record["model_scale_contract"] = model_scale_contract.to_record()
+    if input_conditioning is not None:
+        record["input_conditioning"] = dict(input_conditioning)
     return record
 
 
@@ -592,6 +607,24 @@ def _optional_scale_contract(value: object) -> ModelScaleContract | None:
         return ModelScaleContract.from_record(_extract.mapping(value, "model_scale_contract"))
     except ModelScaleContractValidationError as error:
         raise ArchitectureManifestValidationError(str(error)) from error
+
+
+def _optional_input_conditioning(value: object) -> Mapping[str, object] | None:
+    if value is None:
+        return None
+    record = _extract.mapping(value, "input_conditioning")
+    kind = record.get("kind")
+    if kind != "horizon-channel":
+        raise ArchitectureManifestValidationError(
+            "input_conditioning kind must be horizon-channel"
+        )
+    if set(record) != {"kind"}:
+        raise ArchitectureManifestValidationError(
+            "input_conditioning horizon-channel does not accept extra fields"
+        )
+    return {"kind": "horizon-channel"}
+
+
 def _as_shape(value: object, *, field: str) -> tuple[int, ...]:
     try:
         return TensorShape.from_record(_extract.sequence(value, field), field=field).axes

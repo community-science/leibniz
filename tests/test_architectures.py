@@ -71,6 +71,16 @@ def test_architecture_manifest_accepts_model_scale_contract() -> None:
     assert manifest.to_record()["model_scale_contract"] == contract.to_record()
 
 
+def test_architecture_manifest_accepts_horizon_channel_input_conditioning() -> None:
+    record = _architecture_record()
+    record["input_conditioning"] = {"kind": "horizon-channel"}
+
+    manifest = ArchitectureManifest.from_record(record)
+
+    assert manifest.input_conditioning == {"kind": "horizon-channel"}
+    assert manifest.to_record()["input_conditioning"] == {"kind": "horizon-channel"}
+
+
 def test_architecture_graph_lowers_sequential_layers_to_single_path() -> None:
     manifest = ArchitectureManifest.from_record(_architecture_record())
     graph = manifest.graph
@@ -209,6 +219,12 @@ def test_architecture_manifest_rejects_invalid_ids_shapes_and_layers() -> None:
     record["layers"] = []
     assert str(capture_architecture_error(lambda: ArchitectureManifest.from_record(record))) == (
         "layers must contain at least one layer"
+    )
+
+    record = _architecture_record()
+    record["input_conditioning"] = {"kind": "scalar-channel"}
+    assert str(capture_architecture_error(lambda: ArchitectureManifest.from_record(record))) == (
+        "input_conditioning kind must be horizon-channel"
     )
 
     record = _architecture_record()
