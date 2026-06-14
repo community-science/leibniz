@@ -437,6 +437,42 @@ def test_ks_convergence_bits_reward_finer_field_resolution(monkeypatch: Any) -> 
     assert float(fine_bits[0]) > float(coarse_bits[0])
 
 
+def test_ks_convergence_bits_stop_at_first_time_gate_failure(monkeypatch: Any) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _loaded_ks_module()
+    ladder = _planted_field_ladder(runtime, coefficient=0.25)
+    residual_by_time_and_space = {
+        (2, 4): 4.0,
+        (3, 8): 1.0,
+        (5, 16): 0.25,
+        (3, 4): 4.0,
+        (5, 8): 2.0,
+        (9, 16): 1.0,
+    }
+
+    def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
+        _ = dx
+        _ = dt
+        key = (int(trajectory.shape[1]), int(trajectory.shape[-1]))
+        return trajectory * 0.0 + residual_by_time_and_space[key]
+
+    monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
+
+    bits = module._ks_ladder_convergence_bits(
+        runtime=runtime,
+        ladder=ladder,
+        horizon=1.0,
+    )
+    diagnostics = bits.leibniz_competence_diagnostics
+    time_points = diagnostics[0]["time_points"]
+
+    assert float(bits[0]) > 0.0
+    assert diagnostics[0]["predictability_boundary"] == 0.5
+    assert time_points[0]["gate_decision"] == "passed"
+    assert time_points[1]["gate_decision"] == "failed"
+    assert time_points[1]["bits"] == 0.0
+
+
 def test_ks_convergence_bits_require_evolution_beyond_initial_state(
     monkeypatch: Any,
 ) -> None:

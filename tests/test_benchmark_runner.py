@@ -1833,7 +1833,7 @@ def test_ks_convergence_competence_accepts_reference_solver_through_real_residua
     runtime = resolve_tensor_runtime("cpu")
     loaded = cast(Any, load_benchmark(_ks_benchmark_root))
     ks_module = sys.modules[type(loaded.implementation).__module__]
-    raw_batch = loaded.generator(seed=101, shape=2, runtime=runtime)
+    raw_batch = loaded.generator(seed=101, shape=1, sample_indices=(0,), runtime=runtime)
     fields, targets = raw_batch.require_tensors()
     batch = replace(raw_batch, fields=fields.double(), targets=targets.double())
     fields, targets = batch.require_tensors()

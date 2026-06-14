@@ -964,6 +964,65 @@ def _ks_ladder_convergence_bits(
 ) -> Any:
     if len(ladder) < _convergence_rung_count:
         return _zero_bits(runtime=runtime, predictions=ladder[-1])
+    base_time_count = int(ladder[0].shape[1])
+    if base_time_count < 2:
+        return _zero_bits(runtime=runtime, predictions=ladder[-1])
+    factor = _convergence_refinement_factor
+    totals = [0.0 for _sample in range(int(ladder[-1].shape[0]))]
+    prefix_open = [True for _sample in totals]
+    boundaries = [0.0 for _sample in totals]
+    time_points: list[list[Mapping[str, object]]] = [[] for _sample in totals]
+    latest_records: list[Mapping[str, object] | None] = [None for _sample in totals]
+    for base_time_index in range(1, base_time_count):
+        time_value = horizon * float(base_time_index) / float(base_time_count - 1)
+        prefix_ladder = tuple(
+            trajectory[:, : (base_time_index * (factor**rung_index)) + 1, :]
+            for rung_index, trajectory in enumerate(ladder)
+        )
+        point_values, point_records = _ks_ladder_prefix_convergence_bits(
+            runtime=runtime,
+            ladder=prefix_ladder,
+            horizon=time_value,
+        )
+        for sample_index, point_record in enumerate(point_records):
+            latest_records[sample_index] = point_record
+            point_bits = float(point_values[sample_index])
+            gated = point_record.get("gate_decision") == "passed" and point_bits > 0.0
+            time_points[sample_index].append(
+                {
+                    "time": time_value,
+                    "bits": point_bits if prefix_open[sample_index] and gated else 0.0,
+                    "gate_decision": point_record.get("gate_decision"),
+                }
+            )
+            if not prefix_open[sample_index]:
+                continue
+            if gated:
+                totals[sample_index] += point_bits
+                boundaries[sample_index] = time_value
+            else:
+                prefix_open[sample_index] = False
+    diagnostics: list[Mapping[str, object]] = []
+    for sample_index, total in enumerate(totals):
+        latest = dict(latest_records[sample_index] or {})
+        latest["kind"] = "ks-convergence-diagnostics"
+        latest["sample_index"] = sample_index
+        latest["predictability_boundary"] = boundaries[sample_index]
+        latest["time_points"] = [dict(point) for point in time_points[sample_index]]
+        latest["gate_decision"] = "passed" if total > 0.0 else "failed"
+        latest["bits"] = total
+        diagnostics.append(latest)
+    result = ladder[-1].new_tensor(totals)
+    result.leibniz_competence_diagnostics = tuple(diagnostics)
+    return result
+
+
+def _ks_ladder_prefix_convergence_bits(
+    *,
+    runtime: TensorRuntime,
+    ladder: tuple[Any, ...],
+    horizon: float,
+) -> tuple[Any, tuple[Mapping[str, object], ...]]:
     factor = _convergence_refinement_factor
     residual_norms = tuple(
         _per_sample_residual_norm(trajectory, horizon=horizon) for trajectory in ladder
@@ -1021,9 +1080,7 @@ def _ks_ladder_convergence_bits(
                 bits=values[-1],
             )
         )
-    result = finest.new_tensor(values)
-    result.leibniz_competence_diagnostics = tuple(diagnostics)
-    return result
+    return finest.new_tensor(values), tuple(diagnostics)
 
 
 def _ks_convergence_diagnostic_record(
