@@ -964,9 +964,10 @@ def _ks_ladder_convergence_bits(
 ) -> Any:
     if len(ladder) < _convergence_rung_count:
         return _zero_bits(runtime=runtime, predictions=ladder[-1])
-    base_time_count = int(ladder[0].shape[1])
+    measured_ladder = tuple(_float64_tensor(trajectory) for trajectory in ladder)
+    base_time_count = int(measured_ladder[0].shape[1])
     if base_time_count < 2:
-        return _zero_bits(runtime=runtime, predictions=ladder[-1])
+        return _zero_bits(runtime=runtime, predictions=measured_ladder[-1])
     factor = _convergence_refinement_factor
     totals = [0.0 for _sample in range(int(ladder[-1].shape[0]))]
     prefix_open = [True for _sample in totals]
@@ -977,7 +978,7 @@ def _ks_ladder_convergence_bits(
         time_value = horizon * float(base_time_index) / float(base_time_count - 1)
         prefix_ladder = tuple(
             trajectory[:, : (base_time_index * (factor**rung_index)) + 1, :]
-            for rung_index, trajectory in enumerate(ladder)
+            for rung_index, trajectory in enumerate(measured_ladder)
         )
         point_values, point_records = _ks_ladder_prefix_convergence_bits(
             runtime=runtime,
@@ -1012,9 +1013,14 @@ def _ks_ladder_convergence_bits(
         latest["gate_decision"] = "passed" if total > 0.0 else "failed"
         latest["bits"] = total
         diagnostics.append(latest)
-    result = ladder[-1].new_tensor(totals)
+    result = measured_ladder[-1].new_tensor(totals)
     result.leibniz_competence_diagnostics = tuple(diagnostics)
     return result
+
+
+def _float64_tensor(tensor: Any) -> Any:
+    convert = getattr(tensor, "double", None)
+    return convert() if callable(convert) else tensor
 
 
 def _ks_ladder_prefix_convergence_bits(

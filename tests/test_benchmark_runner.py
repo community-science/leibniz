@@ -1833,9 +1833,7 @@ def test_ks_convergence_competence_accepts_reference_solver_through_real_residua
     runtime = resolve_tensor_runtime("cpu")
     loaded = cast(Any, load_benchmark(_ks_benchmark_root))
     ks_module = sys.modules[type(loaded.implementation).__module__]
-    raw_batch = loaded.generator(seed=101, shape=1, sample_indices=(0,), runtime=runtime)
-    fields, targets = raw_batch.require_tensors()
-    batch = replace(raw_batch, fields=fields.double(), targets=targets.double())
+    batch = loaded.generator(seed=101, shape=1, sample_indices=(0,), runtime=runtime)
     fields, targets = batch.require_tensors()
     sample_indices = tuple(
         cast(int, sample.latent_coordinates[0]["sample_index"])
@@ -1864,13 +1862,7 @@ def test_ks_convergence_competence_accepts_reference_solver_through_real_residua
 
     class ReferenceGenerator:
         def __call__(self, **kwargs: Any) -> Any:
-            generated = loaded.generator(**kwargs)
-            generated_fields, generated_targets = generated.require_tensors()
-            return replace(
-                generated,
-                fields=generated_fields.double(),
-                targets=generated_targets.double(),
-            )
+            return loaded.generator(**kwargs)
 
     predictions = ks_module._query_operator_trajectory(
         runtime=runtime,
