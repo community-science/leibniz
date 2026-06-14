@@ -69,60 +69,60 @@ const ROOTS: RootTree[] = [
     nodes: [
       {
         id: 'U-states',
-        gist: 'A universe is states on a domain, under a law.',
+        gist: 'A universe is a space of states on a domain, governed by a law.',
         meta: 'An evolving field on a mesh, a board game’s positions, a labeled glyph.',
         status: 'implemented',
-        anchor: 'state_space.py — StateSpaceAmbient, StateSpaceAxis',
+        anchor: 'state_space.py: StateSpaceAmbient, StateSpaceAxis',
         verify: { module: 'leibniz.state_space', symbols: ['StateSpaceAmbient', 'StateSpaceAxis'] },
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'ambient vs chart',
-            text: 'The states form an ambient field space; a benchmark reaches them by turning a few measured chart axes (a generator $g: \\Theta \\to X$).',
+            text: 'The states live in an ambient field space. A benchmark reaches into it by turning a handful of measured knobs, its chart axes — a generator $g: \\Theta \\to X$.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'charts are not the semantics',
-            text: 'The chart only parameterizes; meaning lives in the ambient space, so everything counted on it is invariant to how the generator is written.',
+            text: 'The chart is only a parameterization. The meaning lives in the ambient space, so whatever you count there does not depend on how the generator happens to be written.',
           },
           {
             level: 3,
             kind: 'code',
             tag: '⟂',
-            text: 'state_space.py — StateSpaceAmbient, StateSpaceAxis, generator surface',
+            text: 'state_space.py: StateSpaceAmbient, StateSpaceAxis, generator surface',
           },
         ],
         verdict: { tone: 'ok', text: 'Specified in code.' },
       },
       {
         id: 'U-law',
-        gist: 'A universe carries a law, or only a convention.',
-        meta: 'A field equation or game rules carry a law; a glyph’s label rests on convention.',
+        gist: 'A universe either has a law, or only a convention.',
+        meta: 'A field equation or a game’s rules are laws; a glyph’s label is just a convention.',
         status: 'direction',
-        anchor: 'target contract — law status on the universe',
+        anchor: 'target contract: law status on the universe',
         step: 'signature',
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'intrinsic vs extrinsic',
-            text: 'A law makes correctness intrinsic; a convention makes it extrinsic — a pre-scientific labeling rather than a question with a governing law.',
+            text: 'With a law, correctness is intrinsic. With only a convention it is extrinsic: there is no governing law, just an agreed-on label. That is pre-scientific.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'one half of grounding',
-            text: 'Whether a universe carries a law is one of the two questions usually bundled as “grounding.” The other — exact verifier versus convergence — belongs to Refinement (see the grounding edge).',
+            text: 'People usually bundle this with a second question under one word, “grounding.” It is only the first half: is there a law at all? The other half, verifier or convergence, belongs to Refinement (see the grounding edge).',
           },
         ],
-        verdict: { tone: 'partial', text: 'Grounding resolves across Universe and Refinement; see the grounding edge.' },
+        verdict: { tone: 'partial', text: 'Grounding splits between Universe and Refinement; see the edge.' },
       },
       {
         id: 'U-levels',
         gist: 'Three levels: reality, law, tasks.',
-        meta: 'Experiment validates the law; it never defines a task’s answer.',
+        meta: 'Experiment tests the law; it never defines a task’s answer.',
         status: 'direction',
         anchor: 'multi-scale universe records',
         step: 'discovery',
@@ -131,22 +131,22 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'where experiment acts',
-            text: 'Experiment connects reality and the law — does the theory model the world? Task scoring connects a task to the law.',
+            text: 'Experiment sits between reality and the law and asks whether the theory matches the world. Scoring sits between a task and the law.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'known vs unknown law',
-            text: 'A known law is operationalized; an unknown law is discovered from novel-intervention experiment — for example a virtual cell, a tower of scales.',
+            text: 'When the law is known, you put it to work. When it is not, you have to discover it from experiments that intervene in new ways. A virtual cell is the hard case: a whole tower of scales.',
           },
           {
             level: 3,
             kind: 'add',
             tag: 'fitting is not theory',
-            text: 'Fitting measured data yields a predictor with no theory inside it. In a multi-scale universe an effective theory must stay consistent with the converged law beneath it.',
+            text: 'Fit enough data and you get a predictor with no theory inside it. In a tower of scales, the effective theory at each level still has to agree with the converged law underneath.',
           },
         ],
-        verdict: { tone: 'open', text: 'Discovery and multi-scale universes remain to be specified.' },
+        verdict: { tone: 'open', text: 'Discovery and multi-scale universes still need to be specified.' },
       },
     ],
   },
@@ -157,63 +157,63 @@ const ROOTS: RootTree[] = [
     nodes: [
       {
         id: 'Q-task',
-        gist: 'A task is a question put to a universe.',
-        meta: 'One universe supports many tasks — more than a classification-vs-prediction split.',
+        gist: 'A task is a question you put to a universe.',
+        meta: 'One universe holds many tasks; they do not split neatly into classification versus prediction.',
         status: 'direction',
-        anchor: 'target contract — task signature',
+        anchor: 'target contract: task signature',
         step: 'signature',
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'the form',
-            text: 'A signature (access, binding, target): how the universe is sampled, how the input determines the answer, and what shape the answer takes.',
+            text: 'Three parts: how you sample the universe (access), how the input fixes the answer (binding), and what shape the answer takes (target).',
           },
           {
             level: 2,
             kind: 'horizon',
             tag: 'open',
-            text: 'Whether a query is an independent facet or simply a region of the universe singled out — and so whether there are four roots or three — remains open.',
+            text: 'Is a query really its own thing, or just a slice of the universe you have pointed at? If it is the latter, there are three roots here, not four.',
           },
         ],
-        verdict: { tone: 'open', text: 'A query’s independence from the universe remains to be settled.' },
+        verdict: { tone: 'open', text: 'Whether a query stands on its own is unsettled.' },
       },
       {
         id: 'Q-binding',
         gist: 'Binding: evolution, equilibrium, or inverse.',
-        meta: 'Step forward in time · settle to an extremal state · infer a cause.',
+        meta: 'Step forward in time · settle into a state · work back to a cause.',
         status: 'direction',
-        anchor: 'target contract — binding relation',
+        anchor: 'target contract: binding relation',
         step: 'signature',
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'examples',
-            text: 'Evolution: an advancing field. Equilibrium: a molecule’s folded structure — a free-energy minimum, not a time-step. Inverse: a cause read from observations, the ill-posed counterpart of running time backward.',
+            text: 'Evolution moves a field forward in time. Equilibrium is the state a system settles into; a folded protein, for instance, is an energy minimum, not a point on a trajectory. Inverse works backward from observations to a cause, which is usually ill-posed.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'relation to the law',
-            text: 'The law fixes the menu of bindings; choosing one is the free part of asking a question.',
+            text: 'The law decides which bindings are even possible. Picking one is up to you.',
           },
         ],
-        verdict: { tone: 'partial', text: 'The full menu of bindings remains to be enumerated.' },
+        verdict: { tone: 'partial', text: 'We have not pinned down the full list of bindings yet.' },
       },
       {
         id: 'Q-target',
         gist: 'Target: a state, or a readout.',
-        meta: 'A field or position, vs a label, scalar, or decision.',
+        meta: 'A whole state (a field, a position), or a readout off it (a label, a number, a decision).',
         status: 'direction',
-        anchor: 'target contract — target shape',
+        anchor: 'target contract: target shape',
         step: 'signature',
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'independent of grounding',
-            text: 'Target shape is independent of how truth is established: a state-valued or a readout task can each be verifier- or convergence-grounded. That independence is what a classification-vs-prediction split obscures.',
+            text: 'What you ask for and how you check it are separate choices. A state-valued task or a readout task can each be checked by a verifier or by convergence. Folding the two together into “classification versus prediction” hides that.',
           },
         ],
         verdict: { tone: 'ok', text: 'An independent axis.' },
@@ -228,7 +228,7 @@ const ROOTS: RootTree[] = [
       {
         id: 'R-correctness',
         gist: 'Correctness is convergence, not an oracle.',
-        meta: 'When no exact answer exists, refinement decides correctness.',
+        meta: 'There is no answer key, so refinement stands in for one.',
         status: 'direction',
         anchor: 'refinement-ladder records + runner scoring',
         step: 'ladder',
@@ -237,19 +237,19 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'the move',
-            text: 'When the exact answer is unknowable, an answer counts as correct when it stops changing as it is computed more carefully — and it is trusted only as far as it stays stable.',
+            text: 'You cannot look up the exact answer, so here is the move: an answer is correct if it stops moving as you compute it more carefully. You trust it exactly as far as it stays put.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'ladder and ruler',
-            text: 'Compute at coarser, then finer resolution and compare on shared features. If the sequence settles (Cauchy), the settled value is the answer and the leftover gap is the ruler $\\varepsilon$. If it never settles, the answer is undefined and no model scores there.',
+            text: 'Compute it coarse, then finer, then finer still, comparing on what those resolutions share. If the sequence settles (Cauchy), the value it lands on is the answer, and the gap it leaves behind is the ruler $\\varepsilon$. If it never settles, there is nothing to score against and nobody scores there.',
           },
           {
             level: 3,
             kind: 'add',
             tag: 'what falls out',
-            text: 'The horizon, the direction of time, and chaotic-versus-laminar character are outputs of whether the sequence settles — not declarations. A verifier is the limiting case where the gap is zero: a discrete law is already fully resolved.',
+            text: 'You do not declare the prediction horizon, the arrow of time, or whether a system is chaotic. They all fall out of whether the sequence settles. A verifier is just the special case where the gap is zero: a discrete law is already fully resolved.',
           },
           {
             level: 3,
@@ -261,15 +261,15 @@ const ROOTS: RootTree[] = [
             level: 4,
             kind: 'horizon',
             tag: 'open',
-            text: 'The operational meaning of “within tolerance” — which norm, which tolerance, how many rungs — and the precise stability criterion remain to be specified.',
+            text: 'Still to nail down: what “within tolerance” means in practice (which norm, which threshold, how many rungs), and the exact test for when a sequence counts as settled.',
           },
         ],
-        verdict: { tone: 'open', text: 'Defined down to its formal objects; the operational details remain open.' },
+        verdict: { tone: 'open', text: 'The formal objects are written down; the operational details are not yet.' },
       },
       {
         id: 'R-territory',
         gist: 'One operator, many territories.',
-        meta: 'Correctness, the score hierarchy, and the bootstrap share one mechanism.',
+        meta: 'Correctness, the score hierarchy, and the bootstrap are all the same move.',
         status: 'direction',
         anchor: 'partition-tree scoring',
         step: 'hierarchy',
@@ -278,33 +278,33 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'the parameter',
-            text: 'Refinement applies to a territory: resolution gives correctness; the problem partition gives the score hierarchy; operators over time give the bootstrap; scale and intervention give multi-scale and discovery.',
+            text: 'Refinement always runs over some territory. Refine resolution and you get correctness. Refine the problem partition and you get the score hierarchy. Refine over operators across time and you get the bootstrap. Refine over scale or intervention and you get multi-scale work and discovery.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'one mechanism',
-            text: 'Correctness, the score hierarchy, and the bootstrap are the same refinement over different territories — one mechanism, not three.',
+            text: 'So those three are one mechanism pointed at different territories, not three separate ideas.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'the partition tree',
-            text: 'Over the problem partition the score is a tree of regions, refined until each region’s competence estimate is stable under adversarial subdivision — so a model cannot hide failure in an unrefined cell. A submission’s claim is a subtree; the scalar score is its measure-weighted contraction.',
+            text: 'On the problem partition, the score is a tree of regions. You keep subdividing a region until its competence estimate holds up even against an adversary choosing where to split, so a model cannot tuck its failures into a cell nobody looked at. A claim is a subtree, and the single number is that tree weighted by measure.',
           },
           {
             level: 3,
             kind: 'horizon',
             tag: 'open',
-            text: 'Whether these territories form one uniform axis or several distinct kinds remains open.',
+            text: 'Whether all these territories are really one kind of axis, or several, is open.',
           },
         ],
-        verdict: { tone: 'open', text: 'The shared mechanism is clear; the uniformity of its territories is open.' },
+        verdict: { tone: 'open', text: 'The shared mechanism is clear; whether its territories are uniform is not.' },
       },
       {
         id: 'R-ratchet',
         gist: 'Trusted ground is a ratchet.',
-        meta: 'Truth is an unreached limit the community tightens toward.',
+        meta: 'Truth is a limit nobody reaches; the field just tightens toward it.',
         status: 'direction',
         anchor: 'trusted-ground persistence',
         step: 'bootstrap',
@@ -313,22 +313,22 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'how it grows',
-            text: 'A model extends trusted ground by settling where earlier ones diverged while agreeing with them on the overlap — the safeguard against confidently converging to nonsense.',
+            text: 'A model earns new ground by settling where earlier ones came apart, while still agreeing with them where they overlap. That overlap check is what stops a model from confidently agreeing with itself all the way to a wrong answer.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'rungs are operators',
-            text: 'The rungs are operators — solvers, earlier submissions, and, in discovery universes, experiments. In an unknown-law universe the overlap test also requires consistency with converged sub-laws across scales.',
+            text: 'The rungs are themselves operators: solvers, earlier submissions, and in discovery settings, experiments. When the law is unknown, agreeing on the overlap also means staying consistent with the converged sub-laws at smaller scales.',
           },
           {
             level: 3,
             kind: 'add',
             tag: 'two ratchets',
-            text: 'Two ratchets tighten together: trusted ground toward truth, and the cost measure and its description language toward the single algorithmic ideal.',
+            text: 'Two ratchets turn at once: trusted ground creeps toward truth, and the cost measure, with its description language, creeps toward the ideal algorithmic one.',
           },
         ],
-        verdict: { tone: 'partial', text: 'Persisting trusted ground across submissions remains to be built.' },
+        verdict: { tone: 'partial', text: 'Carrying trusted ground across submissions is not built yet.' },
       },
     ],
   },
@@ -339,96 +339,96 @@ const ROOTS: RootTree[] = [
     nodes: [
       {
         id: 'D-volume',
-        gist: 'Volume is a distinguishable-state count; bits add.',
-        meta: 'The unit the whole score is built on.',
+        gist: 'Volume counts distinguishable states; bits add up.',
+        meta: 'The unit everything else is measured in.',
         status: 'implemented',
-        anchor: 'state_space.py — Distinguishability, RegionFiltration',
+        anchor: 'state_space.py: Distinguishability, RegionFiltration',
         verify: { module: 'leibniz.state_space', symbols: ['Distinguishability', 'RegionFiltration'] },
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'defines “different”',
-            text: 'Two states differ only when distinguishable at the declared resolution; bits $= \\log_2(\\text{count})$, so doubling the variety adds one bit.',
+            text: 'Two states only count as different if you can tell them apart at the declared resolution. Bits $= \\log_2(\\text{count})$, so each doubling of variety is one more bit.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'locates it, justifies invariance',
-            text: 'An $\\varepsilon$-covering count under the declared metric, taken in the ambient space rather than the chart — invariant to parameterization; bits add because independent axes form a product measure.',
+            text: 'It is an $\\varepsilon$-covering count under the declared metric, taken in the ambient space rather than the chart, so it does not change if you reparameterize. Independent axes multiply, which is why their bits add.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'the region grammar',
-            text: 'Regions are finite disjoint unions of products of per-axis regions; qualitative labels are strata (typed annotations, never axes); volume is exact or a bracketed estimate.',
+            text: 'Regions are finite disjoint unions of products of per-axis regions. Qualitative labels are strata: typed annotations, never axes. A volume is either exact or a bracketed estimate.',
           },
           {
             level: 3,
             kind: 'code',
             tag: '⟂',
-            text: 'state_space.py — Distinguishability, log2 μ, RegionFiltration',
+            text: 'state_space.py: Distinguishability, log2 μ, RegionFiltration',
           },
         ],
         verdict: { tone: 'ok', text: 'Specified in code.' },
       },
       {
         id: 'D-ledger',
-        gist: 'One ledger: value (credit) minus cost (debit).',
-        meta: 'Value and cost share one unit, opposite signs.',
+        gist: 'One ledger: value as credit, cost as debit.',
+        meta: 'Same unit, opposite signs.',
         status: 'direction',
-        anchor: 'score — validated bits per unit cost',
+        anchor: 'score: validated bits per unit cost',
         step: 'cost',
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'the two entries',
-            text: 'Credit is bits of validated prediction; debit is bits to describe and run the operator. The net score is compression: world explained minus operator spent.',
+            text: 'Credit is the bits of prediction you got right. Debit is the bits it took to describe and run the operator. The score is the difference: how much of the world you explained, minus what you spent explaining it. That is compression.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'one quantity to minimize',
-            text: 'The single quantity is the total codelength of validated reality: $\\text{description length} + \\log_2(\\text{operations}) + \\text{residual}$. The frontier is validated bits of prediction per unit of algorithmic cost.',
+            text: 'There is one number to minimize, the total codelength of the reality you have pinned down: $\\text{description length} + \\log_2(\\text{operations}) + \\text{residual}$. The frontier is how many validated bits of prediction you buy per unit of that cost.',
           },
           {
             level: 2,
             kind: 'horizon',
             tag: 'open',
-            text: 'Whether value and cost reduce to one number, or require separate axes, remains open.',
+            text: 'Whether value and cost really collapse into one number, or have to stay two, is open.',
           },
         ],
-        verdict: { tone: 'open', text: 'The single-number reduction remains to be demonstrated.' },
+        verdict: { tone: 'open', text: 'Whether it is truly one number is not shown yet.' },
       },
       {
         id: 'D-cost',
         gist: 'Cost $= \\text{description length} + \\log_2(\\text{operations})$.',
-        meta: 'Levin complexity: Occam’s razor made computable; plain compute drops the description-length term.',
+        meta: 'Levin complexity: Occam’s razor you can actually compute. Drop the description-length term and you are left with plain compute.',
         status: 'mixed',
-        anchor: 'cost metrology — operation count (in code) + description length',
+        anchor: 'cost metrology: operation count (in code) + description length',
         step: 'cost',
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'the two constraints',
-            text: 'Computable from the submitted program and independent of the machine: log-operations from the per-op cost model, description length from the program itself.',
+            text: 'Both terms come from the submitted program, not the machine it ran on: log-operations from the per-op cost model, description length from the program’s own size.',
           },
           {
             level: 2,
             kind: 'horizon',
             tag: 'open',
-            text: 'How description length is read from a program — compressed parameters and architecture, or a two-part code — and against which reference language, remains to be defined.',
+            text: 'How you read description length off a program (compressed weights plus architecture, or a two-part code), and which reference language you measure it against, still needs defining.',
           },
           {
             level: 3,
             kind: 'code',
             tag: '⟂',
-            text: 'cost metrology — operation count is in code; the algorithmic reframe is a direction',
+            text: 'cost metrology: operation count is in code; the algorithmic reframe is a direction',
           },
         ],
-        verdict: { tone: 'partial', text: 'Operation count is in code; description length remains to be defined.' },
+        verdict: { tone: 'partial', text: 'Operation count is in code; description length still needs defining.' },
       },
     ],
   },
@@ -439,20 +439,20 @@ const EDGES: CouplingEdge[] = [
     id: 'edge-distinguishability',
     roots: ['U', 'D'],
     title: 'Distinguishability',
-    body: 'States belong to the universe; counting them in bits belongs to the currency. The metric $(d, \\varepsilon)$ is where the universe gives the currency something to count — a clean coupling, and a real one: counting needs a metric to count against.',
+    body: 'States come from the universe; counting them in bits is the currency’s job. The metric $(d, \\varepsilon)$ is the handoff, the thing that gives the currency something to count. You cannot count without a metric to count against.',
   },
   {
     id: 'edge-grounding',
     roots: ['U', 'R'],
     title: 'Grounding',
     warn: true,
-    body: 'Grounding bundles two independent questions: whether the universe carries a law (Universe) and whether an answer is checked by an exact verifier or by convergence (Refinement). A contract can carry a law-status on the universe and let the verifier-versus-convergence distinction follow from refinement, rather than declaring grounding directly.',
+    body: 'Grounding is really two questions wearing one name: does the universe have a law (Universe), and is an answer checked by an exact verifier or by convergence (Refinement)? So a contract can just record whether there is a law and let the verifier-or-convergence part fall out of refinement, instead of declaring “grounding” outright.',
   },
   {
     id: 'edge-score',
     roots: ['U', 'R', 'D'],
     title: 'The score (triple point)',
-    body: 'Competence is the predictive mass within $\\varepsilon$ (from Refinement) of the converged answer, measured in bits (Description length), integrated over the query space (Universe) — and the integral is itself a refined adaptive tree. The score is not a root but the point where all three meet, and it needs nothing more.',
+    body: 'Competence is how much of a model’s prediction lands within $\\varepsilon$ (Refinement) of the converged answer, measured in bits (Description length), summed over the query space (Universe). That sum is one of the same adaptive trees. So the score is not a fourth root; it is where the other three meet, and it needs nothing else.',
   },
 ];
 
@@ -461,42 +461,42 @@ const STEPS: RoadmapStep[] = [
     id: 'signature',
     title: 'Task signature in the contract grammar',
     outcome:
-      'Add (access, binding, target) and a law-status as typed contract fields, and re-express the existing benchmarks against them. Verifier-grounded scoring is the zero-gap case of convergence.',
+      'Make (access, binding, target) and a law-status real fields in the contract, then rebuild the existing benchmarks on top of them. Verifier scoring falls out as the zero-gap case of convergence.',
   },
   {
     id: 'ladder',
     title: 'Refinement-ladder records and convergence-grounded scoring',
     outcome:
-      'A ladder and convergence-gap record with its ruler, scored in the runner as predictive mass within $\\varepsilon$ of the settled value, replacing the trajectory comparison. Discriminating law: two queries past the horizon both score where the ladder settles and neither where it does not.',
+      'Add a record for the ladder and its convergence gap, and have the runner score predictive mass within $\\varepsilon$ of the settled value instead of comparing whole trajectories. The test that proves it: two queries past the horizon both score where the ladder settles, and neither where it does not.',
   },
   {
     id: 'cost',
     title: 'Algorithmic cost',
     outcome:
-      'Read description length from the submitted program and add it to the machine-independent operation count; recast the score as validated bits per unit cost. Discriminating law: equal predictions with different description length receive different scores.',
+      'Read description length off the submitted program, add it to the machine-independent operation count, and turn the score into validated bits per unit of cost. The test: two models with identical predictions but different description length score differently.',
   },
   {
     id: 'hierarchy',
     title: 'Hierarchical query-space scoring',
     outcome:
-      'The recursive partition, problem-space refinement, and the adversarial stopping rule; the score becomes a tree whose contraction is the scalar.',
+      'Build the recursive partition, the problem-space refinement, and the adversarial stopping rule, so the score becomes a tree that contracts to the single number.',
   },
   {
     id: 'bootstrap',
     title: 'Trusted-ground persistence',
-    outcome: 'Carried convergent regions and agreement-on-overlap certification of newly reached ground.',
+    outcome: 'Carry convergent regions forward and certify newly reached ground by the agreement-on-overlap check.',
   },
   {
     id: 'reexpress',
     title: 'Re-express the toy field benchmark',
     outcome:
-      'Move the existing field benchmark onto the new instrument, with its tests written against the instrument rather than a substitute metric.',
+      'Move the existing field benchmark onto the new instrument, and write its tests against the instrument itself, not a stand-in metric.',
   },
   {
     id: 'discovery',
     title: 'Readout and unknown-law universes (reserved)',
     outcome:
-      'A readout-valued convergence-grounded task and the scaffolding for unknown-law, multi-scale universes; held until the resolution case is solid.',
+      'A readout-valued, convergence-grounded task, plus the scaffolding for unknown-law and multi-scale universes. Parked until the basic resolution case is solid.',
   },
 ];
 
@@ -580,18 +580,17 @@ export function ArchitecturePanel() {
       <header className="architecture-intro">
         <h2>Architecture &mdash; adaptive precision tree</h2>
         <p>
-          The architecture as a forest of adaptive precision ladders. Each concept opens with a one-line gist and
-          descends into refinements that add precision, ending at a code reference{' '}
-          <span className="architecture-tag code">&#x27c2;</span> or an open design question{' '}
-          <span className="architecture-tag horizon">open</span>. Four orthogonal roots organize it &mdash; what
-          exists, what you ask, how you know, what you count &mdash; and every other concept is a composition of them,
-          shown as the edges where the roots couple.
+          Every concept starts as a one-line gist; open it to go deeper a refinement at a time, until you reach the
+          code that backs it (<span className="architecture-tag code">&#x27c2;</span>) or a question that is still open
+          (<span className="architecture-tag horizon">open</span>). There are four roots, and they do not overlap: the
+          universe, what you ask of it, how you decide an answer is right, and what you count. Everything else is built
+          from those, and where two roots lean on each other it shows up below as an edge.
         </p>
         <p className="architecture-intro-provenance">
-          Each node is marked <span className="architecture-status implemented">implemented</span> &mdash; backed by
-          working code &mdash; or <span className="architecture-status direction">design direction</span> &mdash;
-          planned, with open questions noted inline. The roadmap at the end is the ordered sequence that brings the
-          second kind into code.
+          A concept is tagged <span className="architecture-status implemented">implemented</span> when working code
+          backs it, or <span className="architecture-status direction">design direction</span> when it is planned but
+          not built, with the open questions noted inline. The roadmap at the bottom is the order in which the planned
+          ones turn into code.
         </p>
         <div className="architecture-controls" role="group" aria-label="Precision level">
           <span className="architecture-controls-label">Show precision up to</span>
@@ -675,8 +674,7 @@ export function ArchitecturePanel() {
       <section className="architecture-edges" aria-label="Edges where the roots couple">
         <h3>Edges &mdash; where the roots couple</h3>
         <p className="architecture-edges-note">
-          Some concepts are not contained in a single root; they couple two or more. These edges record where the
-          roots meet.
+          A few concepts do not live in any single root; they tie two or three together. Those are the edges.
         </p>
         {EDGES.map((edge) => (
           <div className={`architecture-edge ${edge.warn ? 'warn' : ''}`} key={edge.id}>
@@ -706,9 +704,9 @@ export function ArchitecturePanel() {
       <section className="architecture-roadmap" aria-label="Closing the delta">
         <h3>Closing the delta</h3>
         <p className="architecture-roadmap-note">
-          {implementedCount} of {totalCount} concepts are specified in code; the rest are reached by the ordered
-          sequence below. Each step is a single pull request that lands the named code and flips its concepts to
-          implemented here &mdash; contributing is editing this panel and the code it points to.
+          {implementedCount} of {totalCount} concepts are in code today. The rest get there through the sequence below,
+          one pull request per step: write the code it names, and flip its concepts to implemented right here.
+          Contributing means editing this panel and the code behind it.
         </p>
         <ol className="architecture-steps">
           {STEPS.map((step, index) => {
@@ -733,14 +731,14 @@ export function ArchitecturePanel() {
                           type="button"
                         >
                           <span className="architecture-closes-glyph">{node.rootId}</span>
-                          {node.gist}
+                          <MathText>{node.gist}</MathText>
                         </button>
                         <span className="architecture-closes-anchor">{node.anchor}</span>
                       </li>
                     ))}
                   </ul>
                 ) : (
-                  <div className="architecture-step-infra">applies the instrument; closes no new concept</div>
+                  <div className="architecture-step-infra">uses the instrument; does not close a new concept</div>
                 )}
               </li>
             );
