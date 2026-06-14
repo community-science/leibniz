@@ -1788,6 +1788,86 @@ def test_ks_convergence_competence_rejects_persistence_through_requery_path() ->
     assert tuple(float(value) for value in bits) == (0.0, 0.0)
 
 
+def test_ks_convergence_competence_accepts_reference_solver_through_real_residual() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    loaded = cast(Any, load_benchmark(_ks_benchmark_root))
+    ks_module = sys.modules[type(loaded.implementation).__module__]
+    raw_batch = loaded.generator(seed=101, shape=2, runtime=runtime)
+    fields, targets = raw_batch.require_tensors()
+    batch = replace(raw_batch, fields=fields.double(), targets=targets.double())
+    fields, targets = batch.require_tensors()
+    sample_indices = tuple(
+        cast(int, sample.latent_coordinates[0]["sample_index"])
+        for sample in batch.samples
+    )
+    window = cast(int, batch.samples[0].latent_coordinates[0]["window"])
+    full_horizon = 1.0
+    base_step_count = 8
+
+    class ReferenceOperator:
+        def __call__(self, fields: Any, horizon: float) -> Any:
+            spatial_points = int(fields.shape[-1])
+            refinement = spatial_points // 32
+            step_count = max(1, round(float(horizon) * base_step_count * refinement))
+            trajectory = loaded.implementation.reference_trajectory(
+                runtime=runtime,
+                sample_count=len(sample_indices),
+                seed=batch.seed,
+                sample_indices=sample_indices,
+                window=window,
+                spatial_points=spatial_points,
+                horizon=float(horizon),
+                time_count=step_count + 1,
+            )
+            return trajectory[:, :, -1, :]
+
+    class ReferenceGenerator:
+        def __call__(self, **kwargs: Any) -> Any:
+            generated = loaded.generator(**kwargs)
+            generated_fields, generated_targets = generated.require_tensors()
+            return replace(
+                generated,
+                fields=generated_fields.double(),
+                targets=generated_targets.double(),
+            )
+
+    predictions = ks_module._query_operator_trajectory(
+        runtime=runtime,
+        module=ReferenceOperator(),
+        fields=fields,
+        horizon=full_horizon,
+        time_count=targets.shape[1],
+    )
+    competence = loaded.implementation.build_training_competence(
+        runtime,
+        loaded.target_contract,
+    )
+    bits = competence(
+        SimpleNamespace(
+            runtime=runtime,
+            module=ReferenceOperator(),
+            generator=ReferenceGenerator(),
+            batch=batch,
+            sample_keys=tuple(sample.to_record() for sample in batch.samples),
+            predictions=predictions,
+            targets=targets,
+            horizons=tuple(index / base_step_count for index in range(1, 9)),
+        )
+    )
+    diagnostics = bits.leibniz_competence_diagnostics
+
+    assert all(float(value) > 0.0 for value in bits)
+    assert all(item["gate_decision"] == "passed" for item in diagnostics)
+    assert all(
+        math.isclose(
+            cast(float, item["residual_observed_order"]),
+            cast(float, item["expected_observed_order"]),
+            abs_tol=cast(float, item["observed_order_tolerance"]),
+        )
+        for item in diagnostics
+    )
+
+
 def test_checkpoint_evaluation_stops_at_runtime_capacity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

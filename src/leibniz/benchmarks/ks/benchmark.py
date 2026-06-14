@@ -188,6 +188,8 @@ class Benchmark:
         sample_indices: tuple[int, ...],
         window: int,
         spatial_points: int | None = None,
+        horizon: float = _horizon,
+        time_count: int = _time_count,
     ) -> Any:
         resolved_spatial_points = _spatial_points(spatial_points)
         return _ks_reference_trajectory(
@@ -197,6 +199,8 @@ class Benchmark:
             sample_indices=sample_indices,
             window=window,
             spatial_points=resolved_spatial_points,
+            horizon=horizon,
+            time_count=time_count,
         )
 
 
@@ -465,7 +469,14 @@ def _ks_reference_trajectory(
     sample_indices: tuple[int, ...],
     window: int,
     spatial_points: int = _default_space_count,
+    horizon: float = _horizon,
+    time_count: int = _time_count,
 ) -> Any:
+    if time_count < 2:
+        raise ValueError("KS reference trajectory requires at least two time samples")
+    if not math.isfinite(horizon) or horizon <= 0.0:
+        raise ValueError("KS reference trajectory horizon must be positive and finite")
+    time_step = horizon / float(time_count - 1)
     return tensor_runtime_solve_tensor_trajectory(
         runtime,
         program=TensorSolverProgram(
@@ -476,10 +487,18 @@ def _ks_reference_trajectory(
                 spatial_points=spatial_points,
             ),
             step_kernel=_ks_step_kernel,
-            step_count=_time_count - 1,
-            parameters=_ks_solver_parameters(spatial_points=spatial_points),
+            step_count=time_count - 1,
+            parameters=_ks_solver_parameters(
+                spatial_points=spatial_points,
+                time_step=time_step,
+            ),
             dtype="float64",
-            cache_key=("ks-reference-etdrk4-step", spatial_points, _time_count),
+            cache_key=(
+                "ks-reference-etdrk4-step",
+                spatial_points,
+                time_count,
+                time_step,
+            ),
         ),
         shape=(sample_count, 1, spatial_points),
     )
@@ -560,13 +579,14 @@ def _ks_initial_parameters(
 def _ks_solver_parameters(
     *,
     spatial_points: int = _default_space_count,
+    time_step: float | None = None,
 ) -> dict[str, TensorElementParameter]:
     frequencies = tuple(
         index if index <= spatial_points // 2 else index - spatial_points
         for index in range(spatial_points)
     )
     wave_numbers = tuple(2.0 * math.pi * frequency / _box_length for frequency in frequencies)
-    dt = _horizon / (_time_count - 1)
+    dt = _horizon / (_time_count - 1) if time_step is None else time_step
     linear_values = tuple(
         (wave_number * wave_number) - (wave_number**4)
         for wave_number in wave_numbers
