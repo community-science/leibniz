@@ -40,6 +40,7 @@ from leibniz.tensor_runtime import (
     tensor_runtime_device_kinds,
     tensor_runtime_shape_element_count,
     tensor_runtime_solve_tensor,
+    tensor_runtime_solve_tensor_trajectory,
     tensor_value_to_host_values,
     validate_tensor_runtime_device,
 )
@@ -797,6 +798,96 @@ def test_tensor_solver_step_count_zero_returns_initial_state() -> None:
     solved = tensor_runtime_solve_tensor(runtime, program=program, shape=(2, 1, 4))
 
     assert solved.tolist() == [[[0.0, 1.0, 2.0, 3.0]], [[10.0, 11.0, 12.0, 13.0]]]
+
+
+def test_tensor_solver_trajectory_stacks_initial_and_step_states() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+
+    def initial_state(coordinates: tuple[Any, ...]) -> Any:
+        sample, channel, x = coordinates
+        return (
+            sample.reshape((-1, 1, 1)).to(dtype=runtime.torch.float32) * 10.0
+            + channel.reshape((1, -1, 1)).to(dtype=runtime.torch.float32)
+            + x.reshape((1, 1, -1)).to(dtype=runtime.torch.float32)
+        )
+
+    def step_kernel(state: Any, ops: Any, *, offset: Any) -> Any:
+        _ = ops
+        return state + offset
+
+    program = TensorSolverProgram(
+        initial_state=TensorBatchProgram(
+            kernel=initial_state,
+            parameters={},
+            compile=False,
+            cache_key=("solver-trajectory-initial",),
+        ),
+        step_kernel=step_kernel,
+        step_count=3,
+        parameters={
+            "offset": TensorElementParameter(
+                dtype="float32",
+                shape=(),
+                values=(0.5,),
+            ),
+        },
+        compile=False,
+        cache_key=("solver-trajectory-step",),
+    )
+
+    trajectory = tensor_runtime_solve_tensor_trajectory(
+        runtime,
+        program=program,
+        shape=(2, 1, 4),
+    )
+
+    assert trajectory.shape == (2, 1, 4, 4)
+    assert trajectory[0, 0].tolist() == [
+        [0.0, 1.0, 2.0, 3.0],
+        [0.5, 1.5, 2.5, 3.5],
+        [1.0, 2.0, 3.0, 4.0],
+        [1.5, 2.5, 3.5, 4.5],
+    ]
+    assert trajectory[1, 0, -1].tolist() == [11.5, 12.5, 13.5, 14.5]
+
+
+def test_tensor_solver_trajectory_zero_steps_has_single_time_slice() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+
+    def initial_state(coordinates: tuple[Any, ...]) -> Any:
+        sample, channel, x = coordinates
+        return (
+            sample.reshape((-1, 1, 1)).to(dtype=runtime.torch.float32)
+            + channel.reshape((1, -1, 1)).to(dtype=runtime.torch.float32)
+            + x.reshape((1, 1, -1)).to(dtype=runtime.torch.float32)
+        )
+
+    def step_kernel(state: Any, ops: Any) -> Any:
+        _ = ops
+        return state + 1
+
+    program = TensorSolverProgram(
+        initial_state=TensorBatchProgram(
+            kernel=initial_state,
+            parameters={},
+            compile=False,
+            cache_key=("solver-zero-trajectory-initial",),
+        ),
+        step_kernel=step_kernel,
+        step_count=0,
+        parameters={},
+        compile=False,
+        cache_key=("solver-zero-trajectory-step",),
+    )
+
+    trajectory = tensor_runtime_solve_tensor_trajectory(
+        runtime,
+        program=program,
+        shape=(1, 1, 3),
+    )
+
+    assert trajectory.shape == (1, 1, 1, 3)
+    assert trajectory.tolist() == [[[[0.0, 1.0, 2.0]]]]
 
 
 def test_tensor_solver_fft_diffusion_matches_analytic_decay() -> None:

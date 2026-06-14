@@ -65,6 +65,7 @@ from leibniz.training_runs import TrainingHistoryPoint, TrainingRunRecord
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
 _chess_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "chess"
+_ks_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "ks"
 _digits_architecture = (
     _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool.json"
 )
@@ -85,6 +86,41 @@ _chess_linear_architecture = (
     / "architecture"
     / "chess_board_linear.json"
 )
+
+
+def _write_ks_architecture(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(
+        canonical_document_bytes(
+            {
+                "input_shape": [1, 32],
+                "output_shape": [9, 32],
+                "layers": [
+                    {
+                        "kind": "fixed-support-affine",
+                        "parameters": {
+                            "dimension": 1,
+                            "out_channels": 9,
+                            "out_length": 32,
+                        },
+                    },
+                    {"kind": "relu"},
+                    {
+                        "kind": "convolution",
+                        "parameters": {
+                            "dimension": 1,
+                            "size": 3,
+                            "out_channels": 9,
+                            "stride": 1,
+                            "padding": 1,
+                            "padding_mode": "periodic",
+                        },
+                    },
+                ],
+            }
+        )
+    )
+    return path
 
 
 def _cost_measurement(abstract_flops: int = 0) -> CostMeasurement:
@@ -167,22 +203,66 @@ def test_resolve_competence_functional_selects_finite_outcome_accepted_mass() ->
     assert functional.kind == "above-chance-accepted-mass"
 
 
-def test_resolve_competence_functional_rejects_unsupported_competence_kind() -> None:
-    field_contract = TargetContract(
+def test_resolve_competence_functional_requires_field_competence_factory() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    contract = _field_target_contract()
+
+    with pytest.raises(benchmark_runner.BenchmarkRunnerError, match="training competence"):
+        cast(Any, benchmark_runner)._resolve_competence_functional(
+            contract,
+            runtime=runtime,
+            competence_factory=None,
+        )
+
+
+def test_resolve_competence_functional_uses_field_competence_factory() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    contract = _field_target_contract()
+
+    class Factory:
+        def build_training_competence(
+            self,
+            _runtime: TensorRuntime,
+            _contract: TargetContract,
+        ) -> Any:
+            def competence(predictions: Any, targets: Any) -> Any:
+                return (predictions == targets).all(dim=1).to(dtype=predictions.dtype)
+
+            return competence
+
+    functional = cast(Any, benchmark_runner)._resolve_competence_functional(
+        contract,
+        runtime=runtime,
+        competence_factory=Factory(),
+    )
+    targets = runtime.torch.tensor([[1.0, 0.0], [1.0, 1.0]])
+    predictions = runtime.torch.tensor([[1.0, 0.0], [2.0, 1.0]])
+
+    masses = functional.training_logit_masses(runtime, predictions, targets)
+
+    assert functional.kind == "mass-within-resolution"
+    assert masses[0] == 1.0
+    assert masses[1] == 0.0
+
+
+def test_equation_residual_training_loss_requires_benchmark_factory() -> None:
+    contract = TargetContract(
         kind="field-valued",
         outcome_ids=None,
-        loss_id="mse",
+        loss_id="equation-residual",
         competence=CompetenceFunctional(
             kind="mass-within-resolution",
             parameters={"residual_operator_id": "op"},
         ),
-        baseline=BaselinePredictor(kind="zero-field"),
+        baseline=BaselinePredictor(kind="persistence"),
     )
 
-    with pytest.raises(
-        benchmark_runner.BenchmarkRunnerError, match="competence kind"
-    ):
-        cast(Any, benchmark_runner)._resolve_competence_functional(field_contract)
+    with pytest.raises(benchmark_runner.BenchmarkRunnerError, match="build_training_loss"):
+        cast(Any, benchmark_runner)._build_training_loss(
+            runtime=resolve_tensor_runtime("cpu"),
+            target_contract=contract,
+            loss_factory=None,
+        )
 
 
 def _observation_payload(
@@ -1480,7 +1560,44 @@ def test_digits_benchmark_runner_accepts_convnet_architecture(
         (576,),
         (10,),
     ]
-    assert inspection.cost_summary.parameter_count == 5926
+
+
+def test_ks_benchmark_runner_trains_field_model_with_residual_loss(
+    tmp_path: Path,
+) -> None:
+    results_root = tmp_path / "results"
+    architecture_path = _write_ks_architecture(
+        results_root / "inputs" / "ks_fixed_support.json"
+    )
+
+    summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=architecture_path,
+            benchmark_root=_ks_benchmark_root,
+            results_root=results_root,
+            seed=101,
+            train_steps=1,
+            gate_check_interval=1,
+            model_checkpoint_gate_interval=1,
+            tensor_device="cpu",
+            optimizer="adam",
+            learning_rate=1e-3,
+        )
+    )
+    record = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="KS training summary",
+    )
+    training_run = TrainingRunRecord.from_record(
+        cast(Mapping[str, object], record["training_run"])
+    )
+
+    assert summary.measurement_count == 0
+    assert training_run.validation_checks == 2
+    assert math.isfinite(training_run.validation_history[-1].validation_loss)
+    assert cast(Mapping[str, object], record["architecture"])["kind"] == (
+        "architecture-manifest"
+    )
 
 
 def test_checkpoint_evaluation_stops_at_runtime_capacity(

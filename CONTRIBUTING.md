@@ -131,6 +131,17 @@ Implementation pull requests should make clear:
 Tests should check semantic laws, artifact contracts, and workflows. They
 should not be a parallel implementation of the feature.
 
+Benchmark proposals should state why their score-cost frontier is open. A
+benchmark is a good fit when improving the frontier is a real research object,
+not when a closed form, integrable transform, lookup table, or other structural
+shortcut permanently dominates every rung. A benchmark also fixes one dynamical
+or task regime: controls that add distinguishable variety inside that regime
+belong on the bits ladder, while controls that change what counts as the
+correct behavior should be authored as sibling benchmarks. Until a sibling
+exists, regime identity belongs in the accessible-subspace declaration through
+its bounds, rationale, and exclusions rather than in a standalone grouping
+record.
+
 ## Compatibility Before 1.0.0
 
 Until a release process exists and the first public release is issued, there is

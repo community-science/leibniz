@@ -499,7 +499,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
         results_root=results_root,
     )
 
-    assert summary.benchmark_count == 2
+    assert summary.benchmark_count == 3
     assert summary.model_count == 1
     assert summary.run_count == 1
     assert summary.view_file == (
@@ -511,6 +511,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     } == {
         "views/chess/benchmark_results.json",
         "views/digits/benchmark_results.json",
+        "views/ks/benchmark_results.json",
     }
 
     view = load_console_result_view(summary.view_file.read_bytes())
@@ -736,7 +737,7 @@ def test_cli_benchmark_evaluate_discovers_training_checkpoints(
     assert exit_code == 0
     assert captured.err == ""
     assert "completed benchmark evaluation" in captured.out
-    assert "materialized 2 benchmark result view(s)" in captured.out
+    assert "materialized 3 benchmark result view(s)" in captured.out
     assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 1
     assert (results_root / "views" / "digits" / "benchmark_results.json").is_file()
 
@@ -756,7 +757,7 @@ def test_cli_benchmark_evaluate_discovers_training_checkpoints(
     ) == 0
     rerun = capsys.readouterr()
     assert "no unevaluated benchmark checkpoints found" in rerun.out
-    assert "materialized 2 benchmark result view(s)" in rerun.out
+    assert "materialized 3 benchmark result view(s)" in rerun.out
     assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 1
     assert (results_root / "views" / "digits" / "benchmark_results.json").is_file()
 
@@ -892,7 +893,7 @@ def test_cli_benchmark_evaluate_runs_checkpoint_evaluations_only(
     assert exit_code == 0
     assert captured.err == ""
     assert "completed benchmark evaluation" in captured.out
-    assert "materialized 2 benchmark result view(s)" in captured.out
+    assert "materialized 3 benchmark result view(s)" in captured.out
     assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 2
 
     assert main(
@@ -927,7 +928,7 @@ def test_materialize_benchmark_result_views_projects_reference_curves_without_ru
         results_root=results_root,
     )
 
-    assert summary.benchmark_count == 2
+    assert summary.benchmark_count == 3
     assert summary.model_count == 0
     assert summary.run_count == 0
     assert {
@@ -936,6 +937,7 @@ def test_materialize_benchmark_result_views_projects_reference_curves_without_ru
     } == {
         "views/chess/benchmark_results.json",
         "views/digits/benchmark_results.json",
+        "views/ks/benchmark_results.json",
     }
     for view_file in summary.benchmark_view_files:
         view = load_console_result_view(view_file.read_bytes())

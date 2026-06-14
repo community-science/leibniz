@@ -183,6 +183,26 @@ class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
     ) -> GeneratedSampleSet: ...
 
 
+class _BenchmarkTrainingLossFactory(Protocol):
+    """Benchmark-owned tensor loss factory for non-generic target losses."""
+
+    def build_training_loss(
+        self,
+        runtime: TensorRuntime,
+        target_contract: TargetContract,
+    ) -> Any: ...
+
+
+class _BenchmarkTrainingCompetenceFactory(Protocol):
+    """Benchmark-owned per-sample competence factory for field targets."""
+
+    def build_training_competence(
+        self,
+        runtime: TensorRuntime,
+        target_contract: TargetContract,
+    ) -> Callable[[Any, Any], Any]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _TrainingResult:
     evaluation_results: tuple[
@@ -886,12 +906,14 @@ def run_benchmark(
     benchmark = load_benchmark(plan.benchmark_root)
     generator = _require_tensor_generator(benchmark.generator)
     target_contract = benchmark.target_contract
+    loss_factory = _optional_training_loss_factory(benchmark)
+    competence_factory = _optional_training_competence_factory(benchmark)
     accessible_subspace = benchmark.accessible_subspace
     architecture = ArchitectureManifestDocument.from_bytes(
         plan.architecture_path.read_bytes()
     ).manifest
     outcome_space = benchmark.manifest.resolve_outcome_space()
-    outcome_ids = _finite_outcome_ids(target_contract)
+    outcome_ids = _target_contract_outcome_ids(target_contract)
     summary = _run_summary(
         plan=plan,
         benchmark_id=generator.manifest.id,
@@ -1074,6 +1096,8 @@ def run_benchmark(
         batch_size=_default_training_batch_target,
         seed=plan.seed,
         progress_callback=publish_progress,
+        loss_factory=loss_factory,
+        competence_factory=competence_factory,
     )
     selected_checkpoint = _selected_model_checkpoint(tuple(checkpoint_artifacts))
     if selected_checkpoint is None:
@@ -1882,6 +1906,8 @@ def _train_and_predict(
     storage_bytes: int | None,
     batch_size: int,
     seed: int,
+    loss_factory: _BenchmarkTrainingLossFactory | None = None,
+    competence_factory: _BenchmarkTrainingCompetenceFactory | None = None,
     progress_callback: (
         Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object], Any], None]
         | None
@@ -1915,6 +1941,8 @@ def _train_and_predict(
                 storage_bytes=storage_bytes,
                 batch_size=batch_size,
                 seed=seed,
+                loss_factory=loss_factory,
+                competence_factory=competence_factory,
                 progress_callback=progress_callback,
                 fallback_errors=tuple(fallback_errors),
             )
@@ -1947,6 +1975,8 @@ def _train_and_predict_on_device(
     storage_bytes: int | None,
     batch_size: int,
     seed: int,
+    loss_factory: _BenchmarkTrainingLossFactory | None = None,
+    competence_factory: _BenchmarkTrainingCompetenceFactory | None = None,
     progress_callback: (
         Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object], Any], None]
         | None
@@ -1963,9 +1993,18 @@ def _train_and_predict_on_device(
         runtime=runtime,
         operations=executable.operation_modules(),
     )
-    outcome_ids = _finite_outcome_ids(target_contract)
+    outcome_ids = _target_contract_outcome_ids(target_contract)
     chance_mass = _target_contract_chance_mass(target_contract)
-    loss_function = build_loss(runtime, target_contract)
+    loss_function = _build_training_loss(
+        runtime=runtime,
+        target_contract=target_contract,
+        loss_factory=loss_factory,
+    )
+    competence_functional = _resolve_competence_functional(
+        target_contract,
+        runtime=runtime,
+        competence_factory=competence_factory,
+    )
     optimizer = _make_optimizer(
         runtime=runtime,
         parameters=module.parameters(),
@@ -2172,6 +2211,7 @@ def _train_and_predict_on_device(
             rung=current_frontier(),
         ),
         target_contract=target_contract,
+        competence=competence_functional,
         outcome_ids=outcome_ids,
         max_steps=train_steps,
         training_batch_target=sample_count,
@@ -3347,6 +3387,7 @@ def _train_until_convergence(
     gate_batch_target: int = _default_gate_batch_target,
     start_step: int = 0,
     start_check: int = 0,
+    competence: _CompetenceFunctional | None = None,
     on_plateau: Callable[[tuple[TrainingHistoryPoint, ...]], bool] | None = None,
     frontier_points: Callable[[], tuple[ValidationCompetencePoint, ...]] = tuple,
     on_gate_check: Callable[[tuple[TrainingHistoryPoint, ...], Any], None] | None = None,
@@ -3366,7 +3407,8 @@ def _train_until_convergence(
     ] = {}
     pending_replay_scores: list[_PendingReplayScore] = []
     chance_mass = _target_contract_chance_mass(target_contract)
-    competence = _resolve_competence_functional(target_contract)
+    if competence is None:
+        competence = _resolve_competence_functional(target_contract)
 
     def append_validation(*, step: int, check: int) -> None:
         nonlocal best_score
@@ -5107,11 +5149,56 @@ def _finite_outcome_ids(contract: TargetContract) -> tuple[str, ...]:
     return contract.outcome_ids
 
 
+def _target_contract_outcome_ids(contract: TargetContract) -> tuple[str, ...]:
+    if contract.kind == "field-valued":
+        return ()
+    return _finite_outcome_ids(contract)
+
+
 def _target_contract_chance_mass(contract: TargetContract) -> float:
     chance_mass = contract.chance_mass()
+    if chance_mass is None and contract.kind == "field-valued":
+        return 0.0
     if chance_mass is None:
         raise BenchmarkRunnerError("runner path requires finite-outcome chance mass")
     return chance_mass
+
+
+def _optional_training_loss_factory(
+    benchmark: object,
+) -> _BenchmarkTrainingLossFactory | None:
+    factory = getattr(benchmark, "build_training_loss", None)
+    if factory is None:
+        return None
+    if not callable(factory):
+        raise BenchmarkRunnerError("benchmark build_training_loss must be callable")
+    return cast(_BenchmarkTrainingLossFactory, benchmark)
+
+
+def _optional_training_competence_factory(
+    benchmark: object,
+) -> _BenchmarkTrainingCompetenceFactory | None:
+    factory = getattr(benchmark, "build_training_competence", None)
+    if factory is None:
+        return None
+    if not callable(factory):
+        raise BenchmarkRunnerError("benchmark build_training_competence must be callable")
+    return cast(_BenchmarkTrainingCompetenceFactory, benchmark)
+
+
+def _build_training_loss(
+    *,
+    runtime: TensorRuntime,
+    target_contract: TargetContract,
+    loss_factory: _BenchmarkTrainingLossFactory | None,
+) -> Any:
+    if target_contract.loss_id == "equation-residual":
+        if loss_factory is None:
+            raise BenchmarkRunnerError(
+                "equation-residual target contracts require benchmark build_training_loss"
+            )
+        return loss_factory.build_training_loss(runtime, target_contract)
+    return build_loss(runtime, target_contract)
 
 
 @dataclass(frozen=True, slots=True)
@@ -5127,6 +5214,7 @@ class _CompetenceFunctional:
     """
 
     kind: str
+    field_mass_tensor: Callable[[Any, Any], Any] | None = None
 
     def training_logit_masses(
         self,
@@ -5134,6 +5222,21 @@ class _CompetenceFunctional:
         logits: Any,
         labels: Any,
     ) -> tuple[float, ...]:
+        if self.kind == "mass-within-resolution":
+            if self.field_mass_tensor is None:
+                raise BenchmarkRunnerError(
+                    "mass-within-resolution requires benchmark training competence"
+                )
+            return tuple(
+                float(value)
+                for value in self.training_logit_mass_tensor(
+                    runtime,
+                    logits,
+                    labels,
+                )
+                .detach()
+                .tolist()
+            )
         return tuple(softmax_target_masses(runtime, logits, labels))
 
     def training_logit_mass_tensor(
@@ -5142,6 +5245,13 @@ class _CompetenceFunctional:
         logits: Any,
         labels: Any,
     ) -> Any:
+        if self.kind == "mass-within-resolution":
+            _ = runtime
+            if self.field_mass_tensor is None:
+                raise BenchmarkRunnerError(
+                    "mass-within-resolution requires benchmark training competence"
+                )
+            return self.field_mass_tensor(logits, labels)
         return softmax_target_mass_tensor(runtime, logits, labels)
 
     def prediction_accepted_mass(
@@ -5158,11 +5268,31 @@ class _CompetenceFunctional:
         )
 
 
-def _resolve_competence_functional(contract: TargetContract) -> _CompetenceFunctional:
-    if contract.competence.kind != "above-chance-accepted-mass":
+def _resolve_competence_functional(
+    contract: TargetContract,
+    *,
+    runtime: TensorRuntime | None = None,
+    competence_factory: _BenchmarkTrainingCompetenceFactory | None = None,
+) -> _CompetenceFunctional:
+    if contract.competence.kind not in {
+        "above-chance-accepted-mass",
+        "mass-within-resolution",
+    }:
         raise BenchmarkRunnerError(
             "runner path does not support competence kind "
             f"{contract.competence.kind!r}"
+        )
+    if contract.competence.kind == "mass-within-resolution":
+        if runtime is None or competence_factory is None:
+            raise BenchmarkRunnerError(
+                "mass-within-resolution requires benchmark training competence"
+            )
+        return _CompetenceFunctional(
+            kind=contract.competence.kind,
+            field_mass_tensor=competence_factory.build_training_competence(
+                runtime,
+                contract,
+            ),
         )
     return _CompetenceFunctional(kind=contract.competence.kind)
 

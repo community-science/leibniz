@@ -69,6 +69,7 @@ __all__ = [
     "tensor_runtime_project_operations",
     "tensor_runtime_profile_operator_rows",
     "tensor_runtime_solve_tensor",
+    "tensor_runtime_solve_tensor_trajectory",
     "tensor_runtime_shape_element_count",
     "tensor_runtime_total_memory_bytes",
     "tensor_runtime_used_memory_bytes",
@@ -332,6 +333,53 @@ def tensor_runtime_solve_tensor(
         state=state,
         dtype=dtype,
         parameter_tensors=parameter_tensors,
+        record_trajectory=False,
+    )
+
+
+def tensor_runtime_solve_tensor_trajectory(
+    runtime: TensorRuntime,
+    *,
+    program: TensorSolverProgram,
+    shape: Sequence[int],
+) -> Any:
+    """Construct and evolve a field, returning every state on a solver time axis.
+
+    The returned tensor has shape ``(batch, channels, step_count + 1, *spatial)``
+    for state tensors shaped ``(batch, channels, *spatial)``. The first time
+    slice is the initial state and each following slice is one solver step.
+    """
+
+    resolved_shape = tuple(_positive_tensor_extent(size) for size in shape)
+    if len(resolved_shape) < 2:
+        raise TensorRuntimeError("solver trajectories require batch and channel axes")
+    if type(program.step_count) is not int or program.step_count < 0:
+        raise TensorRuntimeError("solver step_count must be a nonnegative integer")
+    dtype = _tensor_element_dtype(runtime=runtime, dtype=program.dtype)
+    state = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(
+            shape=resolved_shape,
+            dtype=program.dtype,
+            program=program.initial_state,
+        ),
+    )
+    parameter_tensors = {
+        name: _tensor_element_parameter(
+            runtime=runtime,
+            program=program,
+            name=name,
+            parameter=parameter,
+        )
+        for name, parameter in program.parameters.items()
+    }
+    return _solve_tensor_program(
+        runtime=runtime,
+        program=program,
+        state=state,
+        dtype=dtype,
+        parameter_tensors=parameter_tensors,
+        record_trajectory=True,
     )
 
 
@@ -1582,6 +1630,7 @@ def _solve_tensor_program(
     state: Any,
     dtype: Any,
     parameter_tensors: Mapping[str, Any],
+    record_trajectory: bool,
 ) -> Any:
     if runtime.device_kind in {"cuda", "mps"} and program.compile:
         compile_cache_key = _tensor_solver_kernel_cache_key(
@@ -1612,10 +1661,12 @@ def _solve_tensor_program(
                     cache_key=compile_cache_key,
                 )
                 return _run_tensor_solver_steps(
+                    runtime=runtime,
                     program=program,
                     state=state,
                     dtype=dtype,
                     step=step,
+                    record_trajectory=record_trajectory,
                 )
             except Exception as error:
                 _tensor_element_compile_failure_cache.add(compile_cache_key)
@@ -1632,27 +1683,36 @@ def _solve_tensor_program(
         parameter_tensors=parameter_tensors,
     )
     return _run_tensor_solver_steps(
+        runtime=runtime,
         program=program,
         state=state,
         dtype=dtype,
         step=step,
+        record_trajectory=record_trajectory,
     )
 
 
 def _run_tensor_solver_steps(
     *,
+    runtime: TensorRuntime,
     program: TensorSolverProgram,
     state: Any,
     dtype: Any,
     step: Callable[[Any], Any],
+    record_trajectory: bool,
 ) -> Any:
     expected_shape = tuple(int(extent) for extent in state.shape)
+    states = [state] if record_trajectory else None
     for _step_index in range(program.step_count):
         state = step(state).to(dtype=dtype)
         if tuple(int(extent) for extent in state.shape) != expected_shape:
             raise TensorRuntimeError("solver step kernel must preserve state shape")
         if state.dtype != dtype:
             raise TensorRuntimeError("solver step kernel must preserve state dtype")
+        if states is not None:
+            states.append(state)
+    if states is not None:
+        return runtime.torch.stack(states, dim=2)
     return state
 
 

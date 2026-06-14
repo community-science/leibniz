@@ -18,6 +18,7 @@ from leibniz.benchmark_implementations import (
 from leibniz.benchmark_implementations import (
     discover_benchmark_roots,
 )
+from leibniz.benchmarks import BenchmarkManifest
 from leibniz.console.artifact_index import (
     ConsoleArtifactIndex,
     ConsoleArtifactIndexBuilder,
@@ -450,7 +451,7 @@ class ConsoleDataBuilder:
                 {
                     "kind": "generated-observations",
                     "benchmark_id": str(manifest.id),
-                    "label": _title_from_protocol_name(str(manifest.name)),
+                    "label": _benchmark_task_label(manifest),
                     "source_path": _repository_relative_path(
                         benchmark_root,
                         repository_root=self._repository_root,
@@ -856,10 +857,22 @@ def _model_inspection_identifier(architecture_id: ProtocolIdentifier) -> Protoco
     )
 
 
+def _benchmark_task_label(manifest: BenchmarkManifest) -> str:
+    if manifest.resolution_analysis is not None:
+        display_name = manifest.resolution_analysis.get("display_name")
+        if isinstance(display_name, str) and display_name:
+            return display_name
+    return _title_from_protocol_name(str(manifest.name))
+
+
 def _title_from_protocol_name(name: str) -> str:
     parts = name.split(".")
     label = parts[-1] if parts else name
-    return " ".join(word.capitalize() for word in label.replace("-", "_").split("_") if word)
+    return " ".join(_title_word(word) for word in label.split("_") if word)
+
+
+def _title_word(word: str) -> str:
+    return "-".join(part.capitalize() for part in word.split("-") if part)
 
 
 if __name__ == "__main__":

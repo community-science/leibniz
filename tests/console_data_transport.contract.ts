@@ -32,7 +32,7 @@ assertEqual(
 );
 assertEqual(parsed.result_views.length, 0, 'result view count');
 assertEqual(parsed.model_inspections.length, 5, 'model inspection count');
-assertEqual(parsed.benchmark_tasks.length, 2, 'benchmark task count');
+assertEqual(parsed.benchmark_tasks.length, 3, 'benchmark task count');
 assertEqual(
   parsed.operator_vocabulary.operators.map((operator) => operator.kind).join(','),
   'local-aggregation,local-affine,fixed-support-affine,rectified-linear-activation,rank-collapse,affine-readout',
@@ -156,6 +156,17 @@ const chessBenchmarkTask = parsed.benchmark_tasks.find(
 if (chessBenchmarkTask === undefined) {
   throw new Error('expected chess benchmark task');
 }
+const ksBenchmarkTask = parsed.benchmark_tasks.find(
+  (task) => task.benchmark_id === 'benchmarks.ks@0.1.0',
+);
+if (ksBenchmarkTask === undefined) {
+  throw new Error('expected KS benchmark task');
+}
+assertEqual(
+  ksBenchmarkTask.label,
+  'Kuramoto-Sivashinsky',
+  'KS benchmark label uses full name',
+);
 assertEqual(benchmarkTask?.kind, 'generated-observations', 'benchmark task kind');
 assertEqual(benchmarkTask?.batches.length, 9, 'benchmark batch count');
 assertEqual(
@@ -365,6 +376,58 @@ assertEqual(
   chessSample.observable_state_id?.startsWith('fen:'),
   true,
   'chess sample observable state id',
+);
+const ksBatch = ksBenchmarkTask.batches[3];
+const ksSample = ksBatch?.samples[0];
+if (ksSample === undefined) {
+  throw new Error('expected KS generated sample');
+}
+assertEqual(ksBenchmarkTask.kind, 'generated-observations', 'KS benchmark task kind');
+assertEqual(ksBenchmarkTask.outcome_atom_count, 1, 'KS outcome atom count');
+assertEqual(
+  ksBenchmarkTask.batches.map((batch) => batch.volumes?.[0]).join(','),
+  '1,2,4,8,16,32,64,128,256',
+  'KS sample cardinalities',
+);
+assertEqual(
+  ksBatch?.region?.ambient.field_domain_kind,
+  'box-2d',
+  'KS region domain kind',
+);
+assertEqual(
+  ksBatch?.region?.ambient.field_codomain_id,
+  'scalar-field',
+  'KS region codomain',
+);
+assertEqual(
+  (ksBatch?.region?.ambient.field_domain as Record<string, unknown> | undefined)?.boundary_id,
+  'periodic-space-initial-time',
+  'KS region boundary',
+);
+assertEqual(
+  ksSample.outcome_id,
+  'field',
+  'KS sample outcome',
+);
+assertEqual(
+  ksSample.region_component_index,
+  0,
+  'KS sample region component index',
+);
+assertEqual(
+  typeof ksSample.axis_coordinates?.['ks-space-time-log2-window'],
+  'number',
+  'KS sample axis coordinate',
+);
+assertEqual(
+  (ksSample.latent_coordinates[0] as Record<string, unknown> | undefined)?.chart,
+  'cartesian-fourier',
+  'KS sample latent chart',
+);
+assertEqual(
+  ksSample.field_shape,
+  undefined,
+  'KS sample omits inline field shape',
 );
 assertDataError(
   () => parseConsoleDataRecord({ ...parsed, format_version: 2 }),

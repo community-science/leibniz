@@ -1,0 +1,839 @@
+"""Kuramoto-Sivashinsky field benchmark implementation entry point."""
+
+from __future__ import annotations
+
+import cmath
+import math
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from leibniz.benchmark_implementations import RawBenchmark as BenchmarkProtocol
+from leibniz.benchmarks import BenchmarkManifest
+from leibniz.identifiers import ProtocolIdentifier, ProtocolName
+from leibniz.observation_generation import (
+    GeneratedSample,
+    GeneratedSampleSet,
+    GenerationRequestOutcome,
+    ObservationGenerationError,
+    StateSpaceVolumeRequest,
+    StateSpaceVolumeValue,
+)
+from leibniz.outcomes import Outcome, OutcomeSpace
+from leibniz.state_space import (
+    AccessibleSubspace,
+    ContinuousAxisRegion,
+    Distinguishability,
+    MeasureEstimate,
+    ProductRegion,
+    RealIntervalDomain,
+    SamplingProtocol,
+    StateSpaceAmbient,
+    StateSpaceAxis,
+    StateSpaceRegion,
+)
+from leibniz.target_contracts import (
+    BaselinePredictor,
+    CompetenceFunctional,
+    TargetContract,
+)
+from leibniz.tensor_runtime import (
+    TensorBatchProgram,
+    TensorElementParameter,
+    TensorElementRecipe,
+    TensorRuntime,
+    TensorSolverProgram,
+    resolve_host_tensor_runtime,
+    tensor_runtime_construct_tensor,
+    tensor_runtime_solve_tensor_trajectory,
+)
+from leibniz.timing import TimingCollector
+
+__all__ = ["benchmark"]
+
+_benchmark_id = ProtocolIdentifier.parse("benchmarks.ks@0.1.0")
+_generator_id = ProtocolIdentifier.parse("benchmarks.ks.generator@0.1.0")
+_placeholder_outcome_space_id = ProtocolIdentifier.parse(
+    "benchmarks.ks.placeholder-outcomes@0.1.0"
+)
+_residual_operator_id = "benchmarks.ks.residual-operator@0.1.0"
+_space_count = 32
+_time_count = 9
+_box_length = 22.0
+_horizon = 1.0
+_epsilon = 0.05
+_maximum_window = 8
+_window_axis = StateSpaceAxis(
+    id="ks-space-time-log2-window",
+    domain=RealIntervalDomain(lower=0.0, upper=float(_maximum_window + 1)),
+)
+
+
+def benchmark(root: Path) -> BenchmarkProtocol:
+    """Return the Kuramoto-Sivashinsky benchmark implementation."""
+
+    return Benchmark(root=root)
+
+
+class Benchmark:
+    """Executable Kuramoto-Sivashinsky benchmark declaration."""
+
+    def __init__(self, *, root: Path) -> None:
+        self._root = root
+        self._manifest = _manifest()
+        self._target_contract = _target_contract()
+        self._generator = Generator(manifest=self._manifest)
+
+    @property
+    def root(self) -> Path:
+        return self._root
+
+    @property
+    def manifest(self) -> BenchmarkManifest:
+        return self._manifest
+
+    @property
+    def generator(self) -> Generator:
+        return self._generator
+
+    @property
+    def sampling_protocol(self) -> SamplingProtocol:
+        return SamplingProtocol(
+            kind="uniform-monte-carlo",
+            estimator_id="sample-mean",
+            confidence_method_id="wilson",
+        )
+
+    @property
+    def accessible_subspace(self) -> AccessibleSubspace:
+        return AccessibleSubspace(
+            ladder_id="ks-space-time-covering",
+            per_configuration_capacity=_ks_capacity_region(),
+            frontier_rationale=(
+                "Chaotic Kuramoto-Sivashinsky trajectories over the declared periodic "
+                "space-time box are in scope; score grows by extending the declared "
+                "space-time covering ladder within this bounded conformance capacity."
+            ),
+        )
+
+    @property
+    def target_contract(self) -> TargetContract:
+        return self._target_contract
+
+    def build_training_loss(
+        self,
+        runtime: TensorRuntime,
+        target_contract: TargetContract,
+    ) -> Any:
+        del runtime
+        if (
+            target_contract.kind != "field-valued"
+            or target_contract.loss_id != "equation-residual"
+            or target_contract.competence.parameters.get("residual_operator_id")
+            != _residual_operator_id
+        ):
+            raise ValueError("KS benchmark only builds its declared residual loss")
+        return _ks_residual_loss
+
+    def build_training_competence(
+        self,
+        runtime: TensorRuntime,
+        target_contract: TargetContract,
+    ) -> Callable[[Any, Any], Any]:
+        del runtime
+        if (
+            target_contract.kind != "field-valued"
+            or target_contract.competence.kind != "mass-within-resolution"
+            or target_contract.competence.parameters.get("residual_operator_id")
+            != _residual_operator_id
+        ):
+            raise ValueError("KS benchmark only builds its declared residual competence")
+        return _ks_residual_certificate_mass
+
+    def reference_trajectory(
+        self,
+        *,
+        runtime: TensorRuntime,
+        sample_count: int,
+        seed: int,
+        sample_indices: tuple[int, ...],
+        window: int,
+    ) -> Any:
+        return _ks_reference_trajectory(
+            runtime=runtime,
+            sample_count=sample_count,
+            seed=seed,
+            sample_indices=sample_indices,
+            window=window,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Generator:
+    """Generate KS initial-condition fields and reference trajectory targets."""
+
+    manifest: BenchmarkManifest
+
+    @property
+    def id(self) -> ProtocolIdentifier:
+        return _generator_id
+
+    @property
+    def version(self) -> str:
+        return "0.1.0"
+
+    def minimum_log2_volume(self) -> StateSpaceVolumeValue:
+        return StateSpaceVolumeValue(value=0.0)
+
+    def __call__(
+        self,
+        *,
+        seed: int,
+        shape: int | Sequence[int] | None = None,
+        include_fields: bool = False,
+        include_metadata: bool = True,
+        include_artifacts: bool = False,
+        volume_request: StateSpaceVolumeRequest | None = None,
+        sample_indices: Sequence[int] | None = None,
+        memory_limit_bytes: int | None = None,
+        runtime: TensorRuntime | None = None,
+        outcome_ids: tuple[str, ...] | None = None,
+        variation_extent: float = 1.0,
+        timing: TimingCollector | None = None,
+        timing_prefix: str = "",
+    ) -> GeneratedSampleSet:
+        del (
+            include_fields,
+            include_artifacts,
+            memory_limit_bytes,
+            outcome_ids,
+            variation_extent,
+            timing,
+            timing_prefix,
+        )
+        sample_shape = _sample_shape(shape)
+        sample_count = _sample_count(sample_shape)
+        resolved_sample_indices = _sample_indices(
+            sample_count=sample_count,
+            sample_indices=sample_indices,
+        )
+        window = _requested_window(volume_request)
+        if window is None:
+            return GeneratedSampleSet(
+                benchmark_id=self.manifest.id,
+                generator_id=self.id,
+                generator_version=self.version,
+                seed=seed,
+                shape=(0,),
+                volume_request=volume_request,
+                request_outcome=GenerationRequestOutcome(
+                    kind="unrepresentable-below-minimum",
+                    minimum_region=_ks_region(window=0),
+                ),
+            )
+        region = _ks_region(window=window)
+        tensor_runtime = runtime if runtime is not None else resolve_host_tensor_runtime()
+        fields, targets = _ks_tensors(
+            runtime=tensor_runtime,
+            sample_count=sample_count,
+            seed=seed,
+            sample_indices=resolved_sample_indices,
+            window=window,
+        )
+        samples = (
+            _ks_samples(
+                seed=seed,
+                sample_indices=resolved_sample_indices,
+                window=window,
+            )
+            if include_metadata
+            else ()
+        )
+        return GeneratedSampleSet(
+            benchmark_id=self.manifest.id,
+            generator_id=self.id,
+            generator_version=self.version,
+            seed=seed,
+            shape=sample_shape,
+            samples=samples,
+            fields=fields,
+            targets=targets,
+            volume_request=volume_request,
+            region=region,
+        )
+
+
+def _manifest() -> BenchmarkManifest:
+    return BenchmarkManifest(
+        id=_benchmark_id,
+        name=ProtocolName.parse("benchmarks.ks"),
+        outcome_space=OutcomeSpace(
+            id=_placeholder_outcome_space_id,
+            outcomes=(Outcome(id="field"),),
+        ),
+        resolution_analysis={
+            "kind": "component-discriminability-margin",
+            "display_name": "Kuramoto-Sivashinsky",
+            "discriminability_margin": _epsilon,
+            "equation": "u_t = -u*u_x - u_xx - u_xxxx",
+            "field_domain_kind": "box-2d",
+            "space_boundary": "periodic",
+            "time_boundary": "initial-value",
+            "volume_value": {
+                "kind": "estimated-space-time-covering-window",
+                "measure_id": "log2-state-space-volume",
+                "method_id": "ks-space-time-entropy-bracket-v1",
+            },
+        },
+    )
+
+
+def _target_contract() -> TargetContract:
+    return TargetContract(
+        kind="field-valued",
+        outcome_ids=None,
+        loss_id="equation-residual",
+        competence=CompetenceFunctional(
+            kind="mass-within-resolution",
+            parameters={"residual_operator_id": _residual_operator_id},
+        ),
+        baseline=BaselinePredictor(kind="persistence"),
+    )
+
+
+def _ks_ambient() -> StateSpaceAmbient:
+    return StateSpaceAmbient(
+        field_domain_kind="box-2d",
+        field_domain={
+            "length_x": _box_length,
+            "length_y": _horizon,
+            "boundary_id": "periodic-space-initial-time",
+            "space_axis": "x",
+            "time_axis": "t",
+            "space_resolution": _box_length / _space_count,
+            "time_resolution": _horizon / (_time_count - 1),
+        },
+        field_codomain_id="scalar-field",
+        distinguishability=Distinguishability(
+            kind="metric-resolution",
+            metric_id="anisotropic-space-time-l2",
+            resolution=_epsilon,
+            certificate_id=_residual_operator_id,
+        ),
+    )
+
+
+def _ks_region(*, window: int) -> StateSpaceRegion:
+    volume = 2**window
+    estimate = _ks_measure_estimate(window=window)
+    component = ProductRegion(
+        axis_regions=(
+            ContinuousAxisRegion(
+                axis=_window_axis,
+                coordinate_region=(float(window), float(window + 1)),
+                measure_estimate=estimate,
+            ),
+        ),
+        measure_rule="benchmark-computed-finite-count",
+        volume=volume,
+        log2_volume=float(window),
+        measure_estimate=estimate,
+    )
+    return StateSpaceRegion(
+        id=f"benchmarks.ks.realized-window-{window}",
+        ambient=_ks_ambient(),
+        components=(component,),
+        union_rule="disjoint-union",
+        volume=volume,
+        log2_volume=float(window),
+        measure_estimate=estimate,
+    )
+
+
+def _ks_capacity_region() -> StateSpaceRegion:
+    volume = (2 ** (_maximum_window + 1)) - 1
+    log2_volume = math.log2(volume)
+    estimate = MeasureEstimate(
+        kind="estimated",
+        method_id="ks-space-time-entropy-bracket-v1",
+        log2_lower=0.0,
+        log2_upper=float(_maximum_window + 1),
+    )
+    component = ProductRegion(
+        axis_regions=(
+            ContinuousAxisRegion(
+                axis=_window_axis,
+                coordinate_region=(0.0, float(_maximum_window + 1)),
+                measure_estimate=estimate,
+            ),
+        ),
+        measure_rule="benchmark-computed-finite-count",
+        volume=volume,
+        log2_volume=log2_volume,
+        measure_estimate=estimate,
+    )
+    return StateSpaceRegion(
+        id="benchmarks.ks.accessible-capacity",
+        ambient=_ks_ambient(),
+        components=(component,),
+        union_rule="disjoint-union",
+        volume=volume,
+        log2_volume=log2_volume,
+        measure_estimate=estimate,
+    )
+
+
+def _ks_measure_estimate(*, window: int) -> MeasureEstimate:
+    return MeasureEstimate(
+        kind="estimated",
+        method_id="ks-space-time-entropy-bracket-v1",
+        log2_lower=float(window),
+        log2_upper=float(window),
+    )
+
+
+def _ks_tensors(
+    *,
+    runtime: TensorRuntime,
+    sample_count: int,
+    seed: int,
+    sample_indices: tuple[int, ...],
+    window: int,
+) -> tuple[Any, Any]:
+    initial = _ks_initial_fields(
+        runtime=runtime,
+        sample_count=sample_count,
+        seed=seed,
+        sample_indices=sample_indices,
+        window=window,
+    )
+    fields = initial.float()
+    targets = initial[:, 0:1, :].repeat(1, _time_count, 1).float()
+    return fields, targets
+
+
+def _ks_reference_trajectory(
+    *,
+    runtime: TensorRuntime,
+    sample_count: int,
+    seed: int,
+    sample_indices: tuple[int, ...],
+    window: int,
+) -> Any:
+    return tensor_runtime_solve_tensor_trajectory(
+        runtime,
+        program=TensorSolverProgram(
+            initial_state=_ks_initial_program(
+                seed=seed,
+                sample_indices=sample_indices,
+                window=window,
+            ),
+            step_kernel=_ks_step_kernel,
+            step_count=_time_count - 1,
+            parameters=_ks_solver_parameters(),
+            dtype="float64",
+            cache_key=("ks-reference-etdrk4-step", _space_count, _time_count),
+        ),
+        shape=(sample_count, 1, _space_count),
+    )
+
+
+def _ks_initial_fields(
+    *,
+    runtime: TensorRuntime,
+    sample_count: int,
+    seed: int,
+    sample_indices: tuple[int, ...],
+    window: int,
+) -> Any:
+    initial_program = _ks_initial_program(
+        seed=seed,
+        sample_indices=sample_indices,
+        window=window,
+    )
+    return tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(
+            shape=(sample_count, 1, _space_count),
+            dtype="float64",
+            program=initial_program,
+        ),
+    )
+
+
+def _ks_initial_program(
+    *,
+    seed: int,
+    sample_indices: tuple[int, ...],
+    window: int,
+) -> TensorBatchProgram:
+    return TensorBatchProgram(
+        kernel=_ks_initial_condition_kernel,
+        parameters=_ks_initial_parameters(
+            seed=seed,
+            sample_indices=sample_indices,
+            window=window,
+        ),
+        cache_key=("ks-initial-condition",),
+    )
+
+
+def _ks_initial_parameters(
+    *,
+    seed: int,
+    sample_indices: tuple[int, ...],
+    window: int,
+) -> dict[str, TensorElementParameter]:
+    return {
+        "sample_indices": TensorElementParameter(
+            dtype="int64",
+            shape=(len(sample_indices),),
+            values=sample_indices,
+            dynamic_axes=(0,),
+        ),
+        "seed_value": TensorElementParameter(dtype="float64", shape=(), values=(float(seed),)),
+        "amplitude": TensorElementParameter(
+            dtype="float64",
+            shape=(),
+            values=(0.15 + 0.01 * float(window),),
+        ),
+    }
+
+
+def _ks_solver_parameters() -> dict[str, TensorElementParameter]:
+    frequencies = tuple(
+        index if index <= _space_count // 2 else index - _space_count
+        for index in range(_space_count)
+    )
+    wave_numbers = tuple(2.0 * math.pi * frequency / _box_length for frequency in frequencies)
+    dt = _horizon / (_time_count - 1)
+    linear_values = tuple(
+        (wave_number * wave_number) - (wave_number**4)
+        for wave_number in wave_numbers
+    )
+    linear_factors = tuple(complex(math.exp(dt * value), 0.0) for value in linear_values)
+    half_linear_factors = tuple(
+        complex(math.exp(0.5 * dt * value), 0.0) for value in linear_values
+    )
+    coefficient_rows = tuple(
+        _etdrk4_coefficients(value, dt=dt)
+        for value in linear_values
+    )
+    q_coefficients = tuple(row[0] for row in coefficient_rows)
+    f1_coefficients = tuple(row[1] for row in coefficient_rows)
+    f2_coefficients = tuple(row[2] for row in coefficient_rows)
+    f3_coefficients = tuple(row[3] for row in coefficient_rows)
+    derivative_coefficients = tuple(complex(0.0, wave_number) for wave_number in wave_numbers)
+    dealias_mask = tuple(
+        1.0 if abs(frequency) <= _space_count // 3 else 0.0
+        for frequency in frequencies
+    )
+    return {
+        "linear_factors": TensorElementParameter(
+            dtype="complex128",
+            shape=(_space_count,),
+            values=linear_factors,
+        ),
+        "half_linear_factors": TensorElementParameter(
+            dtype="complex128",
+            shape=(_space_count,),
+            values=half_linear_factors,
+        ),
+        "q_coefficients": TensorElementParameter(
+            dtype="complex128",
+            shape=(_space_count,),
+            values=q_coefficients,
+        ),
+        "f1_coefficients": TensorElementParameter(
+            dtype="complex128",
+            shape=(_space_count,),
+            values=f1_coefficients,
+        ),
+        "f2_coefficients": TensorElementParameter(
+            dtype="complex128",
+            shape=(_space_count,),
+            values=f2_coefficients,
+        ),
+        "f3_coefficients": TensorElementParameter(
+            dtype="complex128",
+            shape=(_space_count,),
+            values=f3_coefficients,
+        ),
+        "derivative_coefficients": TensorElementParameter(
+            dtype="complex128",
+            shape=(_space_count,),
+            values=derivative_coefficients,
+        ),
+        "dealias_mask": TensorElementParameter(
+            dtype="float64",
+            shape=(_space_count,),
+            values=dealias_mask,
+        ),
+    }
+
+
+def _etdrk4_coefficients(
+    linear_value: float,
+    *,
+    dt: float,
+) -> tuple[complex, complex, complex, complex]:
+    roots = tuple(
+        complex(
+            math.cos(math.pi * ((index + 0.5) / 16.0)),
+            math.sin(math.pi * ((index + 0.5) / 16.0)),
+        )
+        for index in range(16)
+    )
+    lr_values = tuple(dt * linear_value + root for root in roots)
+    q = dt * sum((cmath.exp(lr / 2.0) - 1.0) / lr for lr in lr_values) / len(lr_values)
+    f1 = (
+        dt
+        * sum(
+            (-4.0 - lr + cmath.exp(lr) * (4.0 - (3.0 * lr) + (lr * lr)))
+            / (lr * lr * lr)
+            for lr in lr_values
+        )
+        / len(lr_values)
+    )
+    f2 = (
+        dt
+        * sum(
+            (2.0 + lr + cmath.exp(lr) * (-2.0 + lr)) / (lr * lr * lr)
+            for lr in lr_values
+        )
+        / len(lr_values)
+    )
+    f3 = (
+        dt
+        * sum(
+            (-4.0 - (3.0 * lr) - (lr * lr) + cmath.exp(lr) * (4.0 - lr))
+            / (lr * lr * lr)
+            for lr in lr_values
+        )
+        / len(lr_values)
+    )
+    return q, f1, f2, f3
+
+
+def _ks_initial_condition_kernel(
+    coordinates: tuple[Any, ...],
+    *,
+    sample_indices: Any,
+    seed_value: Any,
+    amplitude: Any,
+) -> Any:
+    sample, channel, x = coordinates
+    _ = channel
+    phase = (sample_indices[sample] + seed_value).reshape((-1, 1, 1)) * 0.173
+    spatial = x.reshape((1, 1, -1)) * (2.0 * math.pi / _space_count)
+    return amplitude * (
+        (spatial + phase).sin()
+        + 0.5 * (2.0 * spatial - phase).cos()
+    )
+
+
+def _ks_step_kernel(
+    state: Any,
+    ops: Any,
+    *,
+    linear_factors: Any,
+    half_linear_factors: Any,
+    q_coefficients: Any,
+    f1_coefficients: Any,
+    f2_coefficients: Any,
+    f3_coefficients: Any,
+    derivative_coefficients: Any,
+    dealias_mask: Any,
+) -> Any:
+    spectrum = ops.fft(state, axis=-1)
+    nonlinear_spectrum = _ks_nonlinear_spectrum(
+        spectrum,
+        ops,
+        derivative_coefficients=derivative_coefficients,
+        dealias_mask=dealias_mask,
+    )
+    half_linear = half_linear_factors.reshape((1, 1, -1))
+    q = q_coefficients.reshape((1, 1, -1))
+    a_spectrum = (half_linear * spectrum) + (q * nonlinear_spectrum)
+    a_nonlinear = _ks_nonlinear_spectrum(
+        a_spectrum,
+        ops,
+        derivative_coefficients=derivative_coefficients,
+        dealias_mask=dealias_mask,
+    )
+    b_spectrum = (half_linear * spectrum) + (q * a_nonlinear)
+    b_nonlinear = _ks_nonlinear_spectrum(
+        b_spectrum,
+        ops,
+        derivative_coefficients=derivative_coefficients,
+        dealias_mask=dealias_mask,
+    )
+    c_spectrum = (half_linear * a_spectrum) + (
+        q * ((2.0 * b_nonlinear) - nonlinear_spectrum)
+    )
+    c_nonlinear = _ks_nonlinear_spectrum(
+        c_spectrum,
+        ops,
+        derivative_coefficients=derivative_coefficients,
+        dealias_mask=dealias_mask,
+    )
+    next_spectrum = (
+        linear_factors.reshape((1, 1, -1)) * spectrum
+        + f1_coefficients.reshape((1, 1, -1)) * nonlinear_spectrum
+        + 2.0
+        * f2_coefficients.reshape((1, 1, -1))
+        * (a_nonlinear + b_nonlinear)
+        + f3_coefficients.reshape((1, 1, -1)) * c_nonlinear
+    )
+    return ops.real(ops.ifft(next_spectrum, axis=-1))
+
+
+def _ks_nonlinear_spectrum(
+    spectrum: Any,
+    ops: Any,
+    *,
+    derivative_coefficients: Any,
+    dealias_mask: Any,
+) -> Any:
+    state = ops.real(ops.ifft(spectrum, axis=-1))
+    gradient = ops.real(
+        ops.ifft(spectrum * derivative_coefficients.reshape((1, 1, -1)), axis=-1)
+    )
+    nonlinear_spectrum = ops.fft(-state * gradient, axis=-1)
+    return nonlinear_spectrum * dealias_mask.reshape((1, 1, -1))
+
+
+def _ks_residual_loss(predictions: Any, targets: Any) -> Any:
+    if tuple(predictions.shape) != tuple(targets.shape):
+        raise ValueError("KS residual loss requires prediction and target shape match")
+    residual = _ks_discrete_residual(predictions)
+    residual_loss = (residual * residual).mean()
+    initial_error = predictions[:, 0, :] - targets[:, 0, :]
+    initial_loss = (initial_error * initial_error).mean()
+    return residual_loss + initial_loss
+
+
+def _ks_residual_certificate_mass(predictions: Any, targets: Any) -> Any:
+    if tuple(predictions.shape) != tuple(targets.shape):
+        raise ValueError("KS residual certificate requires prediction and target shape match")
+    residual = _ks_discrete_residual(predictions.detach())
+    residual_rms = residual.pow(2).mean(dim=(1, 2)).sqrt()
+    initial_error = predictions.detach()[:, 0, :] - targets.detach()[:, 0, :]
+    initial_rms = initial_error.pow(2).mean(dim=1).sqrt()
+    accepted = (initial_rms <= _epsilon) & (
+        residual_rms <= _ks_residual_acceptance_level()
+    )
+    return accepted.to(dtype=predictions.dtype)
+
+
+def _ks_discrete_residual(predictions: Any) -> Any:
+    dx = _box_length / _space_count
+    dt = _horizon / (_time_count - 1)
+    u = predictions[:, :-1, :]
+    u_t = (predictions[:, 1:, :] - u) / dt
+    u_x = (u.roll(shifts=-1, dims=-1) - u.roll(shifts=1, dims=-1)) / (2.0 * dx)
+    u_xx = (
+        u.roll(shifts=-1, dims=-1)
+        - 2.0 * u
+        + u.roll(shifts=1, dims=-1)
+    ) / (dx * dx)
+    u_xxxx = (
+        u.roll(shifts=-2, dims=-1)
+        - 4.0 * u.roll(shifts=-1, dims=-1)
+        + 6.0 * u
+        - 4.0 * u.roll(shifts=1, dims=-1)
+        + u.roll(shifts=2, dims=-1)
+    ) / (dx**4)
+    return u_t + (u * u_x) + u_xx + u_xxxx
+
+
+def _ks_residual_acceptance_level() -> float:
+    return _ks_truncation_floor() + _ks_epsilon_residual_image_bound()
+
+
+def _ks_truncation_floor() -> float:
+    return 5e-4
+
+
+def _ks_epsilon_residual_image_bound() -> float:
+    return _epsilon / 50.0
+
+
+def _ks_samples(
+    *,
+    seed: int,
+    sample_indices: tuple[int, ...],
+    window: int,
+) -> tuple[GeneratedSample, ...]:
+    return tuple(
+        GeneratedSample(
+            index=index,
+            outcome_id="field",
+            region_component_index=0,
+            axis_coordinates={
+                _window_axis.id: float(window) + _unit_interval_coordinate(seed, sample_index)
+            },
+            latent_coordinates=(
+                {
+                    "chart": "cartesian-fourier",
+                    "sample_index": sample_index,
+                    "window": window,
+                },
+            ),
+        )
+        for index, sample_index in enumerate(sample_indices)
+    )
+
+
+def _unit_interval_coordinate(seed: int, sample_index: int) -> float:
+    value = ((seed + 1) * 1_103_515_245 + (sample_index + 1) * 12_345) % 1_000_003
+    return (value + 0.5) / 1_000_004.0
+
+
+def _requested_window(request: StateSpaceVolumeRequest | None) -> int | None:
+    if request is None:
+        return 0
+    lower = math.ceil(request.minimum)
+    if lower > request.maximum:
+        return None
+    if lower < 0 or lower > _maximum_window:
+        return None
+    return lower
+
+
+def _sample_shape(shape: int | Sequence[int] | None) -> tuple[int, ...]:
+    if shape is None:
+        return ()
+    if isinstance(shape, int):
+        if shape < 1:
+            raise ObservationGenerationError("sample shape axes must be positive integers")
+        return (shape,)
+    normalized = tuple(shape)
+    if any(type(axis) is not int or axis < 1 for axis in normalized):
+        raise ObservationGenerationError("sample shape axes must be positive integers")
+    return normalized
+
+
+def _sample_count(shape: Sequence[int]) -> int:
+    if not shape:
+        return 1
+    count = 1
+    for axis in shape:
+        count *= axis
+    return count
+
+
+def _sample_indices(
+    *,
+    sample_count: int,
+    sample_indices: Sequence[int] | None,
+) -> tuple[int, ...]:
+    if sample_indices is None:
+        return tuple(range(sample_count))
+    normalized = tuple(sample_indices)
+    if len(normalized) != sample_count:
+        raise ObservationGenerationError("sample_indices length must match sample shape")
+    if any(type(index) is not int or index < 0 for index in normalized):
+        raise ObservationGenerationError("sample_indices must be nonnegative integers")
+    return normalized
