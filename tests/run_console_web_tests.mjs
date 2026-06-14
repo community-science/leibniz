@@ -133,6 +133,8 @@ function assertArchitecturePanel() {
     "id: 'D'",
     'architecture-roadmap',
     'Closing the delta',
+    'field benchmark now scores the contiguous time prefix',
+    'field evolution scale beyond the initial condition',
     'const STEPS',
   ]) {
     if (!panel.includes(marker)) {
