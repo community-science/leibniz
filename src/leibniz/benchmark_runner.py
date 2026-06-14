@@ -100,6 +100,7 @@ from leibniz.tensor_runtime import (
     softmax_target_masses,
     synchronize_runtime,
     tensor_element_compile_fallback_records,
+    tensor_runtime_concat,
     tensor_runtime_device_kinds,
     tensor_runtime_has_fixed_device_memory,
     tensor_runtime_total_memory_bytes,
@@ -292,6 +293,7 @@ class _TrainingStageResult:
 class _TrainingStepBatch:
     fields: Any
     labels: Any
+    horizons: tuple[float, ...] | None = None
     sample_set: GeneratedSampleSet | None = None
 
 
@@ -1823,11 +1825,7 @@ def _validate_architecture_for_batch(
     )
     if input_reason is not None:
         raise BenchmarkRunnerError(input_reason)
-    field_shape = (
-        _batch_target_field_shape(batch=batch)
-        if target_contract.kind == "field-valued"
-        else None
-    )
+    field_shape = sample_shape if target_contract.kind == "field-valued" else None
     try:
         expected_output_shape = target_contract.expected_output_shape(field_shape)
     except TargetContractError as error:
@@ -1992,6 +1990,7 @@ def _train_and_predict_on_device(
     module = OperationFallbackSequential(
         runtime=runtime,
         operations=executable.operation_modules(),
+        input_conditioning=architecture.input_conditioning,
     )
     outcome_ids = _target_contract_outcome_ids(target_contract)
     chance_mass = _target_contract_chance_mass(target_contract)
@@ -2067,6 +2066,11 @@ def _train_and_predict_on_device(
                 return _TrainingStepBatch(
                     fields=fields,
                     labels=labels,
+                    horizons=_field_valued_target_horizons(
+                        batch=generated,
+                        labels=labels,
+                        target_contract=target_contract,
+                    ),
                     sample_set=(
                         replace(
                             generated,
@@ -2493,18 +2497,30 @@ def _checkpoint_inference_cost_measurement(
     predictor: CheckpointModelPredictor,
     batch: GeneratedSampleSet,
     outcome_ids: tuple[str, ...],
+    target_contract: TargetContract,
 ) -> CostMeasurement:
-    fields, _labels = _batch_tensors(
+    fields, labels = _batch_tensors(
         runtime=predictor.runtime,
         batch=batch,
         outcome_ids=outcome_ids,
         device=predictor.runtime.device,
     )
+    horizons = _field_valued_target_horizons(
+        batch=batch,
+        labels=labels,
+        target_contract=target_contract,
+    )
     predictor.module.eval()
 
     def program(input_fields: Any) -> object:
         with no_grad_context(predictor.runtime):
-            return predictor.module(input_fields)
+            return _model_inference_for_cost(
+                runtime=predictor.runtime,
+                module=predictor.module,
+                fields=input_fields,
+                horizons=horizons,
+                target_contract=target_contract,
+            )
 
     return measure_program_cost(
         predictor.runtime,
@@ -2515,18 +2531,177 @@ def _checkpoint_inference_cost_measurement(
     ).without_operation_trace()
 
 
+def _model_predictions(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    fields: Any,
+    labels: Any,
+    horizons: tuple[float, ...] | None = None,
+    target_contract: TargetContract,
+) -> Any:
+    if target_contract.kind == "finite-outcome":
+        return module(fields)
+    return _field_valued_model_trajectory(
+        runtime=runtime,
+        module=module,
+        fields=fields,
+        labels=labels,
+        horizons=horizons,
+    )
+
+
+def _model_inference_for_cost(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    fields: Any,
+    horizons: tuple[float, ...] | None = None,
+    target_contract: TargetContract,
+) -> Any:
+    if target_contract.kind == "finite-outcome":
+        return module(fields)
+    return _field_valued_model_state_at_horizon(
+        runtime=runtime,
+        module=module,
+        fields=fields,
+        horizon=_field_valued_cost_horizon(horizons),
+    )
+
+
+def _field_valued_target_horizons(
+    *,
+    batch: GeneratedSampleSet,
+    labels: Any,
+    target_contract: TargetContract,
+) -> tuple[float, ...] | None:
+    if target_contract.kind == "finite-outcome":
+        return None
+    if len(tuple(labels.shape)) != 3:
+        raise BenchmarkRunnerError(
+            "field-valued training targets must have shape (batch, time, spatial)"
+        )
+    time_count = int(labels.shape[1])
+    if time_count < 1:
+        raise BenchmarkRunnerError("field-valued trajectory target must contain at least one time")
+    if time_count == 1:
+        return ()
+    if batch.region is None:
+        raise BenchmarkRunnerError("field-valued trajectory horizons require a sample region")
+    horizon = batch.region.ambient.field_domain.get("length_y")
+    if horizon is None:
+        raise BenchmarkRunnerError(
+            "field-valued trajectory horizons require ambient field_domain.length_y"
+        )
+    if isinstance(horizon, bool) or not isinstance(horizon, int | float):
+        raise BenchmarkRunnerError("field-valued ambient field_domain.length_y must be numeric")
+    result_horizon = float(horizon)
+    if not math.isfinite(result_horizon) or result_horizon <= 0.0:
+        raise BenchmarkRunnerError(
+            "field-valued ambient field_domain.length_y must be positive and finite"
+        )
+    step = result_horizon / float(time_count - 1)
+    return tuple(step * index for index in range(1, time_count))
+
+
+def _field_valued_cost_horizon(horizons: tuple[float, ...] | None) -> float:
+    if horizons:
+        return horizons[-1]
+    return 1.0
+
+
+def _field_valued_model_trajectory(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    fields: Any,
+    labels: Any,
+    horizons: tuple[float, ...] | None = None,
+) -> Any:
+    if len(tuple(fields.shape)) != 3:
+        raise BenchmarkRunnerError(
+            "field-valued operator input must have shape (batch, channel, spatial)"
+        )
+    if len(tuple(labels.shape)) != 3:
+        raise BenchmarkRunnerError(
+            "field-valued training targets must have shape (batch, time, spatial)"
+        )
+    if int(fields.shape[1]) != 1:
+        raise BenchmarkRunnerError("field-valued operator input must contain one state channel")
+    if int(labels.shape[0]) != int(fields.shape[0]):
+        raise BenchmarkRunnerError("field-valued target batch size must match input batch size")
+    if int(labels.shape[-1]) != int(fields.shape[-1]):
+        raise BenchmarkRunnerError("field-valued target spatial length must match input length")
+    time_count = int(labels.shape[1])
+    if time_count < 1:
+        raise BenchmarkRunnerError("field-valued trajectory target must contain at least one time")
+    states = [fields]
+    if time_count == 1:
+        return fields
+    if horizons is None:
+        raise BenchmarkRunnerError("field-valued trajectory requires target horizons")
+    if len(horizons) != time_count - 1:
+        raise BenchmarkRunnerError(
+            "field-valued target horizon count must match target time steps after "
+            "the initial state"
+        )
+    for horizon in horizons:
+        states.append(
+            _field_valued_model_state_at_horizon(
+                runtime=runtime,
+                module=module,
+                fields=fields,
+                horizon=horizon,
+            )
+        )
+    return tensor_runtime_concat(runtime, states, dim=1)
+
+
+def _field_valued_model_state_at_horizon(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    fields: Any,
+    horizon: float,
+) -> Any:
+    _ = runtime
+    try:
+        state = module(fields, float(horizon))
+    except TypeError as error:
+        raise BenchmarkRunnerError(
+            "field-valued operator must accept an input state and horizon"
+        ) from error
+    except TensorRuntimeError as error:
+        raise BenchmarkRunnerError(str(error)) from error
+    if tuple(state.shape) != tuple(fields.shape):
+        raise BenchmarkRunnerError(
+            "field-valued operator must return state shape "
+            f"{tuple(fields.shape)}, got {tuple(state.shape)}"
+        )
+    return state
+
+
 def _module_inference_cost_measurement(
     *,
     runtime: TensorRuntime,
     module: Any,
     fields: Any,
+    labels: Any,
+    horizons: tuple[float, ...] | None = None,
+    target_contract: TargetContract,
 ) -> CostMeasurement:
     was_training = bool(module.training)
     module.eval()
 
     def program(input_fields: Any) -> object:
         with no_grad_context(runtime):
-            return module(input_fields)
+            return _model_inference_for_cost(
+                runtime=runtime,
+                module=module,
+                fields=input_fields,
+                horizons=horizons,
+                target_contract=target_contract,
+            )
 
     try:
         return measure_program_cost(
@@ -2944,6 +3119,7 @@ def _checkpoint_evaluation_chunks(
                     predictor=predictor,
                     batch=batch,
                     outcome_ids=outcome_ids,
+                    target_contract=target_contract,
                 )
         if inference_cost_measurement is None:
             raise BenchmarkRunnerError("checkpoint evaluation could not measure inference cost")
@@ -3013,16 +3189,6 @@ def _batch_sample_input_shape(
     raise BenchmarkRunnerError(
         "tensor benchmark generator must return tensors or inspectable field metadata"
     )
-
-
-def _batch_target_field_shape(
-    *,
-    batch: GeneratedSampleSet,
-) -> tuple[int, ...]:
-    tensor_target_shape = _tensor_input_shape(batch.targets)
-    if tensor_target_shape is not None:
-        return tensor_target_shape
-    return _batch_sample_input_shape(batch=batch)
 
 
 def _tensor_input_shape(fields: Any) -> tuple[int, ...] | None:
@@ -3158,6 +3324,7 @@ def load_model_checkpoint_predictor(
     module = OperationFallbackSequential(
         runtime=runtime,
         operations=executable.operation_modules(),
+        input_conditioning=architecture.input_conditioning,
     )
     _load_torch_checkpoint(module=module, runtime=runtime, checkpoint=checkpoint)
     module.eval()
@@ -3427,6 +3594,11 @@ def _train_until_convergence(
                 outcome_ids=outcome_ids,
                 device=runtime.device,
             )
+            horizons = _field_valued_target_horizons(
+                batch=batch,
+                labels=labels,
+                target_contract=target_contract,
+            )
         actual_gate_sample_count = _tensor_batch_size(fields, fallback=gate_batch_target)
         with phase_timings.span(
             "validation_inference_cost_metrology",
@@ -3436,6 +3608,9 @@ def _train_until_convergence(
                 runtime=runtime,
                 module=module,
                 fields=fields,
+                labels=labels,
+                horizons=horizons,
+                target_contract=target_contract,
             )
         max_validation_inference_cost = _max_cost_measurement(
             max_validation_inference_cost,
@@ -3447,7 +3622,14 @@ def _train_until_convergence(
             was_training = bool(module.training)
             module.eval()
             with no_grad_context(runtime):
-                logits = module(fields)
+                logits = _model_predictions(
+                    runtime=runtime,
+                    module=module,
+                    fields=fields,
+                    labels=labels,
+                    horizons=horizons,
+                    target_contract=target_contract,
+                )
                 validation_loss = float(loss_function(logits, labels).item())
                 accepted_mass = competence.training_logit_masses(runtime, logits, labels)
             if was_training:
@@ -3544,6 +3726,7 @@ def _train_until_convergence(
         training_batch = _coerce_training_step_batch(raw_training_batch)
         fields = training_batch.fields
         labels = training_batch.labels
+        horizons = training_batch.horizons
         actual_batch_size = _tensor_batch_size(fields, fallback=training_batch_target)
         module.train()
         try:
@@ -3552,13 +3735,21 @@ def _train_until_convergence(
             def loss_closure(
                 fields: Any = fields,
                 labels: Any = labels,
+                horizons: tuple[float, ...] | None = horizons,
                 actual_batch_size: int = actual_batch_size,
             ) -> Any:
                 nonlocal first_logits
                 with phase_timings.span("training_zero_grad"):
                     optimizer.zero_grad(set_to_none=True)
                 with phase_timings.span("training_forward_loss", samples=actual_batch_size):
-                    logits = module(fields)
+                    logits = _model_predictions(
+                        runtime=runtime,
+                        module=module,
+                        fields=fields,
+                        labels=labels,
+                        horizons=horizons,
+                        target_contract=target_contract,
+                    )
                     loss = loss_function(logits, labels)
                 if first_logits is None:
                     detach_logits = getattr(logits, "detach", None)

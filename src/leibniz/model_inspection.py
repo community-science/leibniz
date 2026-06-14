@@ -21,6 +21,7 @@ from leibniz.model_operators import ExecutableModelOperator, summarize_architect
 from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 from leibniz.submissions import SubmissionPackageManifest
 from leibniz.tensor_runtime import (
+    OperationFallbackSequential,
     TensorRuntimeError,
     make_empty_float_tensor,
     no_grad_context,
@@ -1175,7 +1176,16 @@ def _architecture_inference_cost_measurement(
 ) -> CostMeasurement | None:
     try:
         runtime = resolve_host_tensor_runtime()
-        module = ExecutableModelOperator(architecture_manifest).sequential_module()
+        executable = ExecutableModelOperator(architecture_manifest)
+        module = (
+            OperationFallbackSequential(
+                runtime=runtime,
+                operations=executable.operation_modules(),
+                input_conditioning=architecture_manifest.input_conditioning,
+            )
+            if architecture_manifest.input_conditioning is not None
+            else executable.sequential_module()
+        )
         module.eval()
         fields = make_empty_float_tensor(
             runtime,
@@ -1185,6 +1195,8 @@ def _architecture_inference_cost_measurement(
 
         def program(input_fields: object) -> object:
             with no_grad_context(runtime):
+                if architecture_manifest.input_conditioning is not None:
+                    return module(input_fields, 1.0)
                 return module(input_fields)
 
         return estimate_program_cost(

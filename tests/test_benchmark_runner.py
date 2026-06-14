@@ -94,13 +94,14 @@ def _write_ks_architecture(path: Path) -> Path:
         canonical_document_bytes(
             {
                 "input_shape": [1, 32],
-                "output_shape": [9, 32],
+                "output_shape": [1, 32],
+                "input_conditioning": {"kind": "horizon-channel"},
                 "layers": [
                     {
                         "kind": "fixed-support-affine",
                         "parameters": {
                             "dimension": 1,
-                            "out_channels": 9,
+                            "out_channels": 1,
                             "out_length": 32,
                         },
                     },
@@ -110,7 +111,7 @@ def _write_ks_architecture(path: Path) -> Path:
                         "parameters": {
                             "dimension": 1,
                             "size": 3,
-                            "out_channels": 9,
+                            "out_channels": 1,
                             "stride": 1,
                             "padding": 1,
                             "padding_mode": "periodic",
