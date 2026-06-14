@@ -52,7 +52,7 @@ from leibniz.evaluation_bundles import (
 )
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment
-from leibniz.measurements import MeasurementDataset
+from leibniz.measurements import MeasurementDataset, MeasurementRecord
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.model_interfaces import ModelInterface
 from leibniz.model_manifests import (
@@ -72,6 +72,7 @@ from leibniz.records import RecordExtractor
 from leibniz.state_space import (
     AccessibleSubspace,
     SamplingProtocol,
+    StateSpaceError,
     StateSpaceRegion,
     state_space_regions_are_disjoint,
 )
@@ -286,19 +287,34 @@ class CheckpointModelPredictor:
     runtime: TensorRuntime
     module: Any
     outcome_ids: tuple[str, ...]
+    target_contract: TargetContract
 
     def predict_batch(
         self,
         batch: GeneratedSampleSet,
-    ) -> tuple[tuple[float, ...], ...]:
+    ) -> Any:
         self.module.eval()
-        fields, _labels = _batch_tensors(
+        fields, labels = _batch_tensors(
             runtime=self.runtime,
             batch=batch,
             outcome_ids=self.outcome_ids,
             device=self.runtime.device,
         )
+        horizons = _field_valued_target_horizons(
+            batch=batch,
+            labels=labels,
+            target_contract=self.target_contract,
+        )
         with no_grad_context(self.runtime):
+            if self.target_contract.kind == "field-valued":
+                return _model_predictions(
+                    runtime=self.runtime,
+                    module=self.module,
+                    fields=fields,
+                    labels=labels,
+                    horizons=horizons,
+                    target_contract=self.target_contract,
+                )
             return tuple(
                 _renormalized_probabilities(row)
                 for row in softmax_prediction_rows(self.runtime, self.module(fields))
@@ -502,7 +518,37 @@ def _evaluation_sampled_competence_record(
         if result.rung.batch.region is not None:
             point["region"] = result.rung.batch.region.to_record()
         points.append(point)
-    return sampled_competence_curriculum_record(points)
+    record = sampled_competence_curriculum_record(points)
+    if frontier_point.get("competence_value_kind") == "validated-bits":
+        record["competence_value_kind"] = "validated-bits"
+    return record
+
+
+def _attach_competence_diagnostics(
+    record: dict[str, object],
+    diagnostics: tuple[Mapping[str, object], ...],
+) -> None:
+    if not diagnostics:
+        return
+    record["competence_diagnostics"] = [dict(item) for item in diagnostics]
+    boundaries = tuple(
+        _optional_nonnegative_float(
+            item.get("predictability_boundary"),
+            "competence_diagnostics.predictability_boundary",
+        )
+        for item in diagnostics
+    )
+    finite_boundaries = tuple(value for value in boundaries if value is not None)
+    if finite_boundaries:
+        record["predictability_boundary"] = max(finite_boundaries)
+    time_points = diagnostics[0].get("time_points")
+    if isinstance(time_points, Sequence) and not isinstance(time_points, str):
+        copied_points: list[dict[str, object]] = []
+        for item in cast(Sequence[object], time_points):
+            if isinstance(item, Mapping):
+                copied_points.append(dict(cast(Mapping[str, object], item)))
+        if copied_points:
+            record["time_points"] = copied_points
 
 
 def _rung_volume_request(rung: _CurriculumRung) -> StateSpaceVolumeRequest:
@@ -1276,11 +1322,14 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             evaluation_results,
             final_evaluation_batch,
             final_evaluation_probabilities,
+            final_accepted_mass,
+            final_competence_diagnostics,
             checkpoint_evaluation_throughput,
         ) = evaluate_model_checkpoint_artifact(
             architecture=architecture,
             generator=generator,
             target_contract=target_contract,
+            competence_factory=_optional_training_competence_factory(benchmark),
             accessible_subspace=benchmark.accessible_subspace,
             sampling_protocol=benchmark.sampling_protocol,
             seed=evaluation_seed,
@@ -1288,7 +1337,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             checkpoint=selected_checkpoint,
         )
     with workflow_timings.span("evaluation_workflow.integration_evidence"):
-        outcome_ids = _finite_outcome_ids(target_contract)
+        outcome_ids = _target_contract_outcome_ids(target_contract)
         evaluation_frontier_index = _evaluation_result_frontier_index(
             evaluation_results=evaluation_results,
             outcome_ids=outcome_ids,
@@ -1303,26 +1352,37 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         "evaluation_workflow.final_measurement_records",
         samples=final_evaluation_batch.sample_count,
     ):
-        measurement_groups = (
-            finite_measurements_for_predictions(
-                batch=final_evaluation_batch,
-                outcome_space=outcome_space,
-                probabilities=final_evaluation_probabilities,
-                run_slug=f"{run_slug}.final",
-            ),
-        )
-    with workflow_timings.span("evaluation_workflow.sampled_competence"):
         frontier_rung = evaluation_results[evaluation_frontier_index].rung
         final_scored_batch = replace(
             final_evaluation_batch,
             volume_request=_rung_score_volume_request(frontier_rung),
         )
-        final_sampled_competence = sampled_competence_record(
-            batch=final_scored_batch,
-            measurements=measurement_groups[0],
-            volume_axis=None,
-            input_shape=evaluation_results[evaluation_frontier_index].input_shape,
-        )
+        if target_contract.kind == "field-valued":
+            measurement_groups: tuple[tuple[MeasurementRecord, ...], ...] = ()
+            final_sampled_competence = _sampled_competence_record_from_accepted_mass(
+                batch=final_scored_batch,
+                accepted_mass=final_accepted_mass,
+                volume_axis=None,
+                bounded_mass=False,
+            )
+            _attach_competence_diagnostics(
+                final_sampled_competence,
+                final_competence_diagnostics,
+            )
+        else:
+            final_measurements = finite_measurements_for_predictions(
+                batch=final_evaluation_batch,
+                outcome_space=outcome_space,
+                probabilities=final_evaluation_probabilities,
+                run_slug=f"{run_slug}.final",
+            )
+            measurement_groups = (final_measurements,)
+            final_sampled_competence = sampled_competence_record(
+                batch=final_scored_batch,
+                measurements=final_measurements,
+                volume_axis=None,
+                input_shape=evaluation_results[evaluation_frontier_index].input_shape,
+            )
         final_cost_measurement, final_cost_sample_count = (
             _checkpoint_evaluation_throughput_inference_cost_record(
                 checkpoint_evaluation_throughput
@@ -1786,7 +1846,7 @@ def _validate_claim_chain(
     _validate_claim_chain_disjoint(regions)
     for region in regions:
         for exclusion in accessible_subspace.exclusions:
-            if not state_space_regions_are_disjoint(region, exclusion):
+            if _state_space_regions_overlap(region, exclusion):
                 raise BenchmarkRunnerError(
                     "claim chain increment intersects an accessible-subspace exclusion"
                 )
@@ -1805,8 +1865,17 @@ def _claim_chain_regions(rungs: Sequence[_CurriculumRung]) -> tuple[StateSpaceRe
 def _validate_claim_chain_disjoint(regions: Sequence[StateSpaceRegion]) -> None:
     for earlier in range(len(regions)):
         for later in range(earlier + 1, len(regions)):
-            if not state_space_regions_are_disjoint(regions[earlier], regions[later]):
+            if _state_space_regions_overlap(regions[earlier], regions[later]):
                 raise BenchmarkRunnerError("claim chain increments must be pairwise disjoint")
+
+
+def _state_space_regions_overlap(left: StateSpaceRegion, right: StateSpaceRegion) -> bool:
+    try:
+        return not state_space_regions_are_disjoint(left, right)
+    except StateSpaceError as error:
+        if "regions in different ambients are not comparable" in str(error):
+            return False
+        raise
 
 
 def _validate_claim_chain_cumulative_brackets(
@@ -2401,6 +2470,7 @@ def evaluate_model_checkpoint_artifact(
     architecture: ArchitectureManifest,
     generator: _TensorBenchmarkGenerator,
     target_contract: TargetContract,
+    competence_factory: _BenchmarkTrainingCompetenceFactory | None = None,
     accessible_subspace: AccessibleSubspace,
     sampling_protocol: SamplingProtocol,
     seed: int,
@@ -2410,6 +2480,8 @@ def evaluate_model_checkpoint_artifact(
     tuple[_CheckpointEvaluationRungEvidence, ...],
     GeneratedSampleSet,
     tuple[tuple[float, ...], ...],
+    tuple[float, ...],
+    tuple[Mapping[str, object], ...],
     Mapping[str, object],
 ]:
     """Generate benchmark evaluation evidence from a saved checkpoint artifact."""
@@ -2427,7 +2499,12 @@ def evaluate_model_checkpoint_artifact(
     runtime_phase_timings.counters.update(phase_timings.counters)
     phase_timings = runtime_phase_timings
     results: list[_CheckpointEvaluationRungEvidence] = []
-    outcome_ids = _finite_outcome_ids(target_contract)
+    outcome_ids = _target_contract_outcome_ids(target_contract)
+    competence = _resolve_competence_functional(
+        target_contract,
+        runtime=predictor.runtime,
+        competence_factory=competence_factory,
+    )
     capacity_limited = False
     curriculum_exhausted = False
     planner = _VolumeCurriculumPlanner()
@@ -2465,6 +2542,7 @@ def evaluate_model_checkpoint_artifact(
                     rung=rung,
                     outcome_ids=outcome_ids,
                     target_contract=target_contract,
+                    competence=competence,
                     sampling_protocol=sampling_protocol,
                     evaluation_counter=evaluation_counter,
                     phase_timings=phase_timings,
@@ -2501,6 +2579,8 @@ def evaluate_model_checkpoint_artifact(
         (
             final_batch,
             final_probabilities,
+            final_accepted_mass,
+            final_competence_diagnostics,
             final_inference_cost_measurement,
             final_inference_cost_sample_count,
         ) = (
@@ -2511,6 +2591,7 @@ def evaluate_model_checkpoint_artifact(
                 rung=results[evaluation_frontier_index].rung,
                 outcome_ids=outcome_ids,
                 target_contract=target_contract,
+                competence=competence,
                 sampling_protocol=sampling_protocol,
                 requested_sample_count=results[evaluation_frontier_index].sample_count,
                 evaluation_counter=evaluation_counter,
@@ -2532,7 +2613,14 @@ def evaluate_model_checkpoint_artifact(
         final_inference_cost_measurement.without_operation_trace().to_record()
     )
     throughput["inference_cost_sample_count"] = final_inference_cost_sample_count
-    return tuple(results), final_batch, final_probabilities, throughput
+    return (
+        tuple(results),
+        final_batch,
+        final_probabilities,
+        final_accepted_mass,
+        final_competence_diagnostics,
+        throughput,
+    )
 
 
 def _checkpoint_inference_cost_measurement(
@@ -2832,6 +2920,7 @@ def _evaluate_checkpoint_rung(
     rung: _CurriculumRung,
     outcome_ids: tuple[str, ...],
     target_contract: TargetContract,
+    competence: _CompetenceFunctional,
     sampling_protocol: SamplingProtocol,
     evaluation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
@@ -2877,6 +2966,7 @@ def _evaluate_checkpoint_rung(
             rung=rung,
             outcome_ids=outcome_ids,
             target_contract=target_contract,
+            competence=competence,
             requested_sample_count=next_sample_count,
             sample_indices=census_indices,
             evaluation_counter=evaluation_counter,
@@ -3024,6 +3114,7 @@ class _CheckpointEvaluationChunk:
     accepted_mass: tuple[float, ...]
     accepted_mass_sum: float
     sample_count: int
+    competence_diagnostics: tuple[Mapping[str, object], ...] = ()
     inference_cost_measurement: CostMeasurement | None = None
     inference_cost_sample_count: int | None = None
 
@@ -3036,13 +3127,23 @@ def _evaluate_checkpoint_rung_measurements(
     rung: _CurriculumRung,
     outcome_ids: tuple[str, ...],
     target_contract: TargetContract,
+    competence: _CompetenceFunctional,
     sampling_protocol: SamplingProtocol,
     requested_sample_count: int,
     evaluation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
-) -> tuple[GeneratedSampleSet, tuple[tuple[float, ...], ...], CostMeasurement, int]:
+) -> tuple[
+    GeneratedSampleSet,
+    tuple[tuple[float, ...], ...],
+    tuple[float, ...],
+    tuple[Mapping[str, object], ...],
+    CostMeasurement,
+    int,
+]:
     samples: list[GeneratedSample] = []
     probabilities: list[tuple[float, ...]] = []
+    accepted_mass: list[float] = []
+    competence_diagnostics: list[Mapping[str, object]] = []
     max_cost_measurement: tuple[CostMeasurement, int] | None = None
     census_indices = (
         _census_sample_indices(rung.batch.region)
@@ -3059,6 +3160,7 @@ def _evaluate_checkpoint_rung_measurements(
         rung=rung,
         outcome_ids=outcome_ids,
         target_contract=target_contract,
+        competence=competence,
         requested_sample_count=requested_sample_count,
         sample_indices=census_indices,
         evaluation_counter=evaluation_counter,
@@ -3071,6 +3173,8 @@ def _evaluate_checkpoint_rung_measurements(
             for index, sample in enumerate(chunk.batch.samples)
         )
         probabilities.extend(chunk.probabilities)
+        accepted_mass.extend(chunk.accepted_mass)
+        competence_diagnostics.extend(chunk.competence_diagnostics)
         max_cost_measurement = _max_cost_measurement(
             max_cost_measurement,
             _chunk_cost_measurement_pair(chunk),
@@ -3093,6 +3197,8 @@ def _evaluate_checkpoint_rung_measurements(
             samples=tuple(samples),
         ),
         tuple(probabilities),
+        tuple(accepted_mass),
+        tuple(competence_diagnostics),
         max_cost_measurement[0],
         max_cost_measurement[1],
     )
@@ -3106,13 +3212,13 @@ def _checkpoint_evaluation_chunks(
     rung: _CurriculumRung,
     outcome_ids: tuple[str, ...],
     target_contract: TargetContract,
+    competence: _CompetenceFunctional,
     requested_sample_count: int,
     sample_indices: Sequence[int] | None,
     evaluation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
     purpose: str,
 ) -> Iterable[_CheckpointEvaluationChunk]:
-    competence = _resolve_competence_functional(target_contract)
     remaining = requested_sample_count
     chunk_index = 0
     sample_offset = 0
@@ -3175,11 +3281,40 @@ def _checkpoint_evaluation_chunks(
             f"checkpoint_evaluation_{purpose}_accepted_mass",
             samples=batch.sample_count,
         ):
-            accepted_mass = competence.prediction_accepted_mass(
-                batch=batch,
-                probabilities=predictions,
-                outcome_ids=outcome_ids,
-            )
+            if target_contract.kind == "field-valued":
+                fields, labels = _batch_tensors(
+                    runtime=predictor.runtime,
+                    batch=batch,
+                    outcome_ids=outcome_ids,
+                    device=predictor.runtime.device,
+                )
+                horizons = _field_valued_target_horizons(
+                    batch=batch,
+                    labels=labels,
+                    target_contract=target_contract,
+                )
+                with no_grad_context(predictor.runtime):
+                    competence_evaluation = competence.training_logit_masses_with_diagnostics(
+                        predictor.runtime,
+                        predictions,
+                        labels,
+                        module=predictor.module,
+                        fields=fields,
+                        horizons=horizons,
+                        batch=batch,
+                        generator=generator,
+                    )
+                    accepted_mass = competence_evaluation.values
+                    competence_diagnostics = competence_evaluation.diagnostics
+                probabilities: tuple[tuple[float, ...], ...] = ()
+            else:
+                probabilities = predictions
+                competence_diagnostics = ()
+                accepted_mass = competence.prediction_accepted_mass(
+                    batch=batch,
+                    probabilities=probabilities,
+                    outcome_ids=outcome_ids,
+                )
         inference_cost_measurement: CostMeasurement | None = None
         if purpose in {"score", "measurements"}:
             with phase_timings.span(
@@ -3196,10 +3331,11 @@ def _checkpoint_evaluation_chunks(
             raise BenchmarkRunnerError("checkpoint evaluation could not measure inference cost")
         yield _CheckpointEvaluationChunk(
             batch=batch,
-            probabilities=predictions,
+            probabilities=probabilities,
             accepted_mass=accepted_mass,
             accepted_mass_sum=math.fsum(accepted_mass),
             sample_count=batch.sample_count,
+            competence_diagnostics=competence_diagnostics,
             inference_cost_measurement=inference_cost_measurement,
             inference_cost_sample_count=batch.sample_count,
         )
@@ -3399,11 +3535,11 @@ def load_model_checkpoint_predictor(
     )
     _load_torch_checkpoint(module=module, runtime=runtime, checkpoint=checkpoint)
     module.eval()
-    outcome_ids = _finite_outcome_ids(target_contract)
     return CheckpointModelPredictor(
         runtime=runtime,
         module=module,
-        outcome_ids=outcome_ids,
+        outcome_ids=_target_contract_outcome_ids(target_contract),
+        target_contract=target_contract,
     )
 
 

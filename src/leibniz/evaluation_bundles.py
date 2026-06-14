@@ -145,7 +145,10 @@ class BenchmarkEvaluationBundle:
         return ContentDigest.from_value(self.to_record())
 
     def validate_sources(self) -> None:
-        if self.benchmark_manifest.id != _single_benchmark_id(self.measurement_dataset):
+        if self.benchmark_manifest.id != _bundle_benchmark_id(
+            self.measurement_dataset,
+            sampled_competence=self.sampled_competence,
+        ):
             raise BenchmarkEvaluationBundleValidationError(
                 "measurement_dataset benchmark_id does not match benchmark manifest"
             )
@@ -289,6 +292,28 @@ def _single_benchmark_id(dataset: MeasurementDataset) -> ProtocolIdentifier:
             "measurement_dataset must contain one benchmark id"
         )
     return next(iter(benchmark_ids))
+
+
+def _bundle_benchmark_id(
+    dataset: MeasurementDataset,
+    *,
+    sampled_competence: Mapping[str, object],
+) -> ProtocolIdentifier:
+    if dataset.measurements:
+        return _single_benchmark_id(dataset)
+    if sampled_competence.get("competence_value_kind") != "validated-bits":
+        raise BenchmarkEvaluationBundleValidationError(
+            "measurement_dataset must contain one benchmark id"
+        )
+    try:
+        return ProtocolIdentifier.parse(
+            _record.non_empty_string(
+                sampled_competence.get("benchmark_id"),
+                "sampled_competence.benchmark_id",
+            )
+        )
+    except ValueError as error:
+        raise BenchmarkEvaluationBundleValidationError(str(error)) from error
 
 
 def _validate_inference_cost_measurement(

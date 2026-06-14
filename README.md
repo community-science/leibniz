@@ -164,6 +164,15 @@ leibniz benchmark train \
   --architecture tests/fixtures/architecture/digits_pool.json
 ```
 
+Run the same reference trainer against the variable-resolution KS prediction
+benchmark with a scale-contract architecture:
+
+```bash
+leibniz benchmark train \
+  ks \
+  --architecture tests/fixtures/architecture/ks_variable_conv.json
+```
+
 `benchmark train` is a reference implementation for local benchmark training and
 evaluation. It trains supplied architecture manifests and does not propose or
 choose architectures. `--architecture` may be repeated and may name either a

@@ -1167,12 +1167,16 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
     ) -> tuple[
         GeneratedSampleSet,
         tuple[tuple[float, ...], ...],
+        tuple[float, ...],
+        tuple[Mapping[str, object], ...],
         CostMeasurement,
         int,
     ]:
         return (
             batch,
             ((1.0,),),
+            (1.0,),
+            (),
             _cost_measurement(),
             1,
         )
@@ -1186,7 +1190,7 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
         fake_final_measurements,
     )
 
-    results, final_batch, probabilities, throughput = (
+    results, final_batch, probabilities, accepted_mass, diagnostics, throughput = (
         benchmark_runner.evaluate_model_checkpoint_artifact(
             architecture=architecture,
             generator=cast(Any, generator),
@@ -1202,6 +1206,8 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
     assert results == (evidence,)
     assert final_batch is batch
     assert probabilities == ((1.0,),)
+    assert accepted_mass == (1.0,)
+    assert diagnostics == ()
     assert throughput["curriculum_exhausted"] is True
     assert throughput["capacity_limited"] is False
 
@@ -1710,6 +1716,62 @@ def test_ks_benchmark_runner_trains_field_model_with_residual_loss(
     assert cast(Mapping[str, object], record["architecture"])["kind"] == (
         "architecture-manifest"
     )
+
+
+def test_ks_benchmark_runner_outputs_feed_benchmark_result_views(
+    tmp_path: Path,
+) -> None:
+    results_root = tmp_path / "results"
+    training_summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_ks_variable_conv_architecture,
+            benchmark_root=_ks_benchmark_root,
+            results_root=results_root,
+            seed=101,
+            train_steps=0,
+            gate_check_interval=1,
+            model_checkpoint_gate_interval=1,
+            tensor_device="cpu",
+            optimizer="adam",
+            learning_rate=1e-3,
+        )
+    )
+    evaluation_summary = evaluate_benchmark_checkpoint(
+        BenchmarkEvaluationPlan(
+            checkpoint_artifact_path=_selected_checkpoint_artifact_path(
+                training_summary.training_summary_path
+            ),
+            benchmark_root=_ks_benchmark_root,
+            results_root=results_root,
+            tensor_device="cpu",
+        )
+    )
+
+    bundle = BenchmarkEvaluationBundleDocument.from_bytes(
+        evaluation_summary.evaluation_bundle_path.read_bytes()
+    ).bundle
+    sampled_competence = cast(dict[str, object], bundle.sampled_competence)
+    assert evaluation_summary.measurement_count == 0
+    assert sampled_competence["competence_value_kind"] == "validated-bits"
+
+    summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        results_root=results_root,
+    )
+    view = load_console_result_view(summary.view_file.read_bytes())
+    result = cast(list[dict[str, object]], view["benchmark_results"])[0]
+    leaderboard = cast(list[dict[str, object]], result["leaderboard"])
+    plot_runs = cast(list[dict[str, object]], result["plot_runs"])
+    assert len(leaderboard) == 1
+    assert [run["result_status"] for run in plot_runs] == ["accepted"]
+    assert math.isfinite(cast(float, leaderboard[0]["score"]))
+
+    point = cast(list[dict[str, object]], leaderboard[0]["points"])[0]
+    assert point["competence_value_kind"] == "validated-bits"
+    assert point["predictability_boundary"] == 0.0
+    time_points = cast(list[dict[str, object]], point["time_points"])
+    assert len(time_points) == 8
+    assert time_points[0]["gate_decision"] == "failed-richardson"
 
 
 def test_ks_benchmark_runner_scores_real_requery_ladder(
