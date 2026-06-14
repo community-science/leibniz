@@ -39,6 +39,9 @@ def test_ks_benchmark_loads_field_valued_target_contract() -> None:
 
     assert implementation.root == _ks_benchmark_root
     assert str(implementation.manifest.id) == "benchmarks.ks@0.1.0"
+    assert str(implementation.manifest.name) == "benchmarks.ks"
+    assert implementation.manifest.resolution_analysis is not None
+    assert implementation.manifest.resolution_analysis["display_name"] == "Kuramoto-Sivashinsky"
     assert callable(implementation.generator)
     assert implementation.target_contract.kind == "field-valued"
     assert implementation.target_contract.loss_id == "equation-residual"

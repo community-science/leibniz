@@ -162,6 +162,11 @@ const ksBenchmarkTask = parsed.benchmark_tasks.find(
 if (ksBenchmarkTask === undefined) {
   throw new Error('expected KS benchmark task');
 }
+assertEqual(
+  ksBenchmarkTask.label,
+  'Kuramoto-Sivashinsky',
+  'KS benchmark label uses full name',
+);
 assertEqual(benchmarkTask?.kind, 'generated-observations', 'benchmark task kind');
 assertEqual(benchmarkTask?.batches.length, 9, 'benchmark batch count');
 assertEqual(

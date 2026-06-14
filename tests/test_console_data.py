@@ -336,6 +336,12 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         "benchmarks.digits@0.1.0",
         "benchmarks.ks@0.1.0",
     }
+    ks_task = next(
+        task
+        for task in benchmark_tasks
+        if task["benchmark_id"] == "benchmarks.ks@0.1.0"
+    )
+    assert ks_task["label"] == "Kuramoto-Sivashinsky"
     chess_task = next(
         task
         for task in benchmark_tasks

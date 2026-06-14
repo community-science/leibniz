@@ -274,6 +274,7 @@ def _manifest() -> BenchmarkManifest:
         ),
         resolution_analysis={
             "kind": "component-discriminability-margin",
+            "display_name": "Kuramoto-Sivashinsky",
             "discriminability_margin": _epsilon,
             "equation": "u_t = -u*u_x - u_xx - u_xxxx",
             "field_domain_kind": "box-2d",
