@@ -73,6 +73,35 @@ def test_richardson_field_decimates_nested_ladder_and_bounds_error() -> None:
     assert estimate.extrapolated_field.allclose(true_field)
 
 
+def test_per_sample_richardson_field_preserves_nondegenerate_denominator() -> None:
+    module = _ks_module()
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    true_field = torch.arange(12, dtype=torch.float64, device=runtime.device).reshape(
+        1,
+        3,
+        4,
+    )
+    planted_order = 2.0
+    factor = 2
+    coefficient = 8.0
+    restricted = tuple(
+        true_field + coefficient / (factor ** (planted_order * index))
+        for index in range(3)
+    )
+
+    estimate = module._per_sample_richardson_field(
+        runtime=runtime,
+        restricted=restricted,
+        factor=factor,
+    )
+
+    denominator = (float(factor) ** planted_order) - 1.0
+    expected_error = module.grid_l2_norm((restricted[-1] - restricted[-2]) / denominator)
+    assert math.isclose(float(estimate.observed_order[0]), planted_order)
+    assert math.isclose(float(estimate.error[0]), float(expected_error))
+
+
 def test_ks_space_time_residual_uses_central_time_derivative() -> None:
     module = _ks_module()
     runtime = resolve_tensor_runtime("cpu")
