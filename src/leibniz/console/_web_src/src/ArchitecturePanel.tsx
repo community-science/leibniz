@@ -249,7 +249,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'space-time ladder',
-            text: 'Compute the operator on nested space-time grids and compare on the common grid. For a field law, the residual is evaluated consistently in space and time. If its Richardson extrapolated limit is indistinguishable from zero within its own extrapolation uncertainty, the law gate holds.',
+            text: 'Compute the operator on nested space-time grids and compare on the common grid. For a field law, the residual is evaluated consistently in space and time, then converted into a certified distance by the law\'s amplification along the submitted trajectory.',
           },
           {
             level: 3,
@@ -261,13 +261,13 @@ const ROOTS: RootTree[] = [
             level: 3,
             kind: 'add',
             tag: 'the metric is the law geometry',
-            text: 'The residual, the certified $\\varepsilon$, and the bit count all live in one metric: the geometry the law itself induces through its entropy or energy/Lyapunov functional, derived from the equation rather than declared. It is $L^2$ for a dissipative law like KS and the entropy metric for a conservation law; certification is amplification when no monotone functional exists and functional dissipation when one does. The derived functional is itself verified, not trusted.',
+            text: 'The residual, the certified $\\varepsilon$, and the bit count all live in one metric: the geometry the law itself induces through its entropy or energy/Lyapunov functional, derived from the equation rather than declared. It is $L^2$ for a dissipative law and the entropy metric for a conservation law; certification is amplification when no monotone functional exists and functional dissipation when one does. The derived functional is itself verified, not trusted.',
           },
           {
             level: 3,
             kind: 'add',
             tag: 'formal objects',
-            text: 'Formally: query $\\hat\\Phi(x_h, t)$ across refined grids, restrict each rung to the common grid, estimate observed order and limit by Richardson, and credit only the time-prefix that stays inside the residual plus field-error gate.',
+            text: 'Formally: query $\\hat\\Phi(x_h, t)$ across refined grids, compute the residual and leading amplification on each prefix, refuse prefixes whose amplification grows under refinement, and credit the ambient evolution entropy resolved above the certified $\\varepsilon$.',
           },
           {
             level: 4,
@@ -464,7 +464,7 @@ const EDGES: CouplingEdge[] = [
     id: 'edge-score',
     roots: ['U', 'R', 'D'],
     title: 'The score (triple point)',
-    body: 'Competence is the validated information a model resolves where the refinement gate holds: measured convergence error from Refinement, bits from Description length, integrated over the query space from Universe. That sum is one of the same adaptive trees. So the score is not a fourth root; it is where the other three meet, and it needs nothing else.',
+    body: 'Competence is the validated information a model resolves at the certified refinement precision: measured distance from Refinement, bits from Description length, integrated over the query space from Universe. That sum is one of the same adaptive trees. So the score is not a fourth root; it is where the other three meet, and it needs nothing else.',
   },
 ];
 

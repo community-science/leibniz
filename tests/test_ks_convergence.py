@@ -73,33 +73,62 @@ def test_richardson_field_decimates_nested_ladder_and_bounds_error() -> None:
     assert estimate.extrapolated_field.allclose(true_field)
 
 
-def test_per_sample_richardson_field_preserves_nondegenerate_denominator() -> None:
+def test_ambient_evolution_entropy_is_resolution_independent_for_bandlimited_field() -> None:
     module = _ks_module()
     runtime = resolve_tensor_runtime("cpu")
     torch = runtime.torch
-    true_field = torch.arange(12, dtype=torch.float64, device=runtime.device).reshape(
-        1,
-        3,
-        4,
-    )
-    planted_order = 2.0
-    factor = 2
-    coefficient = 8.0
-    restricted = tuple(
-        true_field + coefficient / (factor ** (planted_order * index))
-        for index in range(3)
+    precision = 1.0e-3
+    values: list[float] = []
+    resolved_modes: list[int] = []
+    for spatial_points in (32, 64, 128):
+        x = (
+            torch.arange(spatial_points, dtype=torch.float64, device=runtime.device)
+            * (2.0 * math.pi / float(spatial_points))
+        )
+        initial = torch.sin(x).reshape(1, 1, spatial_points)
+        delta = (
+            0.125
+            * torch.sin(2.0 * x).reshape(1, 1, spatial_points)
+            * torch.arange(3, dtype=torch.float64, device=runtime.device).reshape(1, 3, 1)
+        )
+        trajectory = initial + delta
+
+        entropy = module._ambient_evolution_entropy(
+            runtime=runtime,
+            trajectory=trajectory,
+            precision=torch.full((1,), precision, dtype=torch.float64),
+        )
+        values.append(float(entropy.bits[0]))
+        resolved_modes.append(int(entropy.resolved_mode_count[0]))
+
+    assert max(values) - min(values) < 1.0e-9
+    assert resolved_modes == [2, 2, 2]
+
+
+def test_certified_ambient_bits_decrease_continuously_with_precision() -> None:
+    module = _ks_module()
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    x = torch.arange(32, dtype=torch.float64, device=runtime.device) * (2.0 * math.pi / 32.0)
+    trajectory = (
+        torch.sin(x).reshape(1, 1, 32)
+        + torch.arange(3, dtype=torch.float64, device=runtime.device).reshape(1, 3, 1)
+        * 0.2
+        * torch.cos(3.0 * x).reshape(1, 1, 32)
     )
 
-    estimate = module._per_sample_richardson_field(
+    fine = module._ambient_evolution_entropy(
         runtime=runtime,
-        restricted=restricted,
-        factor=factor,
+        trajectory=trajectory,
+        precision=torch.full((1,), 1.0e-4, dtype=torch.float64),
+    )
+    coarse = module._ambient_evolution_entropy(
+        runtime=runtime,
+        trajectory=trajectory,
+        precision=torch.full((1,), 1.0e-2, dtype=torch.float64),
     )
 
-    denominator = (float(factor) ** planted_order) - 1.0
-    expected_error = module.grid_l2_norm((restricted[-1] - restricted[-2]) / denominator)
-    assert math.isclose(float(estimate.observed_order[0]), planted_order)
-    assert math.isclose(float(estimate.error[0]), float(expected_error))
+    assert float(fine.bits[0]) > float(coarse.bits[0]) > 0.0
 
 
 def test_ks_space_time_residual_uses_central_time_derivative() -> None:

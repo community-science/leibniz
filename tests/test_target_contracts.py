@@ -31,7 +31,7 @@ def test_field_valued_target_contract_round_trips_and_declares_shape() -> None:
         outcome_ids=None,
         loss_id="relative-l2",
         competence=CompetenceFunctional(
-            kind="convergence-resolved-bits",
+            kind="ambient-certified-bits",
             parameters={"residual_operator_id": "operators.example@0.1.0"},
         ),
         baseline=BaselinePredictor(kind="zero-field"),

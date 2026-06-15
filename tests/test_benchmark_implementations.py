@@ -45,7 +45,7 @@ def test_ks_benchmark_loads_field_valued_target_contract() -> None:
     assert callable(implementation.generator)
     assert implementation.target_contract.kind == "field-valued"
     assert implementation.target_contract.loss_id == "equation-residual"
-    assert implementation.target_contract.competence.kind == "convergence-resolved-bits"
+    assert implementation.target_contract.competence.kind == "ambient-certified-bits"
     assert (
         implementation.target_contract.competence.parameters["residual_operator_id"]
         == "benchmarks.ks.residual-operator@0.1.0"

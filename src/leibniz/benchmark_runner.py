@@ -166,6 +166,7 @@ _full_variation_extent = 1.0
 _sync_timing_environment_variable = "LEIBNIZ_SYNC_TIMING"
 _field_valued_competence_kinds = frozenset(
     {
+        "ambient-certified-bits",
         "convergence-resolved-bits",
         "mass-within-resolution",
     }

@@ -129,15 +129,13 @@ def test_ks_oracle_stepper_scores_positive_through_real_residual() -> None:
     )
     diagnostics = bits.leibniz_competence_diagnostics
 
-    assert math.isclose(
-        cast(float, diagnostics[0]["residual_observed_order"]),
-        2.0,
-        abs_tol=0.1,
+    assert cast(float, diagnostics[0]["residual_norm"]) >= 0.0
+    assert cast(float, diagnostics[0]["law_amplification"]) >= 1.0
+    assert cast(float, diagnostics[0]["certified_epsilon"]) < cast(
+        float,
+        diagnostics[0]["evolution_scale"],
     )
-    assert diagnostics[0]["residual_extrapolated_limit"] <= diagnostics[0][
-        "residual_extrapolation_uncertainty"
-    ]
-    assert diagnostics[0]["gate_decision"] == "passed"
+    assert cast(float, diagnostics[0]["ambient_evolution_entropy_bits"]) > 0.0
     assert diagnostics[0]["predictability_boundary"] > 0.0
     assert float(bits[0]) > 0.0
 
