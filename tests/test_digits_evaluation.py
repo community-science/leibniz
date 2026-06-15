@@ -1,5 +1,7 @@
 import math
+import sys
 from pathlib import Path
+from typing import Any, cast
 
 from benchmark_typing import load_digits_benchmark
 
@@ -16,6 +18,7 @@ from leibniz.outcomes import (
     RawScoringEvidence,
 )
 from leibniz.state_space import ContinuousAxisRegion, RealIntervalDomain
+from leibniz.tensor_runtime import resolve_tensor_runtime
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -103,6 +106,121 @@ def test_digits_realized_regions_claim_continuous_transform_cells() -> None:
         }
         assert "transform-ordinal" not in sample.axis_coordinates
         assert batch.region.contains(sample.region_component_index, sample.axis_coordinates)
+
+
+def test_inverse_digits_secret_seed_samples_deterministic_private_latents() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _digits_module()
+    secret = b"deterministic inverse digits seed"
+
+    left = module.sample_inverse_digits_observations(
+        runtime=runtime,
+        secret=secret,
+        sample_count=3,
+        canvas_side=32,
+    )
+    right = module.sample_inverse_digits_observations(
+        runtime=runtime,
+        secret=secret,
+        sample_count=3,
+        canvas_side=32,
+    )
+    other = module.sample_inverse_digits_observations(
+        runtime=runtime,
+        secret=b"different inverse digits seed!!",
+        sample_count=3,
+        canvas_side=32,
+    )
+
+    assert left.latents == right.latents
+    assert left.observations.allclose(right.observations)
+    assert not left.observations.allclose(other.observations)
+    assert left.secret_digest == right.secret_digest
+    assert left.secret_digest != other.secret_digest
+
+
+def test_inverse_digits_submission_view_exposes_law_but_not_secret_or_latent() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _digits_module()
+    batch = module.sample_inverse_digits_observations(
+        runtime=runtime,
+        secret=b"submission view private seed",
+        sample_count=2,
+    )
+
+    view = batch.submission_view()
+
+    assert view["law_id"] == "benchmarks.digits.inverse-renderer@0.1.0"
+    assert view["observation_shape"] == [2, 1, 28, 28]
+    assert "latents" not in view
+    assert "secret_digest" not in view
+    assert "seed" not in view
+
+
+def test_inverse_digits_renderer_changes_continuously_with_pose() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _digits_module()
+    base = module.InverseDigitsLatent(
+        identity=8,
+        x_translation=0.0,
+        y_translation=0.0,
+        scale=0.95,
+        shear=0.02,
+        stroke_width=1.0,
+    )
+    nearby = module.InverseDigitsLatent(
+        identity=8,
+        x_translation=0.01,
+        y_translation=0.0,
+        scale=0.95,
+        shear=0.02,
+        stroke_width=1.0,
+    )
+    farther = module.InverseDigitsLatent(
+        identity=8,
+        x_translation=0.08,
+        y_translation=0.0,
+        scale=0.95,
+        shear=0.02,
+        stroke_width=1.0,
+    )
+
+    rendered = module.render_inverse_digits(
+        runtime=runtime,
+        latents=(base, nearby, farther),
+        canvas_side=32,
+    )
+    near_delta = float((rendered[0] - rendered[1]).pow(2).mean().sqrt())
+    far_delta = float((rendered[0] - rendered[2]).pow(2).mean().sqrt())
+
+    assert near_delta > 0.0
+    assert far_delta > near_delta
+
+
+def test_inverse_digits_canonical_template_baseline_does_not_saturate_headroom() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _digits_module()
+    observations = module.render_inverse_digits(
+        runtime=runtime,
+        latents=(
+            module.InverseDigitsLatent(0, 0.12, -0.08, 0.82, 0.16, 1.2),
+            module.InverseDigitsLatent(1, -0.14, 0.07, 1.16, -0.15, 0.8),
+            module.InverseDigitsLatent(8, 0.13, 0.11, 0.78, 0.18, 1.3),
+        ),
+        canvas_side=32,
+    )
+    templates = module.render_inverse_digits(
+        runtime=runtime,
+        latents=tuple(
+            module.InverseDigitsLatent(index, 0.0, 0.0, 1.0, 0.0, 1.0)
+            for index in range(10)
+        ),
+        canvas_side=32,
+    )
+    squared_errors = (observations.reshape(3, 1, -1) - templates.reshape(1, 10, -1)).pow(2)
+    template_predictions = squared_errors.mean(dim=2).argmin(dim=1)
+
+    assert tuple(int(value) for value in template_predictions) != (0, 1, 8)
 
 
 def _measurement_for_sequence(
@@ -193,3 +311,8 @@ def _probabilities(
 
 def _digits_manifest() -> BenchmarkManifest:
     return load_digits_benchmark(_digits_benchmark_root).manifest
+
+
+def _digits_module() -> Any:
+    loaded = cast(Any, load_digits_benchmark(_digits_benchmark_root))
+    return sys.modules[type(loaded.implementation).__module__]

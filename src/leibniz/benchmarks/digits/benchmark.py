@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import math
+import os
 import random
 import struct
 import zlib
@@ -82,7 +83,14 @@ from leibniz.tensor_runtime import (
 )
 from leibniz.timing import TimingCollector
 
-__all__ = ["benchmark"]
+__all__ = [
+    "InverseDigitsLatent",
+    "InverseDigitsObservationBatch",
+    "benchmark",
+    "new_inverse_digits_secret",
+    "render_inverse_digits",
+    "sample_inverse_digits_observations",
+]
 
 _benchmark_id = ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
 _latent_factor_id = ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.2.0")
@@ -211,6 +219,69 @@ def _transform_cell_for_ordinal(ordinal: int) -> tuple[int, int, int]:
 _shell_cells_cache: dict[int, tuple[tuple[int, int, int], ...]] = {}
 _chart_cell_prefix: list[tuple[int, int, int]] = []
 _chart_prefix_radius: list[int] = [0]
+
+
+@dataclass(frozen=True, slots=True)
+class InverseDigitsLatent:
+    """A label-free inverse Digits latent sampled from the renderer prior."""
+
+    identity: int
+    x_translation: float
+    y_translation: float
+    scale: float
+    shear: float
+    stroke_width: float
+
+    def __post_init__(self) -> None:
+        if type(self.identity) is not int or not 0 <= self.identity < _volume_class_digit_count:
+            raise ObservationGenerationError("inverse digit identity is outside the prior")
+        for name, value in self.to_nuisance_record().items():
+            if not isinstance(value, float) or not math.isfinite(value):
+                raise ObservationGenerationError(f"inverse digit {name} must be finite")
+
+    def to_nuisance_tuple(self) -> tuple[float, float, float, float, float]:
+        return (
+            self.x_translation,
+            self.y_translation,
+            self.scale,
+            self.shear,
+            self.stroke_width,
+        )
+
+    def to_nuisance_record(self) -> dict[str, float]:
+        return {
+            "x_translation": self.x_translation,
+            "y_translation": self.y_translation,
+            "scale": self.scale,
+            "shear": self.shear,
+            "stroke_width": self.stroke_width,
+        }
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "kind": "digits-inverse-latent",
+            "identity": self.identity,
+            "nuisance": self.to_nuisance_record(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InverseDigitsObservationBatch:
+    """Private inverse-Digits evaluation batch plus its public submission view."""
+
+    observations: Any
+    latents: tuple[InverseDigitsLatent, ...]
+    canvas_side: int
+    secret_digest: str
+
+    def submission_view(self) -> Mapping[str, object]:
+        return {
+            "kind": "digits-inverse-submission-view",
+            "observation_count": len(self.latents),
+            "canvas_side": self.canvas_side,
+            "observation_shape": [int(axis) for axis in self.observations.shape],
+            "law_id": "benchmarks.digits.inverse-renderer@0.1.0",
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -2321,6 +2392,284 @@ def _digits_tensor_program(
             _batch_render_curve_sample_count,
         ),
     )
+
+
+def new_inverse_digits_secret(*, byte_count: int = 32) -> bytes:
+    """Return a physical-entropy secret for inverse-Digits evaluation batches."""
+
+    if type(byte_count) is not int or byte_count < 16:
+        raise ObservationGenerationError("inverse digits secret must have at least 128 bits")
+    return os.urandom(byte_count)
+
+
+def sample_inverse_digits_observations(
+    *,
+    runtime: TensorRuntime,
+    secret: bytes,
+    sample_count: int,
+    canvas_side: int = _render_unit_side,
+    sample_indices: Sequence[int] | None = None,
+) -> InverseDigitsObservationBatch:
+    """Sample secret-seeded inverse-Digits observations without exposing latents."""
+
+    if len(secret) < 16:
+        raise ObservationGenerationError("inverse digits secret must have at least 128 bits")
+    if type(sample_count) is not int or sample_count < 1:
+        raise ObservationGenerationError("sample_count must be a positive integer")
+    if type(canvas_side) is not int or canvas_side < _render_unit_side:
+        raise ObservationGenerationError("canvas_side must be at least the render unit side")
+    indices = _sample_indices(sample_count=sample_count, sample_indices=sample_indices)
+    latents = tuple(
+        _inverse_digits_latent_from_secret(secret, sample_index=index)
+        for index in indices
+    )
+    observations = render_inverse_digits(
+        runtime=runtime,
+        latents=latents,
+        canvas_side=canvas_side,
+    )
+    return InverseDigitsObservationBatch(
+        observations=observations,
+        latents=latents,
+        canvas_side=canvas_side,
+        secret_digest=hashlib.sha256(secret).hexdigest(),
+    )
+
+
+def render_inverse_digits(
+    *,
+    runtime: TensorRuntime,
+    latents: Sequence[InverseDigitsLatent],
+    canvas_side: int = _render_unit_side,
+) -> Any:
+    """Render inverse-Digits latents through the differentiable forward law."""
+
+    normalized_latents = tuple(latents)
+    if not normalized_latents:
+        raise ObservationGenerationError("inverse digits rendering requires latents")
+    if type(canvas_side) is not int or canvas_side < _render_unit_side:
+        raise ObservationGenerationError("canvas_side must be at least the render unit side")
+    identities = tuple(latent.identity for latent in normalized_latents)
+    nuisance_values = tuple(
+        value for latent in normalized_latents for value in latent.to_nuisance_tuple()
+    )
+    return tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(
+            shape=(len(normalized_latents), 1, canvas_side, canvas_side),
+            dtype="float32",
+            program=_inverse_digits_tensor_program(
+                identities=identities,
+                nuisance_values=nuisance_values,
+                canvas_side=canvas_side,
+            ),
+        ),
+    )
+
+
+def _inverse_digits_latent_from_secret(
+    secret: bytes,
+    *,
+    sample_index: int,
+) -> InverseDigitsLatent:
+    digest = hashlib.sha256(
+        b"leibniz-digits-inverse-latent-v1:" + secret + sample_index.to_bytes(8, "big")
+    ).digest()
+    identity = digest[0] % _volume_class_digit_count
+    uniforms = tuple(_digest_unit_interval(digest, offset) for offset in range(1, 6))
+    return InverseDigitsLatent(
+        identity=identity,
+        x_translation=_affine_interval(uniforms[0], -0.16, 0.16),
+        y_translation=_affine_interval(uniforms[1], -0.16, 0.16),
+        scale=_affine_interval(uniforms[2], 0.72, 1.18),
+        shear=_affine_interval(uniforms[3], -0.18, 0.18),
+        stroke_width=_affine_interval(uniforms[4], 0.75, 1.35),
+    )
+
+
+def _digest_unit_interval(digest: bytes, offset: int) -> float:
+    start = 1 + offset * 4
+    return int.from_bytes(digest[start : start + 4], "big") / float(2**32)
+
+
+def _affine_interval(value: float, lower: float, upper: float) -> float:
+    return lower + value * (upper - lower)
+
+
+def _inverse_digits_tensor_program(
+    *,
+    identities: tuple[int, ...],
+    nuisance_values: tuple[float, ...],
+    canvas_side: int,
+) -> TensorBatchProgram:
+    component_count = len(_digit_strokes)
+    max_mark_count = max(len(strokes) for strokes in _digit_strokes)
+    component_mark_counts: list[int] = []
+    component_control_points: list[list[list[list[float]]]] = []
+    for strokes in _digit_strokes:
+        control_points: list[list[list[float]]] = []
+        for points in strokes:
+            controls = _curve_control_points(points)
+            control_points.append([[point[0], point[1]] for point in controls])
+        component_mark_counts.append(len(control_points))
+        while len(control_points) < max_mark_count:
+            control_points.append([[0.0, 0.0] for _ in range(3)])
+        component_control_points.append(control_points)
+
+    def element_function(
+        coordinates: tuple[Any, ...],
+        *,
+        ops: Any,
+        identity_values: Any,
+        nuisance_values: Any,
+        component_mark_counts: Any,
+        component_control_points: Any,
+        segment_start_t: Any,
+        image_side: Any,
+    ) -> Any:
+        sample_axis_index, _channel_index, y_index, x_index = coordinates
+        identity = identity_values[sample_axis_index]
+        nuisance = nuisance_values[sample_axis_index]
+        x_center = (x_index.reshape((1, 1, 1, -1)) + 0.5) / image_side
+        y_center = (y_index.reshape((1, 1, -1, 1)) + 0.5) / image_side
+        x_translation = nuisance[:, 0].reshape((-1, 1))
+        y_translation = nuisance[:, 1].reshape((-1, 1))
+        scale = nuisance[:, 2].reshape((-1, 1))
+        shear = nuisance[:, 3].reshape((-1, 1))
+        stroke_width = nuisance[:, 4].reshape((-1, 1, 1, 1))
+        value = ops.broadcast_zeros(coordinates)
+        mark_count = component_mark_counts[identity]
+        base_width = (3.0 / float(canvas_side)) * stroke_width
+        for mark_slot in range(max_mark_count):
+            active_mark = mark_slot < mark_count.reshape((-1, 1, 1, 1))
+            segment_end_t = segment_start_t + (
+                1.0 / float(_batch_render_curve_sample_count - 1)
+            )
+            raw_sx = _quadratic_tensor_point(
+                component_control_points,
+                identity,
+                mark_slot,
+                0,
+                segment_start_t,
+            )
+            raw_sy = _quadratic_tensor_point(
+                component_control_points,
+                identity,
+                mark_slot,
+                1,
+                segment_start_t,
+            )
+            raw_ex = _quadratic_tensor_point(
+                component_control_points,
+                identity,
+                mark_slot,
+                0,
+                segment_end_t,
+            )
+            raw_ey = _quadratic_tensor_point(
+                component_control_points,
+                identity,
+                mark_slot,
+                1,
+                segment_end_t,
+            )
+            sx = 0.5 + scale * (raw_sx - 0.5) + shear * (raw_sy - 0.5) + x_translation
+            sy = 0.5 + scale * (raw_sy - 0.5) + y_translation
+            ex = 0.5 + scale * (raw_ex - 0.5) + shear * (raw_ey - 0.5) + x_translation
+            ey = 0.5 + scale * (raw_ey - 0.5) + y_translation
+            sx = sx.reshape((sx.shape[0], sx.shape[1], 1, 1))
+            sy = sy.reshape((sy.shape[0], sy.shape[1], 1, 1))
+            ex = ex.reshape((ex.shape[0], ex.shape[1], 1, 1))
+            ey = ey.reshape((ey.shape[0], ey.shape[1], 1, 1))
+            dx = ex - sx
+            dy = ey - sy
+            length_squared = dx * dx + dy * dy
+            safe_length_squared = length_squared.where(
+                length_squared != 0.0,
+                length_squared * 0.0 + 1.0,
+            )
+            segment_t = ((x_center - sx) * dx + (y_center - sy) * dy) / safe_length_squared
+            segment_t = segment_t.clamp(0.0, 1.0)
+            closest_x = sx + segment_t * dx
+            closest_y = sy + segment_t * dy
+            distance_squared = (
+                (x_center - closest_x) * (x_center - closest_x)
+                + (y_center - closest_y) * (y_center - closest_y)
+            )
+            distance_squared = distance_squared.min(dim=1).values.reshape(
+                (-1, 1, y_index.shape[0], x_index.shape[0])
+            )
+            width = base_width.reshape((-1, 1, 1, 1))
+            contribution = (-distance_squared / (width * width + 1.0e-8)).exp()
+            value = value.maximum(active_mark * contribution)
+        return value.clamp(0.0, 1.0)
+
+    return TensorBatchProgram(
+        kernel=element_function,
+        parameters={
+            "identity_values": TensorElementParameter(
+                dtype="int64",
+                shape=(len(identities),),
+                values=identities,
+                dynamic_axes=(0,),
+            ),
+            "nuisance_values": TensorElementParameter(
+                dtype="float32",
+                shape=(len(identities), 5),
+                values=nuisance_values,
+                dynamic_axes=(0,),
+            ),
+            "component_mark_counts": TensorElementParameter(
+                dtype="int64",
+                shape=(component_count,),
+                values=tuple(component_mark_counts),
+            ),
+            "component_control_points": TensorElementParameter(
+                dtype="float32",
+                shape=(component_count, max_mark_count, 3, 2),
+                values=tuple(
+                    value
+                    for component in component_control_points
+                    for mark in component
+                    for point in mark
+                    for value in point
+                ),
+            ),
+            "segment_start_t": TensorElementParameter(
+                dtype="float32",
+                shape=(_batch_render_curve_sample_count - 1,),
+                values=tuple(
+                    index / float(_batch_render_curve_sample_count - 1)
+                    for index in range(_batch_render_curve_sample_count - 1)
+                ),
+            ),
+            "image_side": TensorElementParameter(
+                dtype="float32",
+                shape=(),
+                values=(float(canvas_side),),
+            ),
+        },
+        cache_key=(
+            "digits-inverse-renderer",
+            component_count,
+            max_mark_count,
+            _batch_render_curve_sample_count,
+        ),
+    )
+
+
+def _curve_control_points(
+    points: _CurvePoints,
+) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
+    if len(points) == 3:
+        return (points[0], points[1], points[2])
+    if len(points) == 2:
+        midpoint = (
+            (points[0][0] + points[1][0]) / 2.0,
+            (points[0][1] + points[1][1]) / 2.0,
+        )
+        return (points[0], midpoint, points[1])
+    raise TensorRuntimeError("Digits inverse renderer requires linear or quadratic curves")
 
 
 def _resolution_sampling(layout: Mapping[str, object] | None) -> _ResolutionSampling | None:
