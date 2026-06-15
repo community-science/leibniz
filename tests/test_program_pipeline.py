@@ -324,6 +324,32 @@ def test_program_checkpoint_evaluation_materializes_ks_result_view(tmp_path: Pat
     assert math.isfinite(cast(float, point["predictability_boundary"]))
     assert "program_digest" in leaderboard[0]
     assert "program_graph" in plot_runs[0]
+    sections = cast(
+        list[dict[str, object]],
+        cast(dict[str, object], plot_runs[0]["console_view_model"])["detail_sections"],
+    )
+    section_titles = [section["title"] for section in sections]
+    assert "Competence Diagnostics" in section_titles
+    assert "Competence Time Points" in section_titles
+    diagnostics_section = next(
+        section for section in sections if section["title"] == "Competence Diagnostics"
+    )
+    diagnostic_entries = {
+        entry["label"]: entry["value"]
+        for entry in cast(list[dict[str, str]], diagnostics_section["entries"])
+    }
+    assert diagnostic_entries["Status"] in {
+        "certified",
+        "refused-amplification-growing",
+        "refused-missing-refinement-ladder",
+    }
+    assert diagnostic_entries["Certified Epsilon"] != "unknown"
+    time_section = next(
+        section for section in sections if section["title"] == "Competence Time Points"
+    )
+    time_table = cast(dict[str, object], time_section["table"])
+    assert "Certified Epsilon" in cast(list[str], time_table["columns"])
+    assert cast(list[list[str]], time_table["rows"])
 
 
 def test_cli_benchmark_train_accepts_program_flag(
