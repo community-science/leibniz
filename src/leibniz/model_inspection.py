@@ -999,7 +999,7 @@ def _program_node_evidence_records(
             ),
             evidence_artifacts=evidence_artifacts,
         )
-        for component in components
+        for component in sorted(components, key=lambda component: component.kind)
     )
 
 

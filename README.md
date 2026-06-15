@@ -156,37 +156,36 @@ Hugging Face account, prepare the same local result directory and use
 leibniz benchmark init --local-only
 ```
 
-Run the canonical reference trainer against an explicit architecture:
+Run the canonical reference trainer against an explicit submitted program:
 
 ```bash
 leibniz benchmark train \
   digits \
-  --architecture tests/fixtures/architecture/digits_pool.json
+  --program tests/fixtures/programs/digits_pool.py
 ```
 
 Run the same reference trainer against the variable-resolution KS prediction
-benchmark with a scale-contract architecture:
+benchmark with a submitted timestepper program:
 
 ```bash
 leibniz benchmark train \
   ks \
-  --architecture tests/fixtures/architecture/ks_variable_conv.json
+  --program tests/fixtures/programs/ks_variable_conv.py
 ```
 
 `benchmark train` is a reference implementation for local benchmark training and
-evaluation. It trains supplied architecture manifests and does not propose or
-choose architectures. `--architecture` may be repeated and may name either a
-manifest file or a directory. When omitted, `benchmark train` discovers
-architecture manifests under `results/training/<benchmark>/pending/`, skips
-manifests whose deterministic completed training summary already exists for the
-active benchmark and training controls, sequentially trains the remaining
-manifests, and then moves completed queue entries to the sibling
-`completed/` directory. `benchmark train digits` narrows training to the Digits
-benchmark, and omitting the benchmark name scans all local benchmarks. The
-command accepts repeated `--benchmark-root` arguments and otherwise resolves
-packaged benchmark roots by benchmark id. The default local training profile is
-an uncapped convergence run with the hyperparameter-free `loss-search`
-optimizer:
+evaluation. It trains supplied submitted program graphs and does not propose or
+choose models. `--program` may be repeated and may name either a Python source
+file exposing `build_program_graph(runtime)` or a directory of such files. When
+omitted, `benchmark train` discovers queued program sources under
+`results/programs/<benchmark>/pending/`, skips programs whose deterministic
+completed training summary already exists for the active benchmark and training
+controls, and sequentially trains the remaining programs. `benchmark train
+digits` narrows training to the Digits benchmark, and omitting the benchmark
+name scans all local benchmarks. The command accepts repeated `--benchmark-root`
+arguments and otherwise resolves packaged benchmark roots by benchmark id. The
+default local training profile is an uncapped convergence run with the
+hyperparameter-free `loss-search` optimizer:
 competence gates are checked every 32 steps, every gate check updates the
 running progress record, model checkpoint artifacts are written every gate
 check, patience is 6 gate checks, and convergence min delta is `1e-3`.
@@ -200,12 +199,11 @@ height and width. Observation formation now derives the lower canvas floor from
 generic component discriminability analysis rather than a fixed pixel extent per
 digit; the benchmark manifest declares the scalar discriminability margin used
 by that live analysis. Spatial variation is sampled as affine matrix
-coordinates inside the benchmark-owned identity-preserving envelope. Candidate
-architectures must therefore accept variable spatial input shapes, for example
-by using adaptive pooling before any fixed readout. Fixed `input_shape`-only
-architectures are rejected for sampled digits runs because later training
-batches may have different canvas dimensions than the validation batch used
-during initial inspection.
+coordinates inside the benchmark-owned identity-preserving envelope. Submitted
+classification programs must therefore accept the observation tensor shape
+declared by their program graph. Prediction programs can declare symbolic
+support axes, allowing one program family to run against variable-size
+field-valued tasks such as KS without a benchmark-specific model name.
 
 Digits is a single-label finite-outcome benchmark. The task contract is to
 predict which one of the ten digit identities is visible in the observation.
@@ -233,14 +231,14 @@ with a fresh unpredictable evaluation seed; those evaluation records are written
 under `results/evaluations/` and replace matching tentative points as the
 accepted local benchmark records consumed by the console. Each accepted
 evaluation is a self-contained benchmark evaluation bundle: it embeds the
-benchmark manifest, architecture manifest, model manifest, checkpoint artifact
+benchmark manifest, submitted program graph, model manifest, checkpoint artifact
 record, model inspection, measurement dataset, score view, sampled competence
 record, evaluation protocol, evaluation curriculum, seed, and throughput.
 `benchmark evaluate` accepts an explicit `--checkpoint-artifact`; when omitted,
 it discovers selected checkpoint artifact sidecars from local training summaries
 under `results/training/` and evaluates completed training runs whose matching
-checkpoints do not already have accepted evaluation bundles. Pending queue
-manifests and in-progress training records are ignored by evaluation discovery.
+checkpoints do not already have accepted evaluation bundles. Pending program
+sources and in-progress training records are ignored by evaluation discovery.
 `benchmark evaluate digits` narrows evaluation to the Digits benchmark, and
 omitting the benchmark name scans all local benchmarks. The command accepts
 repeated `--benchmark-root` arguments and otherwise resolves packaged benchmark
@@ -249,8 +247,8 @@ and written per benchmark under
 `results/views/<benchmark>/benchmark_results.json`. The console exposes a
 single vertical `Score` axis, accepted directly from the evaluation harness.
 
-Remove generated local benchmark state while keeping the architecture manifest
-suite and result checkout scaffolding:
+Remove generated local benchmark state while keeping submitted programs and
+result checkout scaffolding:
 
 ```bash
 leibniz benchmark clean
