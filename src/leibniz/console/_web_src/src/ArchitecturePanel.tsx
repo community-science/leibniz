@@ -255,7 +255,13 @@ const ROOTS: RootTree[] = [
             level: 3,
             kind: 'add',
             tag: 'measured ruler',
-            text: '$\\varepsilon$ is not declared. It is the Richardson field error $\\varepsilon_{field}$ on the finest gated rung. The field benchmark now scores the contiguous time prefix where the convergence gate holds, so the predictability boundary is measured rather than chosen.',
+            text: '$\\varepsilon$ is not declared and there is no gate. It is the residual-certified distance to a solution of the law: $\\varepsilon(t) = \\sum_{s<t} G(s\\to t)\\,\\lVert r(s)\\rVert\\,dt$, where $r$ is the law residual and $G$ is the leading operator-norm amplification of the law linearized about the submitted trajectory itself (oracle-free). Validated bits are continuous in $\\varepsilon$, and the predictability boundary emerges where the certified bits reach zero.',
+          },
+          {
+            level: 3,
+            kind: 'add',
+            tag: 'the metric is the law geometry',
+            text: 'The residual, the certified $\\varepsilon$, and the bit count all live in one metric: the geometry the law itself induces through its entropy or energy/Lyapunov functional, derived from the equation rather than declared. It is $L^2$ for a dissipative law like KS and the entropy metric for a conservation law; certification is amplification when no monotone functional exists and functional dissipation when one does. The derived functional is itself verified, not trusted.',
           },
           {
             level: 3,
@@ -267,10 +273,10 @@ const ROOTS: RootTree[] = [
             level: 4,
             kind: 'horizon',
             tag: 'open',
-            text: 'Open rungs remain: the IC distribution is provisional, the spatial ladder is fixed-depth rather than swept to its own boundary, the observed-order tolerance and rung count are still decision parameters, and the next PR needs a program that actually climbs the boundary.',
+            text: 'Open rungs remain: the IC distribution is provisional; the certified $\\varepsilon$ uses the leading-amplification estimator, the smooth and chaotic-dynamics instance of a general law-induced one (entropy stability for shock-forming conservation laws is the harder case); and a submitted program that climbs a deep boundary is still wanted. The retired-gate observed-order tolerance and rung-count parameters are gone.',
           },
         ],
-        verdict: { tone: 'partial', text: 'Implemented for field predictability scoring; the statistical gate and program frontier remain open.' },
+        verdict: { tone: 'partial', text: 'Being rebuilt on continuous certified bits (#344): the binary gate is retired for a residual-certified distance in the law-induced metric, validated across five experiments; the general entropy-stability certification and a boundary-climbing program remain open.' },
       },
       {
         id: 'R-territory',
@@ -361,7 +367,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'locates it, justifies invariance',
-            text: 'It is an $\\varepsilon$-covering count under the declared metric, taken in the ambient space rather than the chart, so it does not change if you reparameterize. Independent axes multiply, which is why their bits add.',
+            text: 'It is an $\\varepsilon$-covering count under the metric the law itself induces — the geometry of its entropy or energy/Lyapunov functional, derived from the equation rather than declared — taken in the ambient space rather than the chart, so it does not change if you reparameterize. In that metric a smooth field and a shock are both finite information (a Fourier chart only made the shock look complex), and the count is of the field evolution above persistence. Independent axes multiply, which is why their bits add.',
           },
           {
             level: 2,
@@ -390,7 +396,7 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'the two entries',
-            text: 'Credit is validated bits: $N_{dof}\\log_2(\\sigma/\\varepsilon_{field})$ where $\\sigma$ is the field evolution scale beyond the initial condition and $\\varepsilon_{field}$ is the Richardson field error. Debit is the bits it took to describe and run the operator.',
+            text: 'Credit is validated bits: the ambient $\\varepsilon$-entropy of the field evolution above persistence, resolved to the residual-certified $\\varepsilon$ (continuous, no gate), replacing the earlier grid-degree-of-freedom count $N_{dof}\\log_2(\\sigma/\\varepsilon_{field})$. Debit is the bits it took to describe and run the operator.',
           },
           {
             level: 2,
@@ -473,7 +479,7 @@ const STEPS: RoadmapStep[] = [
     id: 'ladder',
     title: 'Refinement-ladder records and convergence-grounded scoring',
     outcome:
-      'Emit convergence diagnostics for the ladder, score field prediction as validated evolution bits over the measured predictability boundary, and surface the provisional gate parameters in diagnostics.',
+      'Emit convergence diagnostics for the ladder and score field prediction as continuous validated evolution bits resolved to the residual-certified precision, with the predictability boundary emerging where certified bits reach zero. The binary gate and its parameters are retired.',
   },
   {
     id: 'cost',
@@ -491,6 +497,12 @@ const STEPS: RoadmapStep[] = [
     id: 'bootstrap',
     title: 'Trusted-ground persistence',
     outcome: 'Carry convergent regions forward and certify newly reached ground by the agreement-on-overlap check.',
+  },
+  {
+    id: 'lawmetric',
+    title: 'Law-induced metric from typed equations',
+    outcome:
+      'Recognize the structural type of a benchmark equation from its typed symbols, and derive the stability functional it implies — hence the one metric used for both the ambient entropy and the certified error — instead of declaring it. The verifier-or-amplification form of certification falls out of the type, and the derived functional is itself verified.',
   },
   {
     id: 'reexpress',
