@@ -267,10 +267,10 @@ const ROOTS: RootTree[] = [
             level: 4,
             kind: 'horizon',
             tag: 'open',
-            text: 'Open rungs remain: the IC distribution is provisional, the spatial ladder is fixed-depth rather than swept to its own boundary, the observed-order tolerance and rung count are still decision parameters, and the next PR needs an architecture that actually climbs the boundary.',
+            text: 'Open rungs remain: the IC distribution is provisional, the spatial ladder is fixed-depth rather than swept to its own boundary, the observed-order tolerance and rung count are still decision parameters, and the next PR needs a program that actually climbs the boundary.',
           },
         ],
-        verdict: { tone: 'partial', text: 'Implemented for field predictability scoring; the statistical gate and architecture frontier remain open.' },
+        verdict: { tone: 'partial', text: 'Implemented for field predictability scoring; the statistical gate and program frontier remain open.' },
       },
       {
         id: 'R-territory',
@@ -425,7 +425,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'horizon',
             tag: 'open',
-            text: 'How you read description length off a program (compressed weights plus architecture, or a two-part code), and which reference language you measure it against, still needs defining.',
+            text: 'How you read description length off a program (compressed weights plus source, or a two-part code), and which reference language you measure it against, still needs defining.',
           },
           {
             level: 3,
@@ -537,7 +537,7 @@ function MathText({ children }: { children: string }) {
   );
 }
 
-export function ArchitecturePanel() {
+export function ProgramPanel() {
   const [maxLevel, setMaxLevel] = useState(4);
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(() => new Set());
   const [highlightRoot, setHighlightRoot] = useState<RootId | null>(null);
@@ -584,7 +584,7 @@ export function ArchitecturePanel() {
   return (
     <div className="architecture-panel">
       <header className="architecture-intro">
-        <h2>Architecture &mdash; adaptive precision tree</h2>
+        <h2>Program &mdash; adaptive precision tree</h2>
         <p>
           Every concept starts as a one-line gist; open it to go deeper a refinement at a time, until you reach the
           code that backs it (<span className="architecture-tag code">&#x27c2;</span>) or a question that is still open

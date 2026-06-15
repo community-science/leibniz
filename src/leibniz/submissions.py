@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
-from leibniz.architectures import ArchitectureManifest
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
@@ -26,7 +25,7 @@ _submission_package_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
         "benchmark_manifest": FieldSpec(kind="record"),
-        "architecture_manifest": FieldSpec(kind="record"),
+        "program_graph": FieldSpec(kind="record"),
         "measurement_dataset": FieldSpec(kind="record"),
         "sampled_competence": FieldSpec(kind="record", required=False),
         "model_metadata": FieldSpec(kind="record", required=False),
@@ -97,7 +96,7 @@ class SubmissionPackageManifest:
 
     id: ProtocolIdentifier
     benchmark_manifest: BenchmarkManifest
-    architecture_manifest: ArchitectureManifest
+    program_graph: Mapping[str, object]
     measurement_dataset: MeasurementDataset
     sampled_competence: Mapping[str, object] | None = None
     model_metadata: Mapping[str, object] | None = None
@@ -137,9 +136,7 @@ class SubmissionPackageManifest:
             benchmark_manifest = BenchmarkManifest.from_record(
                 _extract.mapping(validated["benchmark_manifest"], "benchmark_manifest")
             )
-            architecture_manifest = ArchitectureManifest.from_record(
-                _extract.mapping(validated["architecture_manifest"], "architecture_manifest")
-            )
+            program_graph = _extract.mapping(validated["program_graph"], "program_graph")
             measurement_dataset = MeasurementDataset.from_record(
                 _extract.mapping(validated["measurement_dataset"], "measurement_dataset")
             )
@@ -160,7 +157,7 @@ class SubmissionPackageManifest:
         return cls(
             id=_extract.identifier(validated["id"], "id"),
             benchmark_manifest=benchmark_manifest,
-            architecture_manifest=architecture_manifest,
+            program_graph=program_graph,
             measurement_dataset=measurement_dataset,
             sampled_competence=sampled_competence,
             model_metadata=model_metadata,
@@ -175,7 +172,7 @@ class SubmissionPackageManifest:
         record: dict[str, object] = {
             "id": str(self.id),
             "benchmark_manifest": self.benchmark_manifest.to_record(),
-            "architecture_manifest": self.architecture_manifest.to_record(),
+            "program_graph": dict(self.program_graph),
             "measurement_dataset": self.measurement_dataset.to_record(),
         }
         if self.sampled_competence is not None:

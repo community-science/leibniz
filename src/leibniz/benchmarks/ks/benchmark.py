@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import cmath
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ from typing import Any, cast
 
 from leibniz.benchmark_implementations import RawBenchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
+from leibniz.field_evolution import field_stepper_trajectory
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.observation_generation import (
     GeneratedSample,
@@ -43,11 +43,8 @@ from leibniz.tensor_runtime import (
     TensorElementParameter,
     TensorElementRecipe,
     TensorRuntime,
-    TensorSolverProgram,
     resolve_host_tensor_runtime,
-    tensor_runtime_concat,
     tensor_runtime_construct_tensor,
-    tensor_runtime_solve_tensor_trajectory,
 )
 from leibniz.timing import TimingCollector
 
@@ -179,31 +176,6 @@ class Benchmark:
             return _ks_convergence_resolved_bits(request)
 
         return competence
-
-    def reference_trajectory(
-        self,
-        *,
-        runtime: TensorRuntime,
-        sample_count: int,
-        seed: int,
-        sample_indices: tuple[int, ...],
-        window: int,
-        spatial_points: int | None = None,
-        horizon: float = _horizon,
-        time_count: int = _time_count,
-    ) -> Any:
-        resolved_spatial_points = _spatial_points(spatial_points)
-        return _ks_reference_trajectory(
-            runtime=runtime,
-            sample_count=sample_count,
-            seed=seed,
-            sample_indices=sample_indices,
-            window=window,
-            spatial_points=resolved_spatial_points,
-            horizon=horizon,
-            time_count=time_count,
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class Generator:
@@ -465,49 +437,6 @@ def _ks_tensors(
     return fields, targets
 
 
-def _ks_reference_trajectory(
-    *,
-    runtime: TensorRuntime,
-    sample_count: int,
-    seed: int,
-    sample_indices: tuple[int, ...],
-    window: int,
-    spatial_points: int = _default_space_count,
-    horizon: float = _horizon,
-    time_count: int = _time_count,
-) -> Any:
-    if time_count < 2:
-        raise ValueError("KS reference trajectory requires at least two time samples")
-    if not math.isfinite(horizon) or horizon <= 0.0:
-        raise ValueError("KS reference trajectory horizon must be positive and finite")
-    time_step = horizon / float(time_count - 1)
-    return tensor_runtime_solve_tensor_trajectory(
-        runtime,
-        program=TensorSolverProgram(
-            initial_state=_ks_initial_program(
-                seed=seed,
-                sample_indices=sample_indices,
-                window=window,
-                spatial_points=spatial_points,
-            ),
-            step_kernel=_ks_step_kernel,
-            step_count=time_count - 1,
-            parameters=_ks_solver_parameters(
-                spatial_points=spatial_points,
-                time_step=time_step,
-            ),
-            dtype="float64",
-            cache_key=(
-                "ks-reference-etdrk4-step",
-                spatial_points,
-                time_count,
-                time_step,
-            ),
-        ),
-        shape=(sample_count, 1, spatial_points),
-    )
-
-
 def _ks_initial_fields(
     *,
     runtime: TensorRuntime,
@@ -592,125 +521,6 @@ def _ks_initial_parameters(
     }
 
 
-def _ks_solver_parameters(
-    *,
-    spatial_points: int = _default_space_count,
-    time_step: float | None = None,
-) -> dict[str, TensorElementParameter]:
-    frequencies = tuple(
-        index if index <= spatial_points // 2 else index - spatial_points
-        for index in range(spatial_points)
-    )
-    wave_numbers = tuple(2.0 * math.pi * frequency / _box_length for frequency in frequencies)
-    dt = _horizon / (_time_count - 1) if time_step is None else time_step
-    linear_values = tuple(
-        (wave_number * wave_number) - (wave_number**4)
-        for wave_number in wave_numbers
-    )
-    linear_factors = tuple(complex(math.exp(dt * value), 0.0) for value in linear_values)
-    half_linear_factors = tuple(
-        complex(math.exp(0.5 * dt * value), 0.0) for value in linear_values
-    )
-    coefficient_rows = tuple(
-        _etdrk4_coefficients(value, dt=dt)
-        for value in linear_values
-    )
-    q_coefficients = tuple(row[0] for row in coefficient_rows)
-    f1_coefficients = tuple(row[1] for row in coefficient_rows)
-    f2_coefficients = tuple(row[2] for row in coefficient_rows)
-    f3_coefficients = tuple(row[3] for row in coefficient_rows)
-    derivative_coefficients = tuple(complex(0.0, wave_number) for wave_number in wave_numbers)
-    dealias_mask = tuple(
-        1.0 if abs(frequency) <= spatial_points // 3 else 0.0
-        for frequency in frequencies
-    )
-    return {
-        "linear_factors": TensorElementParameter(
-            dtype="complex128",
-            shape=(spatial_points,),
-            values=linear_factors,
-        ),
-        "half_linear_factors": TensorElementParameter(
-            dtype="complex128",
-            shape=(spatial_points,),
-            values=half_linear_factors,
-        ),
-        "q_coefficients": TensorElementParameter(
-            dtype="complex128",
-            shape=(spatial_points,),
-            values=q_coefficients,
-        ),
-        "f1_coefficients": TensorElementParameter(
-            dtype="complex128",
-            shape=(spatial_points,),
-            values=f1_coefficients,
-        ),
-        "f2_coefficients": TensorElementParameter(
-            dtype="complex128",
-            shape=(spatial_points,),
-            values=f2_coefficients,
-        ),
-        "f3_coefficients": TensorElementParameter(
-            dtype="complex128",
-            shape=(spatial_points,),
-            values=f3_coefficients,
-        ),
-        "derivative_coefficients": TensorElementParameter(
-            dtype="complex128",
-            shape=(spatial_points,),
-            values=derivative_coefficients,
-        ),
-        "dealias_mask": TensorElementParameter(
-            dtype="float64",
-            shape=(spatial_points,),
-            values=dealias_mask,
-        ),
-    }
-
-
-def _etdrk4_coefficients(
-    linear_value: float,
-    *,
-    dt: float,
-) -> tuple[complex, complex, complex, complex]:
-    roots = tuple(
-        complex(
-            math.cos(math.pi * ((index + 0.5) / 16.0)),
-            math.sin(math.pi * ((index + 0.5) / 16.0)),
-        )
-        for index in range(16)
-    )
-    lr_values = tuple(dt * linear_value + root for root in roots)
-    q = dt * sum((cmath.exp(lr / 2.0) - 1.0) / lr for lr in lr_values) / len(lr_values)
-    f1 = (
-        dt
-        * sum(
-            (-4.0 - lr + cmath.exp(lr) * (4.0 - (3.0 * lr) + (lr * lr)))
-            / (lr * lr * lr)
-            for lr in lr_values
-        )
-        / len(lr_values)
-    )
-    f2 = (
-        dt
-        * sum(
-            (2.0 + lr + cmath.exp(lr) * (-2.0 + lr)) / (lr * lr * lr)
-            for lr in lr_values
-        )
-        / len(lr_values)
-    )
-    f3 = (
-        dt
-        * sum(
-            (-4.0 - (3.0 * lr) - (lr * lr) + cmath.exp(lr) * (4.0 - lr))
-            / (lr * lr * lr)
-            for lr in lr_values
-        )
-        / len(lr_values)
-    )
-    return q, f1, f2, f3
-
-
 def _ks_initial_condition_kernel(
     coordinates: tuple[Any, ...],
     *,
@@ -745,77 +555,6 @@ def _ks_initial_condition_kernel(
         + (cosine_coefficients * (modes * spatial).cos())
     ).sum(dim=1, keepdim=True)
     return amplitude * field / energy
-
-
-def _ks_step_kernel(
-    state: Any,
-    ops: Any,
-    *,
-    linear_factors: Any,
-    half_linear_factors: Any,
-    q_coefficients: Any,
-    f1_coefficients: Any,
-    f2_coefficients: Any,
-    f3_coefficients: Any,
-    derivative_coefficients: Any,
-    dealias_mask: Any,
-) -> Any:
-    spectrum = ops.fft(state, axis=-1)
-    nonlinear_spectrum = _ks_nonlinear_spectrum(
-        spectrum,
-        ops,
-        derivative_coefficients=derivative_coefficients,
-        dealias_mask=dealias_mask,
-    )
-    half_linear = half_linear_factors.reshape((1, 1, -1))
-    q = q_coefficients.reshape((1, 1, -1))
-    a_spectrum = (half_linear * spectrum) + (q * nonlinear_spectrum)
-    a_nonlinear = _ks_nonlinear_spectrum(
-        a_spectrum,
-        ops,
-        derivative_coefficients=derivative_coefficients,
-        dealias_mask=dealias_mask,
-    )
-    b_spectrum = (half_linear * spectrum) + (q * a_nonlinear)
-    b_nonlinear = _ks_nonlinear_spectrum(
-        b_spectrum,
-        ops,
-        derivative_coefficients=derivative_coefficients,
-        dealias_mask=dealias_mask,
-    )
-    c_spectrum = (half_linear * a_spectrum) + (
-        q * ((2.0 * b_nonlinear) - nonlinear_spectrum)
-    )
-    c_nonlinear = _ks_nonlinear_spectrum(
-        c_spectrum,
-        ops,
-        derivative_coefficients=derivative_coefficients,
-        dealias_mask=dealias_mask,
-    )
-    next_spectrum = (
-        linear_factors.reshape((1, 1, -1)) * spectrum
-        + f1_coefficients.reshape((1, 1, -1)) * nonlinear_spectrum
-        + 2.0
-        * f2_coefficients.reshape((1, 1, -1))
-        * (a_nonlinear + b_nonlinear)
-        + f3_coefficients.reshape((1, 1, -1)) * c_nonlinear
-    )
-    return ops.real(ops.ifft(next_spectrum, axis=-1))
-
-
-def _ks_nonlinear_spectrum(
-    spectrum: Any,
-    ops: Any,
-    *,
-    derivative_coefficients: Any,
-    dealias_mask: Any,
-) -> Any:
-    state = ops.real(ops.ifft(spectrum, axis=-1))
-    gradient = ops.real(
-        ops.ifft(spectrum * derivative_coefficients.reshape((1, 1, -1)), axis=-1)
-    )
-    nonlinear_spectrum = ops.fft(-state * gradient, axis=-1)
-    return nonlinear_spectrum * dealias_mask.reshape((1, 1, -1))
 
 
 def _ks_residual_loss(predictions: Any, targets: Any) -> Any:
@@ -890,7 +629,7 @@ def _ks_prediction_ladder(request: Any) -> tuple[Any, ...]:
         )
         fields, _targets = generated.require_tensors()
         ladder.append(
-            _query_operator_trajectory(
+            field_stepper_trajectory(
                 runtime=request.runtime,
                 module=request.module,
                 fields=fields,
@@ -927,26 +666,6 @@ def _request_sample_identity(request: Any) -> tuple[tuple[int, ...], StateSpaceV
         tuple(sample_indices),
         StateSpaceVolumeRequest(minimum=float(window), maximum=float(window + 1)),
     )
-
-
-def _query_operator_trajectory(
-    *,
-    runtime: TensorRuntime,
-    module: Any,
-    fields: Any,
-    horizon: float,
-    time_count: int,
-) -> Any:
-    if time_count < 2:
-        raise ValueError("KS convergence trajectory requires at least two time samples")
-    states = [fields]
-    step = horizon / float(time_count - 1)
-    for index in range(1, time_count):
-        state = module(fields, step * index)
-        if tuple(state.shape) != tuple(fields.shape):
-            raise ValueError("KS convergence operator changed state shape")
-        states.append(state)
-    return tensor_runtime_concat(runtime, states, dim=1)
 
 
 def _request_horizon(request: Any) -> float:
@@ -1195,9 +914,9 @@ def _per_sample_richardson_field(
     safe_first = first_gap.clamp_min(numeric_floor)
     safe_second = second_gap.clamp_min(numeric_floor)
     observed_order = (safe_first / safe_second).log() / math.log(float(factor))
-    denominator = observed_order.mul(math.log(float(factor))).exp().sub(1.0).clamp_min(
-        numeric_floor
-    )
+    denominator = observed_order.mul(math.log(float(factor))).exp().sub(1.0)
+    fallback = (denominator <= numeric_floor).to(dtype=denominator.dtype)
+    denominator = denominator + (fallback * (1.0 - denominator))
     correction = (finest - current) / denominator.reshape((-1, 1, 1))
     error = correction.pow(2).mean(dim=(1, 2)).sqrt()
     return _PerSampleFieldEstimate(observed_order=observed_order, error=error)

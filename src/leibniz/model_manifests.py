@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from leibniz.architectures import ArchitectureManifest
 from leibniz.artifacts import (
     ArtifactReference,
     first_duplicate_reference,
@@ -32,13 +31,13 @@ _model_execution_family_record = RecordSpec(
     fields={
         "kind": FieldSpec(kind="string"),
         "runtime": FieldSpec(kind="string"),
-        "architecture_family": FieldSpec(kind="string"),
+        "program_family": FieldSpec(kind="string"),
     }
 )
 _model_artifact_manifest_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
-        "architecture": FieldSpec(kind="record"),
+        "program": FieldSpec(kind="record"),
         "interface": FieldSpec(kind="record"),
         "execution_family": FieldSpec(kind="record"),
         "model_artifacts": FieldSpec(
@@ -67,34 +66,33 @@ class ModelExecutionFamily:
 
     kind: str
     runtime: str
-    architecture_family: str
+    program_family: str
 
     def __post_init__(self) -> None:
         if not self.kind:
             raise ModelArtifactManifestValidationError("execution_family kind must be nonempty")
         if not self.runtime:
             raise ModelArtifactManifestValidationError("execution_family runtime must be nonempty")
-        if not self.architecture_family:
+        if not self.program_family:
             raise ModelArtifactManifestValidationError(
-                "execution_family architecture_family must be nonempty"
+                "execution_family program_family must be nonempty"
             )
-        if self.kind == "reference-runner-pytorch-sequential":
+        if self.kind == "submitted-program-graph":
             if self.runtime != "pytorch":
                 raise ModelArtifactManifestValidationError(
-                    "reference-runner-pytorch-sequential requires runtime pytorch"
+                    "submitted-program-graph requires runtime pytorch"
                 )
-            if self.architecture_family != "sequential-architecture-components":
+            if self.program_family != "open-node-program-graph":
                 raise ModelArtifactManifestValidationError(
-                    "reference-runner-pytorch-sequential requires "
-                    "architecture_family sequential-architecture-components"
+                    "submitted-program-graph requires program_family open-node-program-graph"
                 )
 
     @classmethod
-    def reference_runner_pytorch_sequential(cls) -> ModelExecutionFamily:
+    def submitted_program_graph(cls) -> ModelExecutionFamily:
         return cls(
-            kind="reference-runner-pytorch-sequential",
+            kind="submitted-program-graph",
             runtime="pytorch",
-            architecture_family="sequential-architecture-components",
+            program_family="open-node-program-graph",
         )
 
     @classmethod
@@ -106,14 +104,14 @@ class ModelExecutionFamily:
         return cls(
             kind=str(validated["kind"]),
             runtime=str(validated["runtime"]),
-            architecture_family=str(validated["architecture_family"]),
+            program_family=str(validated["program_family"]),
         )
 
     def to_record(self) -> dict[str, object]:
         return {
             "kind": self.kind,
             "runtime": self.runtime,
-            "architecture_family": self.architecture_family,
+            "program_family": self.program_family,
         }
 
 
@@ -122,7 +120,7 @@ class ModelArtifactManifest:
     """Durable metadata for a trained or submitted model artifact."""
 
     id: ProtocolIdentifier
-    architecture: ArtifactReference
+    program: ArtifactReference
     interface: ArtifactReference
     execution_family: ModelExecutionFamily
     model_artifacts: tuple[ArtifactReference, ...]
@@ -135,9 +133,9 @@ class ModelArtifactManifest:
             raise ModelArtifactManifestValidationError(str(error)) from error
         if not str(self.id.name).startswith("model-manifests."):
             raise ModelArtifactManifestValidationError("id must be a valid model manifest id")
-        if self.architecture.kind != "architecture-manifest":
+        if self.program.kind != "program-graph":
             raise ModelArtifactManifestValidationError(
-                "architecture reference must have kind architecture-manifest"
+                "program reference must have kind program-graph"
             )
         if self.interface.kind != "model-interface":
             raise ModelArtifactManifestValidationError(
@@ -173,7 +171,7 @@ class ModelArtifactManifest:
         cls,
         record: Mapping[str, object],
         *,
-        architecture_manifest: ArchitectureManifest | None = None,
+        program_record: Mapping[str, object] | None = None,
         model_interface: ModelInterface | None = None,
     ) -> ModelArtifactManifest:
         try:
@@ -193,8 +191,8 @@ class ModelArtifactManifest:
             raise ModelArtifactManifestValidationError(str(error)) from error
         manifest = cls(
             id=_record.identifier(validated["id"], "id"),
-            architecture=ArtifactReference.from_record(
-                _record.mapping(validated["architecture"], "architecture")
+            program=ArtifactReference.from_record(
+                _record.mapping(validated["program"], "program")
             ),
             interface=ArtifactReference.from_record(
                 _record.mapping(validated["interface"], "interface")
@@ -205,8 +203,8 @@ class ModelArtifactManifest:
             model_artifacts=model_artifacts,
             training_provenance=training_provenance,
         )
-        if architecture_manifest is not None:
-            manifest.validate_architecture(architecture_manifest)
+        if program_record is not None:
+            manifest.validate_program(program_record)
         if model_interface is not None:
             manifest.validate_interface(model_interface)
         return manifest
@@ -215,10 +213,10 @@ class ModelArtifactManifest:
     def digest(self) -> ContentDigest:
         return ContentDigest.from_value(self.to_record())
 
-    def validate_architecture(self, architecture_manifest: ArchitectureManifest) -> None:
-        if not self.architecture.matches_record(architecture_manifest.to_record()):
+    def validate_program(self, program_record: Mapping[str, object]) -> None:
+        if not self.program.matches_record(program_record):
             raise ModelArtifactManifestValidationError(
-                "architecture reference does not match architecture manifest"
+                "program reference does not match program graph"
             )
 
     def validate_interface(self, model_interface: ModelInterface) -> None:
@@ -230,7 +228,7 @@ class ModelArtifactManifest:
     def to_record(self) -> dict[str, object]:
         record: dict[str, object] = {
             "id": str(self.id),
-            "architecture": self.architecture.to_record(),
+            "program": self.program.to_record(),
             "interface": self.interface.to_record(),
             "execution_family": self.execution_family.to_record(),
             "model_artifacts": [artifact.to_record() for artifact in self.model_artifacts],
@@ -254,7 +252,7 @@ class ModelArtifactManifestDocument:
         cls,
         data: bytes,
         *,
-        architecture_manifest: ArchitectureManifest | None = None,
+        program_record: Mapping[str, object] | None = None,
         model_interface: ModelInterface | None = None,
     ) -> ModelArtifactManifestDocument:
         try:
@@ -263,9 +261,7 @@ class ModelArtifactManifestDocument:
             raise ModelArtifactManifestValidationError(str(error)) from error
         manifest = ModelArtifactManifest.from_record(
             record,
-            architecture_manifest=architecture_manifest,
+            program_record=program_record,
             model_interface=model_interface,
         )
         return cls(manifest=manifest, digest=manifest.digest)
-
-

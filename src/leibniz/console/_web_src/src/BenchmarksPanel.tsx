@@ -30,16 +30,7 @@ import type {
 } from './benchmarkTasks.ts';
 import type {
   ModelInspectionRecord,
-  ModelInspectionTraceStageRecord,
 } from './modelInspections.ts';
-import {
-  descriptorAxisDisplayName,
-  descriptorValueDisplayName,
-  operatorDisplayName,
-  parameterDisplayName,
-  syntaxAliasDisplayName,
-  type OperatorVocabularyRecord,
-} from './operatorVocabulary.ts';
 import { usePersistentState } from './persistentState.ts';
 import type {
   BenchmarkResultRecord,
@@ -53,7 +44,7 @@ import type {
 
 type SampleCardDensity = 'standard' | 'compact';
 type BenchmarkModelCandidate = BenchmarkResultRecord['model_candidates'][number];
-type ModelArtifactView = 'model' | 'architecture' | 'measurements' | 'training' | 'provenance';
+type ModelArtifactView = 'model' | 'program' | 'measurements' | 'training' | 'provenance';
 type ModelArtifactFlowItem = {
   icon: LucideIcon;
   label: string;
@@ -88,12 +79,10 @@ const modelValidationPlotBodyHeight =
 
 export function BenchmarksPanel({
   modelInspections,
-  operatorVocabulary,
   resultViews,
   tasks,
 }: {
   modelInspections: ModelInspectionRecord[];
-  operatorVocabulary: OperatorVocabularyRecord;
   resultViews: ResultViewRecord[];
   tasks: BenchmarkTaskRecord[];
 }) {
@@ -177,7 +166,6 @@ export function BenchmarksPanel({
             storageKey="leibniz.console.benchmarks.section.models.expanded"
           >
             <BenchmarkModelsPane
-              operatorVocabulary={operatorVocabulary}
               rows={modelRows}
               result={result}
               selectedModelKey={effectiveSelectedModelKey}
@@ -260,12 +248,10 @@ function emptyBenchmarkResult(benchmark: BenchmarkTaskRecord): BenchmarkResultRe
 }
 
 function BenchmarkModelsPane({
-  operatorVocabulary,
   rows,
   result,
   selectedModelKey,
 }: {
-  operatorVocabulary: OperatorVocabularyRecord;
   rows: ReturnType<typeof modelComparisonRows>;
   result: BenchmarkResultRecord | undefined;
   selectedModelKey: string;
@@ -284,7 +270,6 @@ function BenchmarkModelsPane({
               volumeAxis={result?.volume_axis}
               inspection={selectedRow.inspection}
               model={selectedRow.model}
-              operatorVocabulary={operatorVocabulary}
               runs={runsForModel(result, selectedRow.model)}
             />
           )}
@@ -298,13 +283,11 @@ function BenchmarkModelInspector({
   volumeAxis,
   inspection,
   model,
-  operatorVocabulary,
   runs,
 }: {
   volumeAxis: string | undefined;
   inspection: ModelInspectionRecord | undefined;
   model: BenchmarkModelCandidate;
-  operatorVocabulary: OperatorVocabularyRecord;
   runs: RunResultRecord[];
 }) {
   const [artifactView, setArtifactView] = usePersistentState<ModelArtifactView>(
@@ -319,7 +302,7 @@ function BenchmarkModelInspector({
         </div>
         <div>
           <span>Model artifact</span>
-          <h3>{shortDigest(model.architecture_digest)}</h3>
+          <h3>{shortDigest(model.program_digest)}</h3>
           <code>{model.model_key}</code>
         </div>
       </header>
@@ -358,15 +341,15 @@ function BenchmarkModelInspector({
       {artifactView === 'measurements' ? (
         <ModelMeasurementDetail model={model} />
       ) : null}
-      {artifactView === 'architecture' ? (
+      {artifactView === 'program' ? (
         <>
-          <ModelArchitectureDetail
+          <ModelProgramDetail
             volumeAxis={volumeAxis}
             inspection={inspection}
             model={model}
           />
           <ModelCostDetail inspection={inspection} model={model} />
-          <ModelGraphOperations inspection={inspection} operatorVocabulary={operatorVocabulary} />
+          <ModelGraphOperations inspection={inspection} />
         </>
       ) : null}
       {artifactView === 'training' ? (
@@ -393,11 +376,11 @@ function ModelArtifactFlow({
   const items: ModelArtifactFlowItem[] = [
     {
       icon: PackageCheck,
-      label: 'Architecture',
+      label: 'Program',
       value: inspection === undefined
-        ? shortDigest(model.architecture_digest)
-        : referenceLabel(inspection.architecture),
-      view: 'architecture',
+        ? shortDigest(model.program_digest)
+        : referenceLabel(inspection.program),
+      view: 'program',
     },
     {
       icon: Boxes,
@@ -455,7 +438,7 @@ function ModelLineageGraph({
   runs: RunResultRecord[];
 }) {
   const inputNodes = [
-    lineageNode('input', 'architecture', model.architecture_digest),
+    lineageNode('input', 'program', model.program_digest),
     inspection?.measurement_dataset === undefined
       ? lineageNode('input', 'measurements', `${model.measurement_count} records`)
       : lineageNode('input', inspection.measurement_dataset.kind, referenceLabel(inspection.measurement_dataset)),
@@ -533,8 +516,8 @@ function ModelManifestDetail({
         <dd>{model.model_key}</dd>
         <dt>Benchmark</dt>
         <dd>{model.benchmark_id}</dd>
-        <dt>Architecture</dt>
-        <dd>{model.architecture_digest}</dd>
+        <dt>Program</dt>
+        <dd>{model.program_digest}</dd>
         <dt>Observed {volumeAxis ?? 'Volume (bits)'}</dt>
         <dd>{observedVolumeLabel(model)}</dd>
         <dt>Manifest</dt>
@@ -708,7 +691,7 @@ function formatBits(value: number): string {
   return `${formatMetricNumber(value)} bits`;
 }
 
-function ModelArchitectureDetail({
+function ModelProgramDetail({
   volumeAxis,
   inspection,
   model,
@@ -719,10 +702,10 @@ function ModelArchitectureDetail({
 }) {
   return (
     <section className="benchmark-model-detail-section">
-      <h4>Architecture</h4>
+      <h4>Program</h4>
       <dl className="benchmark-model-detail-grid">
         <dt>Digest</dt>
-        <dd>{model.architecture_digest}</dd>
+        <dd>{model.program_digest}</dd>
         <dt>Input</dt>
         <dd>{inspection === undefined ? 'unknown' : shapeLabel(inspection.input_shape)}</dd>
         <dt>Output</dt>
@@ -895,15 +878,15 @@ function ModelCostDetail({
         </div>
         <div>
           <dt>Graph Edges</dt>
-          <dd>{optionalNumberLabel(inspection?.architecture_summary.edge_count)}</dd>
+          <dd>{optionalNumberLabel(inspection?.program_graph.edges.length)}</dd>
         </div>
         <div>
           <dt>Graph Inputs</dt>
-          <dd>{optionalNumberLabel(inspection?.architecture_summary.input_count)}</dd>
+          <dd>{optionalNumberLabel(inspection?.program_graph.inputs.length)}</dd>
         </div>
         <div>
           <dt>Graph Outputs</dt>
-          <dd>{optionalNumberLabel(inspection?.architecture_summary.output_count)}</dd>
+          <dd>{optionalNumberLabel(inspection?.program_graph.outputs.length)}</dd>
         </div>
         <div>
           <dt>Model Size</dt>
@@ -926,14 +909,14 @@ function ModelCostDetail({
           <dt>Unknown Parameter Components</dt>
           <dd>
             {unknownComponentLabel(
-              inspection?.architecture_summary.unsupported_parameter_components,
+              inspection?.cost_summary.unknown_parameter_components,
             )}
           </dd>
         </div>
         <div>
           <dt>Unknown compute Components</dt>
           <dd>
-            {unknownComponentLabel(inspection?.architecture_summary.unsupported_cost_components)}
+            {unknownComponentLabel(inspection?.cost_summary.unknown_cost_components)}
           </dd>
         </div>
       </dl>
@@ -943,10 +926,8 @@ function ModelCostDetail({
 
 function ModelGraphOperations({
   inspection,
-  operatorVocabulary,
 }: {
   inspection: ModelInspectionRecord | undefined;
-  operatorVocabulary: OperatorVocabularyRecord;
 }) {
   if (inspection === undefined) {
     return (
@@ -960,39 +941,38 @@ function ModelGraphOperations({
     <section className="benchmark-model-detail-section">
       <h4>Graph Operations</h4>
       <div className="benchmark-model-operation-list">
-        {inspection.architecture_trace.stages.map((stage) => {
-          const component = inspection.components[stage.index];
-          const graphNode = inspection.architecture_graph.nodes[stage.index];
+        {inspection.program_graph.nodes.map((graphNode, index) => {
+          const component = inspection.components[index];
           return (
-            <article className="benchmark-model-operation" key={stage.index}>
+            <article className="benchmark-model-operation" key={graphNode.id}>
               <div className="benchmark-model-operation-heading">
-                <span>{graphNode?.id ?? stage.index}</span>
+                <span>{graphNode.id}</span>
                 <div>
-                  <strong>{operatorDisplayName(operatorVocabulary, stage.operator_kind)}</strong>
-                  <small>{syntaxAliasDisplayName(operatorVocabulary, stage.syntax_alias)}</small>
+                  <strong>{graphNode.kind}</strong>
+                  <small>{incomingEdgeLabel(inspection, graphNode.id)}</small>
                 </div>
               </div>
               <dl className="benchmark-model-operation-shape-grid">
                 <div>
-                  <dt>Input</dt>
-                  <dd>{shapeLabel(stage.input_shape)}</dd>
+                  <dt>Outgoing Edges</dt>
+                  <dd>{outgoingEdgeCount(inspection, graphNode.id)}</dd>
                 </div>
                 <div>
-                  <dt>Output</dt>
-                  <dd>{shapeLabel(stage.output_shape)}</dd>
+                  <dt>Parameters</dt>
+                  <dd>{Object.keys(graphNode.parameters ?? {}).length}</dd>
                 </div>
               </dl>
               <p className="benchmark-model-operation-config">
                 {component === undefined
                   ? 'none'
-                  : recordLabel(component.parameters, component.operator, operatorVocabulary)}
+                  : recordLabel(component.parameters)}
               </p>
-              {traceStageEntries(stage, operatorVocabulary).length === 0 ? null : (
+              {Object.entries(graphNode.parameters ?? {}).length === 0 ? null : (
                 <dl className="benchmark-model-operator-grid">
-                  {traceStageEntries(stage, operatorVocabulary).map(([key, value]) => (
+                  {Object.entries(graphNode.parameters ?? {}).map(([key, value]) => (
                     <div key={key}>
                       <dt>{key}</dt>
-                      <dd>{value}</dd>
+                      <dd>{parameterValueLabel(value)}</dd>
                     </div>
                   ))}
                 </dl>
@@ -1038,7 +1018,7 @@ function modelProvenanceReferences(
   inspection: ModelInspectionRecord,
 ): { label: string; reference: ArtifactReferenceRecord }[] {
   return [
-    referenceEntry('Architecture', inspection.architecture),
+    referenceEntry('Program', inspection.program),
     referenceEntry('Model manifest', inspection.model_manifest),
     referenceEntry('Submission package', inspection.submission_package),
     referenceEntry('Benchmark', inspection.benchmark_manifest),
@@ -1130,46 +1110,36 @@ function modelComponentCount(
   inspection: ModelInspectionRecord | undefined,
   model: BenchmarkModelCandidate,
 ): number {
-  return inspection?.architecture_summary.component_count ?? model.cost_summary.component_count;
+  return inspection?.components.length ?? model.cost_summary.component_count;
 }
 
 function unknownComponentLabel(components: number[] | undefined): string {
   return components === undefined || components.length === 0 ? 'none' : components.join(', ');
 }
 
-function traceStageEntries(
-  stage: ModelInspectionTraceStageRecord,
-  vocabulary: OperatorVocabularyRecord,
-): [string, string][] {
-  const descriptorEntry = (axis: string, value: string): [string, string] => [
-    descriptorAxisDisplayName(vocabulary, axis),
-    descriptorValueDisplayName(vocabulary, axis, value),
-  ];
-  return [
-    descriptorEntry('tensor_relation', stage.descriptor_axes.tensor_relation),
-    descriptorEntry('support', stage.descriptor_axes.support),
-    descriptorEntry('state', stage.descriptor_axes.state),
-    descriptorEntry('shape_law', stage.shape_law),
-    descriptorEntry('cost_law', stage.cost_law),
-  ].filter((entry): entry is [string, string] => entry[1] !== undefined && entry[1] !== '');
-}
-
 function recordLabel(
   record: Record<string, unknown>,
-  operator?: Record<string, unknown>,
-  vocabulary?: OperatorVocabularyRecord,
 ): string {
   const entries = Object.entries(record);
   if (entries.length === 0) {
     return 'none';
   }
-  const operatorKind = typeof operator?.kind === 'string' ? operator.kind : undefined;
   return entries
-    .map(
-      ([key, value]) =>
-        `${vocabulary === undefined ? key : parameterDisplayName(vocabulary, operatorKind, key)}: ${parameterValueLabel(value)}`,
-    )
+    .map(([key, value]) => `${key}: ${parameterValueLabel(value)}`)
     .join(', ');
+}
+
+function incomingEdgeLabel(inspection: ModelInspectionRecord, nodeId: string): string {
+  const incoming = inspection.program_graph.edges
+    .filter((edge) => edge.target_id === nodeId)
+    .sort((left, right) => left.target_input_index - right.target_input_index);
+  return incoming.length === 0
+    ? 'no graph inputs'
+    : incoming.map((edge) => `${edge.source_id} -> ${edge.target_input_index}`).join(', ');
+}
+
+function outgoingEdgeCount(inspection: ModelInspectionRecord, nodeId: string): number {
+  return inspection.program_graph.edges.filter((edge) => edge.source_id === nodeId).length;
 }
 
 function parameterValueLabel(value: unknown): string {

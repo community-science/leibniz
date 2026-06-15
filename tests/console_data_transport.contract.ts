@@ -1,148 +1,34 @@
 import { parseConsoleDataRecord } from '../src/leibniz/console/_web_src/src/consoleData.ts';
-import {
-  coordinateDisplayName,
-  descriptorAxisDisplayName,
-  descriptorValueDisplayName,
-  operatorDisplayName,
-  parameterDisplayName,
-  syntaxAliasDisplayName,
-} from '../src/leibniz/console/_web_src/src/operatorVocabulary.ts';
+import { coordinateDisplayName } from '../src/leibniz/console/_web_src/src/operatorVocabulary.ts';
 
 declare const consoleDataPayload: unknown;
 
 const parsed = parseConsoleDataRecord(consoleDataPayload);
 const rawConsoleData = consoleDataPayload as Record<string, unknown>;
-const modelInspection = parsed.model_inspections.find(
-  (inspection) => inspection.source_path === 'tests/fixtures/architecture/digits_pool.json',
-);
-if (modelInspection === undefined) {
-  throw new Error('expected model inspection fixture');
-}
 
 assertEqual(parsed.format, 'leibniz.console-data', 'format');
 assertEqual(parsed.format_version, 1, 'format version');
 assertEqual(parsed.artifact_index.format, 'leibniz.console.artifact-index', 'artifact index format');
 assertEqual(parsed.artifact_index.format_version, 1, 'artifact index format version');
-assertEqual(parsed.artifact_index.artifacts.length, 11, 'artifact index count');
-assertEqual(parsed.artifact_details.length, 11, 'artifact detail count');
+assertEqual(parsed.artifact_index.artifacts.length, 5, 'artifact index count');
+assertEqual(parsed.artifact_details.length, 5, 'artifact detail count');
 assertEqual(
   parsed.artifact_details.map((detail) => `${detail.kind}:${detail.source_path}`).join('|'),
   parsed.artifact_index.artifacts.map((artifact) => `${artifact.kind}:${artifact.source_path}`).join('|'),
   'artifact details align with artifact index',
 );
 assertEqual(parsed.result_views.length, 0, 'result view count');
-assertEqual(parsed.model_inspections.length, 6, 'model inspection count');
+assertEqual(parsed.model_inspections.length, 0, 'model inspection count');
 assertEqual(parsed.benchmark_tasks.length, 3, 'benchmark task count');
 assertEqual(
-  parsed.operator_vocabulary.operators.map((operator) => operator.kind).join(','),
-  'local-aggregation,local-affine,fixed-support-affine,rectified-linear-activation,rank-collapse,affine-readout',
+  parsed.operator_vocabulary.operators.length,
+  0,
   'operator vocabulary order',
 );
 assertEqual(
-  parsed.operator_vocabulary.program_effects.map((effect) => effect.kind).join(','),
-  'branch,merge,route,repeat,identity-path,parameter-sharing',
-  'program effect vocabulary order',
-);
-assertEqual(
-  operatorDisplayName(parsed.operator_vocabulary, 'local-aggregation'),
-  'Local aggregation',
-  'operator vocabulary operator display',
-);
-assertEqual(
-  syntaxAliasDisplayName(parsed.operator_vocabulary, 'adaptive-pooling'),
-  'Local aggregation',
-  'operator vocabulary syntax display',
-);
-assertEqual(
-  operatorDisplayName(parsed.operator_vocabulary, 'local-affine'),
-  'Local affine',
-  'operator vocabulary local affine display',
-);
-assertEqual(
-  syntaxAliasDisplayName(parsed.operator_vocabulary, 'convolution'),
-  'Local affine',
-  'operator vocabulary convolution syntax display',
-);
-assertEqual(
-  (parsed.operator_vocabulary.syntax_aliases.find((entry) => entry.alias === 'convolution')
-    ?.specialization as Record<string, unknown> | undefined)?.kind,
-  'local-affine',
-  'operator vocabulary convolution specialization',
-);
-assertEqual(
-  parameterDisplayName(parsed.operator_vocabulary, 'local-aggregation', 'size'),
-  'Output support size',
-  'operator vocabulary parameter display',
-);
-assertEqual(
-  descriptorValueDisplayName(parsed.operator_vocabulary, 'support', 'local-window'),
-  'Local window',
-  'operator vocabulary descriptor display',
-);
-assertEqual(
-  descriptorAxisDisplayName(parsed.operator_vocabulary, 'support'),
-  'Support',
-  'operator vocabulary descriptor axis display',
-);
-assertEqual(
   coordinateDisplayName(parsed.operator_vocabulary, 'operator.0.local_support_size'),
-  'Local support size',
+  'operator.0.local_support_size',
   'operator vocabulary coordinate display',
-);
-assertEqual(
-  modelInspection.cost_summary.parameter_count,
-  50,
-  'model inspection parameter count',
-);
-assertEqual(
-  modelInspection.cost_summary.storage_bytes,
-  200,
-  'model inspection storage bytes',
-);
-assertEqual(
-  modelInspection.cost_summary.inference_cost_measurement?.abstract_flops,
-  656,
-  'model inspection compute',
-);
-assertEqual(
-  modelInspection.components.map((component) => component.kind).join(','),
-  'adaptive-pooling,flatten,dense',
-  'model inspection components',
-);
-assertEqual(
-  modelInspection.components.map((component) => component.operator?.kind).join(','),
-  'local-aggregation,rank-collapse,affine-readout',
-  'model operator summaries',
-);
-assertEqual(
-  `${modelInspection.architecture_graph.nodes.length}:${modelInspection.architecture_graph.edges.length}`,
-  '3:2',
-  'model inspection architecture graph',
-);
-assertEqual(
-  `${modelInspection.architecture_summary.component_count}:${modelInspection.architecture_summary.edge_count}`,
-  '3:2',
-  'model inspection graph summary',
-);
-assertEqual(
-  modelInspection.architecture_summary.component_kinds.join(','),
-  'adaptive-pooling,flatten,dense',
-  'model inspection graph summary components',
-);
-assertEqual(
-  modelInspection.node_evidence.map((evidence) => evidence.node_path.join('/')).join(','),
-  'component-0,component-1,component-2',
-  'model inspection node evidence paths',
-);
-assertEqual(
-  modelInspection.architecture_trace.stages.map((stage) => stage.operator_kind).join(','),
-  'local-aggregation,rank-collapse,affine-readout',
-  'model architecture trace stages',
-);
-assertEqual(
-  modelInspection.architecture_trace.stages[0]?.descriptor_axes.support,
-  'local-window',
-  'model architecture trace support axis',
 );
 const benchmarkTask = parsed.benchmark_tasks.find(
   (task) => task.benchmark_id === 'benchmarks.digits@0.1.0',
@@ -437,7 +323,31 @@ assertDataError(
   () =>
     parseConsoleDataRecord({
       ...rawConsoleData,
-      model_inspections: [{ ...modelInspection, components: [{ index: '0' }] }],
+      model_inspections: [
+        {
+          components: [{ index: '0' }],
+          cost_summary: {
+            component_count: 1,
+            unknown_cost_components: [],
+            unknown_parameter_components: [],
+          },
+          id: 'invalid-program-inspection',
+          input_shape: [1],
+          model_artifacts: [],
+          node_evidence: [],
+          output_shape: [1],
+          program: { kind: 'program-graph', record_digest: 'sha256:invalid' },
+          program_graph: {
+            contract_kind: 'single-input-single-output',
+            edges: [],
+            inputs: [{ axes: [1], name: 'input' }],
+            nodes: [{ id: 'component-0', kind: 'identity', parameters: {} }],
+            outputs: [{ axes: [1], name: 'output' }],
+          },
+          source_path: 'tests/fixtures/programs/invalid.py',
+          training_provenance: [],
+        },
+      ],
     }),
   'model inspections.0.components.0.index: expected number',
 );

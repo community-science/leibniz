@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from leibniz.architectures import ArchitectureGraph, ArchitectureManifest
 from leibniz.artifacts import (
     ArtifactReference,
     first_duplicate_reference,
@@ -13,21 +12,12 @@ from leibniz.artifacts import (
     reference_sort_key,
 )
 from leibniz.content import ContentDigest
-from leibniz.cost_metrology import CostMeasurement, CostMetrologyError, estimate_program_cost
+from leibniz.cost_metrology import CostMeasurement
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.model_manifests import ModelArtifactManifest
-from leibniz.model_operators import ExecutableModelOperator, summarize_architecture_operators
+from leibniz.program_graphs import ProgramGraphSpec
 from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
-from leibniz.submissions import SubmissionPackageManifest
-from leibniz.tensor_runtime import (
-    OperationFallbackSequential,
-    TensorRuntimeError,
-    make_empty_float_tensor,
-    no_grad_context,
-    resolve_host_tensor_runtime,
-    runtime_roofline_record,
-)
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
@@ -133,14 +123,12 @@ _node_evidence_record = RecordSpec(
 _inspection_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
-        "architecture": FieldSpec(kind="record"),
+        "program": FieldSpec(kind="record"),
         "input_shape": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
         "output_shape": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
         "components": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
         "cost_summary": FieldSpec(kind="record"),
-        "architecture_trace": FieldSpec(kind="record"),
-        "architecture_graph": FieldSpec(kind="record"),
-        "architecture_summary": FieldSpec(kind="record"),
+        "program_graph": FieldSpec(kind="record"),
         "node_evidence": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
         "model_manifest": FieldSpec(kind="record", required=False),
         "submission_package": FieldSpec(kind="record", required=False),
@@ -641,25 +629,6 @@ class ModelInspectionGraphSummary:
         )
 
     @classmethod
-    def from_graph(
-        cls,
-        *,
-        graph: ArchitectureGraph,
-        cost_summary: ModelInspectionCostSummary,
-    ) -> ModelInspectionGraphSummary:
-        return cls(
-            component_count=len(graph.nodes),
-            edge_count=len(graph.edges),
-            input_count=len(graph.input_node_ids),
-            output_count=len(graph.output_node_ids),
-            input_node_ids=graph.input_node_ids,
-            output_node_ids=graph.output_node_ids,
-            component_kinds=tuple(node.component.kind for node in graph.nodes),
-            unsupported_parameter_components=cost_summary.unknown_parameter_components,
-            unsupported_cost_components=cost_summary.unknown_cost_components,
-        )
-
-    @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ModelInspectionGraphSummary:
         try:
             validated = _graph_summary_record.validate(record)
@@ -726,14 +695,12 @@ class ModelInspectionRecord:
     """A normalized read-only inspection record for public model artifacts."""
 
     id: ProtocolIdentifier
-    architecture: ArtifactReference
+    program: ArtifactReference
     input_shape: tuple[int, ...]
     output_shape: tuple[int, ...]
     components: tuple[ModelInspectionComponent, ...]
     cost_summary: ModelInspectionCostSummary
-    architecture_trace: ModelInspectionTrace
-    architecture_graph: ArchitectureGraph
-    architecture_summary: ModelInspectionGraphSummary
+    program_graph: Mapping[str, object]
     node_evidence: tuple[ModelGraphNodeEvidence, ...]
     model_manifest: ArtifactReference | None = None
     submission_package: ArtifactReference | None = None
@@ -749,10 +716,12 @@ class ModelInspectionRecord:
             raise ModelInspectionValidationError(str(error)) from error
         if not str(self.id.name).startswith("model-inspections."):
             raise ModelInspectionValidationError("id must be a valid model inspection id")
-        if self.architecture.kind != "architecture-manifest":
-            raise ModelInspectionValidationError(
-                "architecture reference must have kind architecture-manifest"
-            )
+        if self.program.kind != "program-graph":
+            raise ModelInspectionValidationError("program reference must have kind program-graph")
+        try:
+            ContentDigest.from_value(self.program_graph)
+        except ContentEncodingError as error:
+            raise ModelInspectionValidationError(str(error)) from error
         _require_shape(self.input_shape, field="input_shape")
         _require_shape(self.output_shape, field="output_shape")
         if not self.components:
@@ -765,40 +734,6 @@ class ModelInspectionRecord:
             raise ModelInspectionValidationError(
                 "cost_summary component_count does not match components"
             )
-        if self.architecture_trace.input_shape != self.input_shape:
-            raise ModelInspectionValidationError("architecture_trace input_shape does not match")
-        if self.architecture_trace.output_shape != self.output_shape:
-            raise ModelInspectionValidationError("architecture_trace output_shape does not match")
-        if len(self.architecture_trace.stages) != len(self.components):
-            raise ModelInspectionValidationError(
-                "architecture_trace stages do not match components"
-            )
-        for component, stage in zip(
-            self.components,
-            self.architecture_trace.stages,
-            strict=True,
-        ):
-            if component.index != stage.index or component.kind != stage.syntax_alias:
-                raise ModelInspectionValidationError(
-                    "architecture_trace stage does not match component"
-                )
-        if len(self.architecture_graph.nodes) != len(self.components):
-            raise ModelInspectionValidationError(
-                "architecture_graph nodes do not match components"
-            )
-        for component, node in zip(self.components, self.architecture_graph.nodes, strict=True):
-            if component.kind != node.component.kind or dict(component.parameters) != dict(
-                node.component.parameters
-            ):
-                raise ModelInspectionValidationError(
-                    "architecture_graph node does not match component"
-                )
-        expected_summary = ModelInspectionGraphSummary.from_graph(
-            graph=self.architecture_graph,
-            cost_summary=self.cost_summary,
-        )
-        if self.architecture_summary != expected_summary:
-            raise ModelInspectionValidationError("architecture_summary does not match graph")
         if not self.node_evidence:
             raise ModelInspectionValidationError(
                 "node_evidence must not be empty"
@@ -806,16 +741,16 @@ class ModelInspectionRecord:
         actual_node_paths = tuple(evidence.node_path for evidence in self.node_evidence)
         if actual_node_paths != tuple(sorted(set(actual_node_paths))):
             raise ModelInspectionValidationError("node_evidence node_paths must be sorted unique")
-        graph_node_ids = frozenset(node.id for node in self.architecture_graph.nodes)
+        graph_node_ids = frozenset(component.kind for component in self.components)
         for node_path in actual_node_paths:
             if node_path[0] not in graph_node_ids:
                 raise ModelInspectionValidationError(
-                    "node_evidence node_path must start with an architecture graph node"
+                    "node_evidence node_path must start with a program component"
                 )
-        expected_node_paths = frozenset((node.id,) for node in self.architecture_graph.nodes)
+        expected_node_paths = frozenset((component.kind,) for component in self.components)
         if not expected_node_paths.issubset(actual_node_paths):
             raise ModelInspectionValidationError(
-                "node_evidence must describe each architecture graph node"
+                "node_evidence must describe each program component"
             )
         _require_reference_kind(
             self.model_manifest,
@@ -849,35 +784,43 @@ class ModelInspectionRecord:
         )
 
     @classmethod
-    def from_architecture(
+    def from_program_graph(
         cls,
         *,
         id: ProtocolIdentifier,
-        architecture_manifest: ArchitectureManifest,
+        program_graph: Mapping[str, object],
+        input_shape: tuple[int, ...],
+        output_shape: tuple[int, ...],
     ) -> ModelInspectionRecord:
-        components, cost_summary, architecture_trace = _architecture_components(
-            architecture_manifest
+        spec = ProgramGraphSpec.from_record(program_graph)
+        components = tuple(
+            ModelInspectionComponent(
+                index=index,
+                kind=node.id,
+                parameters={
+                    "program_node_kind": node.kind,
+                    **dict(node.parameters or {}),
+                },
+            )
+            for index, node in enumerate(spec.nodes)
         )
-        architecture_reference = reference_for_record(
-            kind="architecture-manifest",
-            record=architecture_manifest.to_record(),
-        )
+        program_reference = reference_for_record(kind="program-graph", record=program_graph)
         return cls(
             id=id,
-            architecture=architecture_reference,
-            input_shape=architecture_manifest.input_shape,
-            output_shape=architecture_manifest.output_shape,
+            program=program_reference,
+            input_shape=input_shape,
+            output_shape=output_shape,
             components=components,
-            cost_summary=cost_summary,
-            architecture_trace=architecture_trace,
-            architecture_graph=architecture_manifest.graph,
-            architecture_summary=ModelInspectionGraphSummary.from_graph(
-                graph=architecture_manifest.graph,
-                cost_summary=cost_summary,
+            cost_summary=ModelInspectionCostSummary(
+                component_count=len(components),
+                parameter_count=None,
+                unknown_parameter_components=tuple(range(len(components))),
+                unknown_cost_components=tuple(range(len(components))),
             ),
-            node_evidence=_node_evidence_records(
-                graph=architecture_manifest.graph,
-                evidence_artifacts=(architecture_reference,),
+            program_graph=dict(program_graph),
+            node_evidence=_program_node_evidence_records(
+                components=components,
+                evidence_artifacts=(program_reference,),
             ),
         )
 
@@ -887,102 +830,44 @@ class ModelInspectionRecord:
         *,
         id: ProtocolIdentifier,
         model_manifest: ModelArtifactManifest,
-        architecture_manifest: ArchitectureManifest,
+        program_graph: Mapping[str, object],
+        input_shape: tuple[int, ...],
+        output_shape: tuple[int, ...],
     ) -> ModelInspectionRecord:
         try:
-            model_manifest.validate_architecture(architecture_manifest)
+            model_manifest.validate_program(program_graph)
         except ValueError as error:
             raise ModelInspectionValidationError(str(error)) from error
-        record = cls.from_architecture(id=id, architecture_manifest=architecture_manifest)
+        record = cls.from_program_graph(
+            id=id,
+            program_graph=program_graph,
+            input_shape=input_shape,
+            output_shape=output_shape,
+        )
+        model_manifest_reference = reference_for_record(
+            kind="model-manifest",
+            record=model_manifest.to_record(),
+        )
         return cls(
             id=record.id,
-            architecture=record.architecture,
+            program=record.program,
             input_shape=record.input_shape,
             output_shape=record.output_shape,
             components=record.components,
             cost_summary=record.cost_summary,
-            architecture_trace=record.architecture_trace,
-            architecture_graph=record.architecture_graph,
-            architecture_summary=record.architecture_summary,
-            node_evidence=_node_evidence_records(
-                graph=record.architecture_graph,
+            program_graph=record.program_graph,
+            node_evidence=_program_node_evidence_records(
+                components=record.components,
                 evidence_artifacts=(
-                    record.architecture,
-                    reference_for_record(
-                        kind="model-manifest",
-                        record=model_manifest.to_record(),
-                    ),
+                    record.program,
+                    model_manifest_reference,
                     *model_manifest.model_artifacts,
                     *model_manifest.training_provenance,
                 ),
             ),
-            model_manifest=reference_for_record(
-                kind="model-manifest",
-                record=model_manifest.to_record(),
-            ),
+            model_manifest=model_manifest_reference,
             model_artifacts=model_manifest.model_artifacts,
             training_provenance=model_manifest.training_provenance,
-        )
-
-    @classmethod
-    def from_submission_package(
-        cls,
-        *,
-        id: ProtocolIdentifier,
-        submission_package: SubmissionPackageManifest,
-    ) -> ModelInspectionRecord:
-        record = cls.from_architecture(
-            id=id,
-            architecture_manifest=submission_package.architecture_manifest,
-        )
-        return cls(
-            id=record.id,
-            architecture=record.architecture,
-            input_shape=record.input_shape,
-            output_shape=record.output_shape,
-            components=record.components,
-            cost_summary=record.cost_summary,
-            architecture_trace=record.architecture_trace,
-            architecture_graph=record.architecture_graph,
-            architecture_summary=record.architecture_summary,
-            node_evidence=_node_evidence_records(
-                graph=record.architecture_graph,
-                evidence_artifacts=(
-                    record.architecture,
-                    reference_for_record(
-                        kind="submission-package",
-                        record=submission_package.to_record(),
-                    ),
-                    *(
-                        ArtifactReference(
-                            kind="submission-artifact",
-                            protocol_id=artifact.id,
-                            content_digest=artifact.digest,
-                        )
-                        for artifact in submission_package.artifacts
-                    ),
-                ),
-            ),
-            submission_package=reference_for_record(
-                kind="submission-package",
-                record=submission_package.to_record(),
-            ),
-            benchmark_manifest=reference_for_record(
-                kind="benchmark-manifest",
-                record=submission_package.benchmark_manifest.to_record(),
-            ),
-            measurement_dataset=ArtifactReference(
-                kind="measurement-dataset",
-                content_digest=submission_package.measurement_dataset.digest,
-            ),
-            model_artifacts=tuple(
-                ArtifactReference(
-                    kind="submission-artifact",
-                    protocol_id=artifact.id,
-                    content_digest=artifact.digest,
-                )
-                for artifact in submission_package.artifacts
-            ),
         )
 
     @classmethod
@@ -999,8 +884,8 @@ class ModelInspectionRecord:
             raise ModelInspectionValidationError(str(error)) from error
         return cls(
             id=_extract.identifier(validated["id"], "id"),
-            architecture=ArtifactReference.from_record(
-                _extract.mapping(validated["architecture"], "architecture")
+            program=ArtifactReference.from_record(
+                _extract.mapping(validated["program"], "program")
             ),
             input_shape=_as_shape(validated["input_shape"], field="input_shape"),
             output_shape=_as_shape(validated["output_shape"], field="output_shape"),
@@ -1008,14 +893,9 @@ class ModelInspectionRecord:
             cost_summary=ModelInspectionCostSummary.from_record(
                 _extract.mapping(validated["cost_summary"], "cost_summary")
             ),
-            architecture_trace=ModelInspectionTrace.from_record(
-                _extract.mapping(validated["architecture_trace"], "architecture_trace")
-            ),
-            architecture_graph=ArchitectureGraph.from_record(
-                _extract.mapping(validated["architecture_graph"], "architecture_graph")
-            ),
-            architecture_summary=ModelInspectionGraphSummary.from_record(
-                _extract.mapping(validated["architecture_summary"], "architecture_summary")
+            program_graph=_extract.mapping(
+                validated["program_graph"],
+                "program_graph",
             ),
             node_evidence=tuple(
                 ModelGraphNodeEvidence.from_record(
@@ -1062,14 +942,12 @@ class ModelInspectionRecord:
     def to_record(self) -> dict[str, object]:
         record: dict[str, object] = {
             "id": str(self.id),
-            "architecture": self.architecture.to_record(),
+            "program": self.program.to_record(),
             "input_shape": list(self.input_shape),
             "output_shape": list(self.output_shape),
             "components": [component.to_record() for component in self.components],
             "cost_summary": self.cost_summary.to_record(),
-            "architecture_trace": self.architecture_trace.to_record(),
-            "architecture_graph": self.architecture_graph.to_record(),
-            "architecture_summary": self.architecture_summary.to_record(),
+            "program_graph": dict(self.program_graph),
             "node_evidence": [
                 evidence.to_record() for evidence in self.node_evidence
             ],
@@ -1107,125 +985,21 @@ class ModelInspectionDocument:
         return cls(inspection=inspection, digest=inspection.digest)
 
 
-def _architecture_components(
-    architecture_manifest: ArchitectureManifest,
-) -> tuple[tuple[ModelInspectionComponent, ...], ModelInspectionCostSummary, ModelInspectionTrace]:
-    components: list[ModelInspectionComponent] = []
-    stages: list[ModelInspectionTraceStage] = []
-    plan = summarize_architecture_operators(architecture_manifest)
-    inference_cost = _architecture_inference_cost_measurement(architecture_manifest)
-    for component, operator in zip(architecture_manifest.components, plan.operators, strict=True):
-        descriptor = operator.descriptor
-        components.append(
-            ModelInspectionComponent(
-                index=operator.index,
-                kind=component.kind,
-                parameters=component.parameters,
-                input_shape=operator.input_shape,
-                output_shape=operator.output_shape,
-                operator=descriptor.to_record(),
-                parameter_count=operator.parameter_count,
-                storage_bytes=operator.storage_bytes,
-            )
-        )
-        if operator.input_shape is not None and operator.output_shape is not None:
-            stages.append(
-                ModelInspectionTraceStage(
-                    index=operator.index,
-                    kind="operator",
-                    syntax_alias=component.kind,
-                    operator_kind=descriptor.kind,
-                    input_shape=operator.input_shape,
-                    output_shape=operator.output_shape,
-                    descriptor_axes={
-                        "tensor_relation": descriptor.tensor_relation,
-                        "state": descriptor.state,
-                        "support": descriptor.support,
-                        "projection_law": descriptor.projection_law,
-                        "aggregation_law": descriptor.aggregation_law,
-                        "parameter_sharing": descriptor.parameter_sharing,
-                    },
-                    shape_law=descriptor.shape_law,
-                    cost_law=descriptor.cost_law,
-                    parameter_count=operator.parameter_count,
-                )
-            )
-    return (
-        tuple(components),
-        ModelInspectionCostSummary(
-            component_count=len(components),
-            parameter_count=plan.parameter_count,
-            storage_bytes=plan.storage_bytes,
-            inference_cost_measurement=inference_cost,
-            inference_cost_sample_count=1 if inference_cost is not None else None,
-            unknown_parameter_components=plan.unknown_parameter_layers,
-            unknown_cost_components=(
-                () if inference_cost is not None else tuple(range(len(components)))
-            ),
-        ),
-        ModelInspectionTrace(
-            input_shape=architecture_manifest.input_shape,
-            output_shape=architecture_manifest.output_shape,
-            stages=tuple(stages),
-        ),
-    )
-
-
-def _architecture_inference_cost_measurement(
-    architecture_manifest: ArchitectureManifest,
-) -> CostMeasurement | None:
-    try:
-        runtime = resolve_host_tensor_runtime()
-        executable = ExecutableModelOperator(architecture_manifest)
-        module = (
-            OperationFallbackSequential(
-                runtime=runtime,
-                operations=executable.operation_modules(),
-                input_conditioning=architecture_manifest.input_conditioning,
-            )
-            if architecture_manifest.input_conditioning is not None
-            else executable.sequential_module()
-        )
-        module.eval()
-        fields = make_empty_float_tensor(
-            runtime,
-            (1, *architecture_manifest.input_shape),
-            device=runtime.device,
-        )
-
-        def program(input_fields: object) -> object:
-            with no_grad_context(runtime):
-                if architecture_manifest.input_conditioning is not None:
-                    return module(input_fields, 1.0)
-                return module(input_fields)
-
-        return estimate_program_cost(
-            runtime,
-            program,
-            inputs=(fields,),
-            strict=True,
-            roofline=runtime_roofline_record(runtime),
-        ).without_operation_trace()
-    except (CostMetrologyError, TensorRuntimeError, ValueError):
-        return None
-
-
-def _node_evidence_records(
+def _program_node_evidence_records(
     *,
-    graph: ArchitectureGraph,
+    components: tuple[ModelInspectionComponent, ...],
     evidence_artifacts: tuple[ArtifactReference, ...],
 ) -> tuple[ModelGraphNodeEvidence, ...]:
     return tuple(
         ModelGraphNodeEvidence(
-            node_path=(node.id,),
+            node_path=(component.kind,),
             claim_kinds=(
-                "architecture-structure",
-                "operator-semantics",
+                "program-structure",
                 "resource-accounting",
             ),
             evidence_artifacts=evidence_artifacts,
         )
-        for node in graph.nodes
+        for component in sorted(components, key=lambda component: component.kind)
     )
 
 

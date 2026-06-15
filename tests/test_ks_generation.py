@@ -4,15 +4,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
-from leibniz.architectures import ArchitectureManifest
+from ks_oracle import ks_reference_trajectory
+
 from leibniz.benchmark_implementations import load_benchmark
 from leibniz.benchmark_runner import (
     BenchmarkRunnerError,
     _field_valued_model_trajectory,  # pyright: ignore[reportPrivateUsage]
 )
-from leibniz.model_operators import ExecutableModelOperator
 from leibniz.observation_generation import ObservationGenerationError, StateSpaceVolumeRequest
-from leibniz.tensor_runtime import OperationFallbackSequential, resolve_tensor_runtime
+from leibniz.tensor_runtime import resolve_tensor_runtime
 
 _repository_root = Path(__file__).parents[1]
 _ks_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "ks"
@@ -128,21 +128,16 @@ def test_ks_generator_rejects_non_ladder_spatial_resolution() -> None:
 
 
 def test_ks_generation_does_not_run_reference_solver(
-    monkeypatch: Any,
 ) -> None:
     runtime = resolve_tensor_runtime("cpu")
     generator = load_benchmark(_ks_benchmark_root).generator
     module = sys.modules[type(generator).__module__]
 
-    def fail_solver(*_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("generation must not run the reference solver")
-
-    monkeypatch.setattr(module, "tensor_runtime_solve_tensor_trajectory", fail_solver)
-
     batch = generator(seed=101, shape=2, runtime=runtime)
 
     assert batch.fields is not None
     assert batch.targets is not None
+    assert not hasattr(module, "tensor_runtime_solve_tensor_trajectory")
 
 
 def test_ks_generator_samples_cartesian_fourier_chart_metadata() -> None:
@@ -175,7 +170,7 @@ def test_ks_benchmark_builds_residual_training_loss() -> None:
     fields, targets = batch.require_tensors()
     loss = cast(Any, loaded).build_training_loss(runtime, loaded.target_contract)
 
-    trajectory = cast(Any, loaded).reference_trajectory(
+    trajectory = ks_reference_trajectory(
         runtime=runtime,
         sample_count=2,
         seed=17,
@@ -205,7 +200,7 @@ def test_ks_reference_residual_uses_resolution_dependent_dx() -> None:
             spatial_points=spatial_points,
         )
         _fields, targets = batch.require_tensors()
-        reference = cast(Any, loaded).reference_trajectory(
+        reference = ks_reference_trajectory(
             runtime=runtime,
             sample_count=1,
             seed=17,
@@ -223,12 +218,12 @@ def test_field_valued_runner_queries_operator_at_horizons() -> None:
     runtime = resolve_tensor_runtime("cpu")
     fields = runtime.torch.zeros((2, 1, 32), dtype=runtime.torch.float32)
     labels = runtime.torch.zeros((2, 4, 32), dtype=runtime.torch.float32)
-    horizons: list[float] = []
+    dts: list[float] = []
 
     class HorizonModule:
-        def __call__(self, state: Any, horizon: float) -> Any:
-            horizons.append(horizon)
-            return state + horizon
+        def __call__(self, state: Any, dt: float) -> Any:
+            dts.append(dt)
+            return state + dt
 
     trajectory = _field_valued_model_trajectory(
         runtime=runtime,
@@ -238,7 +233,7 @@ def test_field_valued_runner_queries_operator_at_horizons() -> None:
         horizons=(1 / 3, 2 / 3, 1.0),
     )
 
-    assert horizons == [1 / 3, 2 / 3, 1.0]
+    assert all(math.isclose(dt, 1 / 3) for dt in dts)
     assert trajectory.shape == labels.shape
     assert trajectory[:, 0:1, :].allclose(fields)
     assert trajectory[:, 1, :].allclose(fields[:, 0, :] + (1 / 3))
@@ -268,42 +263,19 @@ def test_field_valued_runner_rejects_length_changing_operator() -> None:
         raise AssertionError("expected length-changing field operator to be rejected")
 
 
-def test_field_valued_runner_presents_horizon_to_real_operator() -> None:
+def test_field_valued_runner_presents_dt_to_real_operator() -> None:
     runtime = resolve_tensor_runtime("cpu")
-    architecture = ArchitectureManifest.from_record(
-        {
-            "input_shape": [1, 32],
-            "output_shape": [1, 32],
-            "input_conditioning": {"kind": "horizon-channel"},
-            "layers": [
-                {
-                    "kind": "fixed-support-affine",
-                    "parameters": {
-                        "dimension": 1,
-                        "out_channels": 1,
-                        "out_length": 32,
-                    },
-                }
-            ],
-        }
-    )
-    executable = ExecutableModelOperator(architecture)
-    module = OperationFallbackSequential(
-        runtime=runtime,
-        operations=executable.operation_modules(),
-        input_conditioning=architecture.input_conditioning,
-    )
-    conv = module._operations[0][1]
-    with runtime.torch.no_grad():
-        conv.weight.zero_()
-        conv.bias.zero_()
-        conv.weight[0, 1, 0] = 1.0
+
+    class StepModule:
+        def __call__(self, state: Any, dt: float) -> Any:
+            return state + dt
+
     fields = runtime.torch.zeros((2, 1, 32), dtype=runtime.torch.float32)
     labels = runtime.torch.zeros((2, 4, 32), dtype=runtime.torch.float32)
 
     trajectory = _field_valued_model_trajectory(
         runtime=runtime,
-        module=module,
+        module=StepModule(),
         fields=fields,
         labels=labels,
         horizons=(0.25, 0.5, 1.0),
@@ -316,45 +288,28 @@ def test_field_valued_runner_presents_horizon_to_real_operator() -> None:
     assert trajectory[:, 3, :].allclose(fields[:, 0, :] + 1.0)
 
 
-def test_field_valued_runner_rejects_real_operator_without_horizon_conditioning() -> None:
+def test_field_valued_runner_rejects_operator_without_dt_argument() -> None:
     runtime = resolve_tensor_runtime("cpu")
-    architecture = ArchitectureManifest.from_record(
-        {
-            "input_shape": [1, 32],
-            "output_shape": [1, 32],
-            "layers": [
-                {
-                    "kind": "fixed-support-affine",
-                    "parameters": {
-                        "dimension": 1,
-                        "out_channels": 1,
-                        "out_length": 32,
-                    },
-                }
-            ],
-        }
-    )
-    executable = ExecutableModelOperator(architecture)
-    module = OperationFallbackSequential(
-        runtime=runtime,
-        operations=executable.operation_modules(),
-        input_conditioning=architecture.input_conditioning,
-    )
+
+    class BadModule:
+        def __call__(self, state: Any) -> Any:
+            return state
+
     fields = runtime.torch.zeros((2, 1, 32), dtype=runtime.torch.float32)
     labels = runtime.torch.zeros((2, 4, 32), dtype=runtime.torch.float32)
 
     try:
         _field_valued_model_trajectory(
             runtime=runtime,
-            module=module,
+            module=BadModule(),
             fields=fields,
             labels=labels,
             horizons=(0.25, 0.5, 1.0),
         )
     except BenchmarkRunnerError as error:
-        assert "unconditioned model does not accept a horizon" in str(error)
+        assert "must accept an input state and dt" in str(error)
     else:
-        raise AssertionError("expected field operator without horizon conditioning to fail")
+        raise AssertionError("expected field operator without dt argument to fail")
 
 
 def test_ks_convergence_bits_rejects_persistence() -> None:

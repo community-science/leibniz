@@ -23,6 +23,13 @@ import type { StateSpaceRegionRecord } from '../src/leibniz/console/_web_src/src
 const targetBenchmark = 'benchmarks.target@0.1.0';
 const otherBenchmark = 'benchmarks.other@0.1.0';
 const architectureDigest = 'sha256:abcdef1234567890';
+const programGraph = {
+  contract_kind: 'single-input-single-output',
+  edges: [],
+  inputs: [{ axes: ['batch', 1], name: 'input' }],
+  nodes: [{ id: 'component-0', kind: 'identity', parameters: {} }],
+  outputs: [{ axes: ['batch', 2], name: 'output' }],
+};
 const fixtureRegion: StateSpaceRegionRecord = {
   id: 'test.region',
   ambient: {
@@ -81,7 +88,6 @@ function modelResult({
   trainingCompute: number;
 }): ModelResultRecord {
   return {
-    architecture_digest: architectureDigest,
     benchmark_id: targetBenchmark,
     cost_integral: {
       kind: 'compute-cost-integral',
@@ -120,6 +126,7 @@ function modelResult({
         ],
       },
     ],
+    program_digest: architectureDigest,
     result_status: 'accepted',
     run_ids: runIds,
     score,
@@ -201,8 +208,6 @@ const result: BenchmarkResultRecord = {
   model_inspections: [],
   training_history: [
     {
-      architecture: { layers: [] },
-      architecture_digest: architectureDigest,
       benchmark_id: targetBenchmark,
       cost_summary: {
         component_count: 1,
@@ -214,6 +219,9 @@ const result: BenchmarkResultRecord = {
       measurement_count: 2,
       measurement_dataset_digest: 'sha256:dataset1234',
       model_key: 'model-a',
+      program: { kind: 'program-source' },
+      program_digest: architectureDigest,
+      program_graph: programGraph,
       run_id: 'run-a',
       run_slug: 'train-a',
       log2_volume: 10,
@@ -270,8 +278,6 @@ const result: BenchmarkResultRecord = {
   ],
   plot_runs: [
     {
-      architecture: { layers: [] },
-      architecture_digest: architectureDigest,
       benchmark_id: targetBenchmark,
       cost_summary: {
         component_count: 1,
@@ -283,6 +289,9 @@ const result: BenchmarkResultRecord = {
       measurement_count: 2,
       measurement_dataset_digest: 'sha256:dataset1234',
       model_key: 'model-a',
+      program: { kind: 'program-source' },
+      program_digest: architectureDigest,
+      program_graph: programGraph,
       run_id: 'run-a',
       run_slug: 'train-a',
       log2_volume: 10,
@@ -292,8 +301,6 @@ const result: BenchmarkResultRecord = {
       source_path: 'results/training/run-a.json',
     },
     {
-      architecture: { layers: [] },
-      architecture_digest: 'sha256:fedcba9876543210',
       benchmark_id: targetBenchmark,
       cost_summary: {
         component_count: 2,
@@ -305,6 +312,12 @@ const result: BenchmarkResultRecord = {
       measurement_count: 1,
       measurement_dataset_digest: 'sha256:dataset5678',
       model_key: 'model-b',
+      program: { kind: 'program-source' },
+      program_digest: 'sha256:fedcba9876543210',
+      program_graph: {
+        ...programGraph,
+        nodes: [{ id: 'component-0', kind: 'dense', parameters: { width: 2 } }],
+      },
       run_id: 'run-b',
       run_slug: 'train-b',
       log2_volume: 10,
@@ -334,8 +347,8 @@ const resultViews: ResultViewRecord[] = [
 ];
 const inspections: ModelInspectionRecord[] = [
   {
-    architecture: {
-      kind: 'architecture-manifest',
+    program: {
+      kind: 'program-graph',
       record_digest: architectureDigest,
     },
     cost_summary: {
@@ -348,70 +361,21 @@ const inspections: ModelInspectionRecord[] = [
     },
     id: 'inspection-a',
     input_shape: [1],
-    architecture_graph: {
-      edges: [],
-      input_node_ids: ['component-0'],
-      nodes: [
-        {
-          component: {
-            kind: 'operator',
-            parameters: {},
-          },
-          id: 'component-0',
-        },
-      ],
-      output_node_ids: ['component-0'],
-    },
-    architecture_summary: {
-      component_count: 1,
-      component_kinds: ['operator'],
-      edge_count: 0,
-      input_count: 1,
-      input_node_ids: ['component-0'],
-      output_count: 1,
-      output_node_ids: ['component-0'],
-      unsupported_cost_components: [],
-      unsupported_parameter_components: [],
-    },
-    architecture_trace: {
-      input_shape: [1],
-      output_shape: [2],
-      stages: [
-        {
-          cost_law: 'zero-arithmetic',
-          descriptor_axes: {
-            aggregation_law: 'none',
-            parameter_sharing: 'none',
-            projection_law: 'identity',
-            state: 'fixed',
-            support: 'global',
-            tensor_relation: 'identity',
-          },
-          index: 0,
-          input_shape: [1],
-          kind: 'operator',
-          operator_kind: 'identity',
-          output_shape: [2],
-          shape_law: 'fixture-shape',
-          syntax_alias: 'operator',
-        },
-      ],
-      program_effects: [],
-    },
+    program_graph: programGraph,
     components: [
       {
         index: 0,
-        kind: 'operator',
-        parameters: {},
+        kind: 'component-0',
+        parameters: { program_node_kind: 'identity' },
       },
     ],
     model_artifacts: [],
     node_evidence: [
       {
-        claim_kinds: ['architecture-structure', 'operator-semantics', 'resource-accounting'],
+        claim_kinds: ['program-structure', 'resource-accounting'],
         evidence_artifacts: [
           {
-            kind: 'architecture-manifest',
+            kind: 'program-graph',
             record_digest: architectureDigest,
           },
         ],
@@ -482,7 +446,7 @@ assertEqual(
   false,
   'provisional plot points are not frontier points',
 );
-const repeatedArchitectureResult: BenchmarkResultRecord = {
+const repeatedProgramResult: BenchmarkResultRecord = {
   ...result,
   leaderboard: [
     {
@@ -516,21 +480,21 @@ const repeatedArchitectureResult: BenchmarkResultRecord = {
     },
   ],
 };
-const repeatedArchitecturePlotModel = benchmarkPlotModel(repeatedArchitectureResult);
+const repeatedProgramPlotModel = benchmarkPlotModel(repeatedProgramResult);
 assertEqual(
-  repeatedArchitecturePlotModel.points.find((point) => point.run?.run_id === 'run-a')?.score,
+  repeatedProgramPlotModel.points.find((point) => point.run?.run_id === 'run-a')?.score,
   8,
-  'same-architecture run keeps first checkpoint score',
+  'same-program run keeps first checkpoint score',
 );
 assertEqual(
-  repeatedArchitecturePlotModel.points.find((point) => point.run?.run_id === 'run-b')?.score,
+  repeatedProgramPlotModel.points.find((point) => point.run?.run_id === 'run-b')?.score,
   9,
-  'same-architecture run keeps second checkpoint score',
+  'same-program run keeps second checkpoint score',
 );
 assertEqual(
-  repeatedArchitecturePlotModel.points.find((point) => point.run?.run_id === 'run-a')?.frontier,
+  repeatedProgramPlotModel.points.find((point) => point.run?.run_id === 'run-a')?.frontier,
   false,
-  'same-architecture run does not inherit another checkpoint frontier status',
+  'same-program run does not inherit another checkpoint frontier status',
 );
 assertEqual(plotModel.xTicks.includes(10), true, 'plot log ticks');
 assertEqual(plotModel.xDomain[0], 0, 'plot default x minimum');

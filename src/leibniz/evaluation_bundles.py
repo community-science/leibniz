@@ -6,7 +6,6 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from leibniz.architectures import ArchitectureManifest
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
@@ -30,7 +29,7 @@ _evaluation_bundle_record = RecordSpec(
         "id": FieldSpec(kind="identifier"),
         "run_slug": FieldSpec(kind="string"),
         "benchmark_manifest": FieldSpec(kind="record"),
-        "architecture_manifest": FieldSpec(kind="record"),
+        "program_graph": FieldSpec(kind="record"),
         "model_manifest": FieldSpec(kind="record"),
         "model_checkpoint": FieldSpec(kind="record"),
         "model_inspection": FieldSpec(kind="record"),
@@ -59,7 +58,7 @@ class BenchmarkEvaluationBundle:
     id: ProtocolIdentifier
     run_slug: str
     benchmark_manifest: BenchmarkManifest
-    architecture_manifest: ArchitectureManifest
+    program_graph: Mapping[str, object]
     model_manifest: ModelArtifactManifest
     model_checkpoint: Mapping[str, object]
     model_inspection: ModelInspectionRecord
@@ -95,12 +94,10 @@ class BenchmarkEvaluationBundle:
             benchmark_manifest = BenchmarkManifest.from_record(
                 _record.mapping(validated["benchmark_manifest"], "benchmark_manifest")
             )
-            architecture_manifest = ArchitectureManifest.from_record(
-                _record.mapping(validated["architecture_manifest"], "architecture_manifest")
-            )
+            program_graph = _record.mapping(validated["program_graph"], "program_graph")
             model_manifest = ModelArtifactManifest.from_record(
                 _record.mapping(validated["model_manifest"], "model_manifest"),
-                architecture_manifest=architecture_manifest,
+                program_record=program_graph,
             )
             model_inspection = ModelInspectionRecord.from_record(
                 _record.mapping(validated["model_inspection"], "model_inspection")
@@ -118,7 +115,7 @@ class BenchmarkEvaluationBundle:
             id=_record.identifier(validated["id"], "id"),
             run_slug=_record.non_empty_string(validated["run_slug"], "run_slug"),
             benchmark_manifest=benchmark_manifest,
-            architecture_manifest=architecture_manifest,
+            program_graph=program_graph,
             model_manifest=model_manifest,
             model_checkpoint=_record.mapping(validated["model_checkpoint"], "model_checkpoint"),
             model_inspection=model_inspection,
@@ -154,15 +151,13 @@ class BenchmarkEvaluationBundle:
             )
         try:
             self.measurement_dataset.validate_manifest(self.benchmark_manifest)
-            self.model_manifest.validate_architecture(self.architecture_manifest)
+            self.model_manifest.validate_program(self.program_graph)
         except ValueError as error:
             raise BenchmarkEvaluationBundleValidationError(str(error)) from error
         self._validate_model_checkpoint()
-        if not self.model_inspection.architecture.matches_record(
-            self.architecture_manifest.to_record()
-        ):
+        if not self.model_inspection.program.matches_record(self.program_graph):
             raise BenchmarkEvaluationBundleValidationError(
-                "model_inspection architecture does not match architecture manifest"
+                "model_inspection program does not match program graph"
             )
         if (
             self.model_inspection.model_manifest is not None
@@ -251,7 +246,7 @@ class BenchmarkEvaluationBundle:
             "id": str(self.id),
             "run_slug": self.run_slug,
             "benchmark_manifest": self.benchmark_manifest.to_record(),
-            "architecture_manifest": self.architecture_manifest.to_record(),
+            "program_graph": dict(self.program_graph),
             "model_manifest": self.model_manifest.to_record(),
             "model_checkpoint": dict(self.model_checkpoint),
             "model_inspection": self.model_inspection.to_record(),

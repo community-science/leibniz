@@ -14,7 +14,6 @@ from itertools import count
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.artifacts import ArtifactReference, reference_for_record
 from leibniz.benchmark_evaluation import (
     CompetencePoint,
@@ -50,6 +49,11 @@ from leibniz.documents import (
 from leibniz.evaluation_bundles import (
     BenchmarkEvaluationBundle,
 )
+from leibniz.field_evolution import (
+    FieldEvolutionError,
+    field_stepper_state,
+    validate_field_stepper_nondegenerate,
+)
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment
 from leibniz.measurements import MeasurementDataset, MeasurementRecord
@@ -60,7 +64,6 @@ from leibniz.model_manifests import (
     ModelArtifactManifestDocument,
     ModelExecutionFamily,
 )
-from leibniz.model_operators import ExecutableModelOperator
 from leibniz.observation_generation import (
     GeneratedSample,
     GeneratedSampleSet,
@@ -68,6 +71,7 @@ from leibniz.observation_generation import (
     StateSpaceVolumeRequest,
     StateSpaceVolumeValue,
 )
+from leibniz.program_graphs import LoadedProgramGraph, ProgramGraphError, load_program_graph
 from leibniz.records import RecordExtractor
 from leibniz.state_space import (
     AccessibleSubspace,
@@ -78,7 +82,6 @@ from leibniz.state_space import (
 )
 from leibniz.target_contracts import TargetContract, TargetContractError
 from leibniz.tensor_runtime import (
-    OperationFallbackSequential,
     TensorRuntime,
     TensorRuntimeDevice,
     TensorRuntimeDeviceKind,
@@ -93,6 +96,7 @@ from leibniz.tensor_runtime import (
     make_long_tensor,
     no_grad_context,
     optimizer_step,
+    resolve_host_tensor_runtime,
     resolve_tensor_runtime,
     runtime_capacity_error,
     runtime_roofline_record,
@@ -246,7 +250,8 @@ class _TrainingResult:
 
 @dataclass(frozen=True, slots=True)
 class _EvaluationInput:
-    architecture: ArchitectureManifest
+    program_path: Path
+    program_graph: Mapping[str, object]
     checkpoint: ModelCheckpointArtifact
     run_slug: str
     benchmark_id: ProtocolIdentifier
@@ -836,7 +841,7 @@ class BenchmarkEvaluationSummary:
 class BenchmarkRunPlan:
     """A local benchmark run plan resolved from CLI or workflow inputs."""
 
-    architecture_path: Path
+    program_path: Path
     benchmark_root: Path
     results_root: Path = Path("results")
     seed: int = 101
@@ -939,7 +944,7 @@ class BenchmarkRunSummary:
 
     run_slug: str
     benchmark_id: ProtocolIdentifier
-    architecture_path: Path
+    program_path: Path
     measurement_count: int
     training_summary_path: Path
     model_artifact_root: Path
@@ -954,8 +959,8 @@ class BenchmarkRunSummary:
             "format_version": 1,
             "run_slug": self.run_slug,
             "benchmark_id": str(self.benchmark_id),
-            "architecture_path": _portable_record_path(
-                self.architecture_path,
+            "program_path": _portable_record_path(
+                self.program_path,
                 results_root=self.results_root,
             ),
             "measurement_count": self.measurement_count,
@@ -984,26 +989,19 @@ def run_benchmark(
     loss_factory = _optional_training_loss_factory(benchmark)
     competence_factory = _optional_training_competence_factory(benchmark)
     accessible_subspace = benchmark.accessible_subspace
-    architecture = ArchitectureManifestDocument.from_bytes(
-        plan.architecture_path.read_bytes()
-    ).manifest
+    program_identity = _load_program_graph_identity(plan.program_path)
+    program_graph_record = program_identity.graph.to_record()
     outcome_space = benchmark.manifest.resolve_outcome_space()
     outcome_ids = _target_contract_outcome_ids(target_contract)
     summary = _run_summary(
         plan=plan,
         benchmark_id=generator.manifest.id,
-        architecture_digest=architecture.digest,
-    )
-    model_inspection = ModelInspectionRecord.from_architecture(
-        id=ProtocolIdentifier.parse(
-            f"model-inspections.{_identifier_atom(generator.manifest.id)}."
-            f"{summary.run_slug}@0.1.0"
+        model_source_atom=(
+            f"program-{program_identity.graph.digest.hex[:12]}"
         ),
-        architecture_manifest=architecture,
     )
     try:
         initial_evaluation_rung = _evaluation_curriculum_rung(
-            architecture=architecture,
             generator=generator,
             sample_count=1,
             seed=plan.seed,
@@ -1016,8 +1014,8 @@ def run_benchmark(
 
     if initial_evaluation_rung is not None:
         evaluation_batch = initial_evaluation_rung.batch
-        _validate_architecture_for_batch(
-            architecture=architecture,
+        _validate_program_for_batch(
+            program=program_identity,
             batch=evaluation_batch,
             target_contract=target_contract,
         )
@@ -1028,7 +1026,6 @@ def run_benchmark(
     if initial_evaluation_rung is None:
         validation_runtime = resolve_tensor_runtime(plan.tensor_device)
         initial_evaluation_rung = _evaluation_curriculum_rung(
-            architecture=architecture,
             generator=generator,
             sample_count=1,
             seed=plan.seed,
@@ -1037,11 +1034,27 @@ def run_benchmark(
             outcome_ids=outcome_ids,
         )
         evaluation_batch = initial_evaluation_rung.batch
-        _validate_architecture_for_batch(
-            architecture=architecture,
+        _validate_program_for_batch(
+            program=program_identity,
             batch=evaluation_batch,
             target_contract=target_contract,
         )
+    else:
+        evaluation_batch = initial_evaluation_rung.batch
+    input_shape = _batch_sample_input_shape(batch=evaluation_batch)
+    output_shape = _expected_program_output_shape(
+        batch=evaluation_batch,
+        target_contract=target_contract,
+    )
+    model_inspection = ModelInspectionRecord.from_program_graph(
+        id=ProtocolIdentifier.parse(
+            f"model-inspections.{_identifier_atom(generator.manifest.id)}."
+            f"{summary.run_slug}@0.1.0"
+        ),
+        program_graph=program_graph_record,
+        input_shape=input_shape,
+        output_shape=output_shape,
+    )
 
     progress_path = _training_progress_path(summary)
     model_interface = ModelInterface.from_outcome_space(
@@ -1059,7 +1072,8 @@ def run_benchmark(
     ) -> dict[str, object]:
         return _model_checkpoint_artifact_record(
             checkpoint=checkpoint,
-            architecture=architecture,
+            program_graph=program_graph_record,
+            program_path=plan.program_path,
             benchmark_id=summary.benchmark_id,
             run_slug=summary.run_slug,
             results_root=plan.results_root,
@@ -1082,7 +1096,7 @@ def run_benchmark(
                 checkpoint_artifacts.append(
                     _write_model_checkpoint_artifact(
                         summary=summary,
-                        architecture=architecture,
+                        program_graph=program_graph_record,
                         model_interface=model_interface,
                         training_run=training_run,
                         module=module,
@@ -1099,7 +1113,9 @@ def run_benchmark(
                         f"{summary.run_slug}.progress@0.1.0"
                     ),
                     model_manifest=selected_checkpoint.manifest,
-                    architecture_manifest=architecture,
+                    program_graph=program_graph_record,
+                    input_shape=input_shape,
+                    output_shape=output_shape,
                 )
                 if selected_checkpoint is not None
                 else model_inspection
@@ -1122,7 +1138,6 @@ def run_benchmark(
             progress_record = _training_progress_record(
                 plan=plan,
                 summary=summary,
-                architecture=architecture,
                 inspection=progress_inspection,
                 evaluation_curriculum=_curriculum_record(
                     kind="competence-gated-evaluation-curriculum",
@@ -1150,7 +1165,7 @@ def run_benchmark(
             progress_callback(summary)
 
     training_result = _train_and_predict(
-        architecture=architecture,
+        program_path=plan.program_path,
         initial_evaluation_rung=initial_evaluation_rung,
         generator=generator,
         target_contract=target_contract,
@@ -1183,7 +1198,9 @@ def run_benchmark(
             f"{summary.run_slug}@0.1.0"
         ),
         model_manifest=selected_checkpoint.manifest,
-        architecture_manifest=architecture,
+        program_graph=program_graph_record,
+        input_shape=input_shape,
+        output_shape=output_shape,
     )
     full_checkpoint_records = tuple(
         checkpoint_record(checkpoint)
@@ -1200,7 +1217,6 @@ def run_benchmark(
     )
     selected_checkpoint_record = checkpoint_record(selected_checkpoint)
     completed_training_estimate = _training_estimate_record(
-        architecture=architecture,
         summary=summary,
         training_run=training_result.training_run,
     )
@@ -1231,7 +1247,8 @@ def run_benchmark(
         "tensor_device": training_result.training_run.protocol.tensor_device,
         "training_run": _training_run_artifact_record(training_result.training_run),
         "throughput": training_result.throughput,
-        "architecture": model_inspection.architecture.to_record(),
+        "program": model_inspection.program.to_record(),
+        "program_graph": program_graph_record,
         "cost_summary": _training_cost_summary(
             inspection=model_inspection,
             training_estimate=completed_training_estimate,
@@ -1259,15 +1276,14 @@ def _run_summary(
     *,
     plan: BenchmarkRunPlan,
     benchmark_id: ProtocolIdentifier,
-    architecture_digest: ContentDigest,
+    model_source_atom: str,
 ) -> BenchmarkRunSummary:
     benchmark_atom = _identifier_atom(benchmark_id)
-    architecture_atom = f"arch-{architecture_digest.hex[:12]}"
-    run_slug = f"{benchmark_atom}-{architecture_atom}-{plan.run_slug}"
+    run_slug = f"{benchmark_atom}-{model_source_atom}-{plan.run_slug}"
     return BenchmarkRunSummary(
         run_slug=run_slug,
         benchmark_id=benchmark_id,
-        architecture_path=plan.architecture_path,
+        program_path=plan.program_path,
         measurement_count=0,
         training_summary_path=(
             plan.results_root / "training" / benchmark_atom / f"{run_slug}{_document_suffix}"
@@ -1276,6 +1292,13 @@ def _run_summary(
         dry_run=plan.dry_run,
         results_root=plan.results_root,
     )
+
+
+def _load_program_graph_identity(program_path: Path) -> LoadedProgramGraph:
+    try:
+        return load_program_graph(program_path, resolve_host_tensor_runtime())
+    except (ProgramGraphError, TensorRuntimeError) as error:
+        raise BenchmarkRunnerError(str(error)) from error
 
 
 def _portable_record_path(path: Path, *, results_root: Path) -> str:
@@ -1308,7 +1331,6 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
     with workflow_timings.span("evaluation_workflow.load_checkpoint_input"):
         evaluation_input = _evaluation_input_from_plan(plan, generator=generator)
         outcome_space = generator.manifest.resolve_outcome_space()
-        architecture = evaluation_input.architecture
         selected_checkpoint = evaluation_input.checkpoint
         run_slug = evaluation_input.run_slug
         benchmark_id = evaluation_input.benchmark_id
@@ -1326,7 +1348,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             final_competence_diagnostics,
             checkpoint_evaluation_throughput,
         ) = evaluate_model_checkpoint_artifact(
-            architecture=architecture,
+            program_path=evaluation_input.program_path,
             generator=generator,
             target_contract=target_contract,
             competence_factory=_optional_training_competence_factory(benchmark),
@@ -1420,7 +1442,12 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
                 f"model-inspections.{benchmark_atom}.{run_slug}@0.1.0"
             ),
             model_manifest=selected_checkpoint.manifest,
-            architecture_manifest=architecture,
+            program_graph=evaluation_input.program_graph,
+            input_shape=_batch_sample_input_shape(batch=final_evaluation_batch),
+            output_shape=_expected_program_output_shape(
+                batch=final_evaluation_batch,
+                target_contract=target_contract,
+            ),
         )
     with workflow_timings.span("evaluation_workflow.curriculum_record"):
         evaluation_curriculum = _curriculum_record(
@@ -1495,7 +1522,8 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
     }
     checkpoint_record = _model_checkpoint_artifact_record(
         checkpoint=selected_checkpoint,
-        architecture=architecture,
+        program_graph=evaluation_input.program_graph,
+        program_path=evaluation_input.program_path,
         benchmark_id=benchmark_id,
         run_slug=run_slug,
         results_root=plan.results_root,
@@ -1505,7 +1533,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             id=ProtocolIdentifier.parse(f"benchmark-evaluations.{identifier_stem}@0.1.0"),
             run_slug=run_slug,
             benchmark_manifest=generator.manifest,
-            architecture_manifest=architecture,
+            program_graph=evaluation_input.program_graph,
             model_manifest=selected_checkpoint.manifest,
             model_checkpoint=checkpoint_record,
             model_inspection=model_inspection,
@@ -1566,11 +1594,9 @@ def _evaluation_input_from_plan(
         checkpoint_artifact_path,
         description="checkpoint artifact",
     )
-    architecture = ArchitectureManifest.from_record(
-        _extract_record(
-            checkpoint_record.get("architecture_manifest"),
-            "checkpoint_artifact.architecture_manifest",
-        )
+    program_graph = _extract_record(
+        checkpoint_record.get("program_graph"),
+        "checkpoint_artifact.program_graph",
     )
     try:
         checkpoint_benchmark_id = ProtocolIdentifier.parse(
@@ -1586,8 +1612,13 @@ def _evaluation_input_from_plan(
             "checkpoint_artifact.benchmark_id does not match benchmark root"
         )
     run_slug = _required_string(checkpoint_record.get("run_slug"), "checkpoint_artifact.run_slug")
+    program_path = _checkpoint_program_path(
+        checkpoint_record.get("program_path"),
+        results_root=plan.results_root,
+    )
     return _EvaluationInput(
-        architecture=architecture,
+        program_path=program_path,
+        program_graph=program_graph,
         checkpoint=load_model_checkpoint_artifact(
             checkpoint_record,
             results_root=plan.results_root,
@@ -1620,7 +1651,6 @@ def _evaluation_checkpoint_artifact_path(plan: BenchmarkEvaluationPlan) -> Path:
 
 def _evaluation_curriculum_rung(
     *,
-    architecture: ArchitectureManifest,
     generator: _TensorBenchmarkGenerator,
     sample_count: int = 1,
     seed: int,
@@ -1631,7 +1661,6 @@ def _evaluation_curriculum_rung(
 ) -> _CurriculumRung:
     planner = _VolumeCurriculumPlanner() if planner is None else planner
     return _curriculum_rung_from_window(
-        architecture=architecture,
         generator=generator,
         sample_count=sample_count,
         seed=seed,
@@ -1645,7 +1674,6 @@ def _evaluation_curriculum_rung(
 
 def _training_curriculum_rung(
     *,
-    architecture: ArchitectureManifest,
     generator: _TensorBenchmarkGenerator,
     sample_count: int,
     seed: int,
@@ -1664,7 +1692,6 @@ def _training_curriculum_rung(
         "training_frontier.rung_record_construction",
     ):
         return _curriculum_rung_from_window(
-            architecture=architecture,
             generator=generator,
             sample_count=sample_count,
             seed=seed,
@@ -1682,7 +1709,6 @@ class _EmptyCurriculumWindow(Exception):
 
 def _curriculum_rung_from_window(
     *,
-    architecture: ArchitectureManifest,
     generator: _TensorBenchmarkGenerator,
     sample_count: int,
     seed: int,
@@ -1707,19 +1733,6 @@ def _curriculum_rung_from_window(
         if batch.request_outcome is not None:
             raise _EmptyCurriculumWindow(str(batch.request_outcome.kind))
         raise _EmptyCurriculumWindow()
-    if include_fields or batch.fields is not None:
-        sample_shape = _batch_sample_input_shape(batch=batch)
-        input_reason = _input_shape_boundary_reason(
-            architecture=architecture,
-            sample_shape=sample_shape,
-        )
-        if input_reason is not None:
-            if index == 0:
-                raise BenchmarkRunnerError(input_reason)
-            raise BenchmarkRunnerError(
-                "architecture scale contract rejected the next curriculum rung: "
-                f"{input_reason}"
-            )
     materialization_plan = batch.samples[0].materialization_plan
     return _CurriculumRung(
         index=index,
@@ -1902,103 +1915,106 @@ def _validate_claim_chain_cumulative_brackets(
             )
 
 
-def _validate_architecture_for_batch(
+def _validate_program_for_batch(
     *,
-    architecture: ArchitectureManifest,
+    program: LoadedProgramGraph,
     batch: GeneratedSampleSet,
     target_contract: TargetContract,
 ) -> None:
-    sample_shape = _batch_sample_input_shape(batch=batch)
-    if (
-        architecture.model_scale_contract is None
-        and (
-            (
-                batch.samples
-                and batch.samples[0].materialization_plan is not None
-            )
-            or (target_contract.kind == "field-valued" and batch.region is not None)
-        )
-    ):
-        raise BenchmarkRunnerError(
-            "architecture must declare a variable-shape scale contract for generated "
-            f"observation shape {sample_shape}"
-        )
-    input_reason = _input_shape_boundary_reason(
-        architecture=architecture,
-        sample_shape=sample_shape,
+    runtime = resolve_host_tensor_runtime()
+    input_shapes = _program_input_shapes_for_batch(batch=batch, target_contract=target_contract)
+    additional_input_shapes = _program_additional_input_shapes(
+        input_shapes=input_shapes,
+        target_contract=target_contract,
     )
-    if input_reason is not None:
-        raise BenchmarkRunnerError(input_reason)
+    try:
+        program.graph.validate(
+            runtime,
+            input_shapes=input_shapes,
+            additional_input_shapes=additional_input_shapes,
+            require_differentiable=False,
+            batch_size=1,
+        )
+    except (ProgramGraphError, TensorRuntimeError) as error:
+        raise BenchmarkRunnerError(str(error)) from error
+    sample_shape = _batch_sample_input_shape(batch=batch)
     field_shape = sample_shape if target_contract.kind == "field-valued" else None
     try:
         expected_output_shape = target_contract.expected_output_shape(field_shape)
     except TargetContractError as error:
         raise BenchmarkRunnerError(str(error)) from error
-    if architecture.output_shape != expected_output_shape:
-        if (
-            target_contract.kind == "field-valued"
-            and architecture.model_scale_contract is not None
-            and _shape_matches_scale_contract(
-                contract=architecture.model_scale_contract,
-                sample_shape=expected_output_shape,
-            )
-            and architecture.output_shape == architecture.model_scale_contract.anchor_shape
-        ):
-            return
+    output_shape = _batchless_program_output_shape(
+        program=program,
+        input_shapes=input_shapes,
+        target_contract=target_contract,
+    )
+    if output_shape != expected_output_shape:
         raise BenchmarkRunnerError(
-            f"architecture output_shape {architecture.output_shape} does not match "
+            f"program output shape {output_shape} does not match "
             f"target contract output shape {expected_output_shape}"
         )
 
 
-def _input_shape_boundary_reason(
+def _program_input_shapes_for_batch(
     *,
-    architecture: ArchitectureManifest,
-    sample_shape: tuple[int, ...],
-) -> str | None:
-    contract = architecture.model_scale_contract
-    if contract is not None:
-        if _shape_matches_scale_contract(contract=contract, sample_shape=sample_shape):
-            return None
-        return (
-            f"architecture variable-shape scale contract does not accept generated "
-            f"observation shape {sample_shape}"
-        )
-    if architecture.input_shape == sample_shape:
-        return None
-    return (
-        "architecture input_shape must match generated tensor shape or declare "
-        "a variable-shape scale contract for generated "
-        "observation shape "
-        f"{sample_shape}"
-    )
+    batch: GeneratedSampleSet,
+    target_contract: TargetContract,
+) -> tuple[tuple[int, ...], ...]:
+    sample_shape = _batch_sample_input_shape(batch=batch)
+    if target_contract.kind == "field-valued":
+        return (sample_shape, ())
+    return (sample_shape,)
 
 
-def _shape_matches_scale_contract(
+def _program_additional_input_shapes(
     *,
-    contract: Any,
-    sample_shape: tuple[int, ...],
-) -> bool:
-    if contract.maximum is not None and contract.maximum == contract.minimum:
-        return False
-    if len(contract.axes) != len(sample_shape):
-        return False
-    saw_scaled_axis = False
-    for axis in contract.axes:
-        index = cast(int, axis["index"])
-        if axis["kind"] == "fixed":
-            if sample_shape[index] != cast(int, axis["size"]):
-                return False
-        else:
-            saw_scaled_axis = True
-            if not contract.accepts_scale(sample_shape[index]):
-                return False
-    return saw_scaled_axis
+    input_shapes: tuple[tuple[int, ...], ...],
+    target_contract: TargetContract,
+) -> tuple[tuple[tuple[int, ...], ...], ...]:
+    if target_contract.kind != "field-valued":
+        return ()
+    field_shape = input_shapes[0]
+    varied = (*field_shape[:-1], max(1, field_shape[-1] + 1))
+    return ((varied, ()),)
+
+
+def _batchless_program_output_shape(
+    *,
+    program: LoadedProgramGraph,
+    input_shapes: tuple[tuple[int, ...], ...],
+    target_contract: TargetContract,
+) -> tuple[int, ...]:
+    output = program.graph.validate(
+        resolve_host_tensor_runtime(),
+        input_shapes=input_shapes,
+        additional_input_shapes=_program_additional_input_shapes(
+            input_shapes=input_shapes,
+            target_contract=target_contract,
+        ),
+        require_differentiable=False,
+        batch_size=1,
+    ).output_shapes[0]
+    if len(output) != 1:
+        raise BenchmarkRunnerError("program must produce exactly one output tensor")
+    return output[0]
+
+
+def _expected_program_output_shape(
+    *,
+    batch: GeneratedSampleSet,
+    target_contract: TargetContract,
+) -> tuple[int, ...]:
+    sample_shape = _batch_sample_input_shape(batch=batch)
+    field_shape = sample_shape if target_contract.kind == "field-valued" else None
+    try:
+        return target_contract.expected_output_shape(field_shape)
+    except TargetContractError as error:
+        raise BenchmarkRunnerError(str(error)) from error
 
 
 def _train_and_predict(
     *,
-    architecture: ArchitectureManifest,
+    program_path: Path,
     initial_evaluation_rung: _CurriculumRung,
     generator: _TensorBenchmarkGenerator,
     target_contract: TargetContract,
@@ -2033,7 +2049,7 @@ def _train_and_predict(
     for index, device_kind in enumerate(device_kinds):
         try:
             return _train_and_predict_on_device(
-                architecture=architecture,
+                program_path=program_path,
                 initial_evaluation_rung=initial_evaluation_rung,
                 generator=generator,
                 target_contract=target_contract,
@@ -2067,7 +2083,7 @@ def _train_and_predict(
 
 def _train_and_predict_on_device(
     *,
-    architecture: ArchitectureManifest,
+    program_path: Path,
     initial_evaluation_rung: _CurriculumRung,
     generator: _TensorBenchmarkGenerator,
     target_contract: TargetContract,
@@ -2100,14 +2116,20 @@ def _train_and_predict_on_device(
     except TensorRuntimeError as error:
         raise BenchmarkRunnerError(str(error)) from error
     seed_runtime(runtime, seed=seed)
-    executable = ExecutableModelOperator(architecture)
-    module = OperationFallbackSequential(
+    module = _build_training_module(
         runtime=runtime,
-        operations=executable.operation_modules(),
-        input_conditioning=architecture.input_conditioning,
+        program_path=program_path,
     )
     outcome_ids = _target_contract_outcome_ids(target_contract)
     chance_mass = _target_contract_chance_mass(target_contract)
+    if target_contract.kind == "field-valued":
+        _validate_training_field_stepper(
+            runtime=runtime,
+            module=module,
+            batch=initial_evaluation_rung.batch,
+            target_contract=target_contract,
+            outcome_ids=outcome_ids,
+        )
     loss_function = _build_training_loss(
         runtime=runtime,
         target_contract=target_contract,
@@ -2150,7 +2172,6 @@ def _train_and_predict_on_device(
     ) -> _TrainingStepBatch:
         physical_sample_count = _physical_execution_sample_count(
             runtime=runtime,
-            architecture=architecture,
             generator=generator,
             rung=rung,
             requested_sample_count=batch_sample_count,
@@ -2204,7 +2225,6 @@ def _train_and_predict_on_device(
     ) -> GeneratedSampleSet:
         physical_sample_count = _physical_execution_sample_count(
             runtime=runtime,
-            architecture=architecture,
             generator=generator,
             rung=rung,
             requested_sample_count=batch_sample_count,
@@ -2238,7 +2258,6 @@ def _train_and_predict_on_device(
 
     training_rungs: list[_CurriculumRung] = [
         _training_curriculum_rung(
-            architecture=architecture,
             generator=generator,
             sample_count=sample_count,
             seed=seed,
@@ -2292,7 +2311,6 @@ def _train_and_predict_on_device(
         with phase_timings.span("training_frontier.rung_append"):
             try:
                 next_rung = _training_curriculum_rung(
-                    architecture=architecture,
                     generator=generator,
                     sample_count=sample_count,
                     seed=seed,
@@ -2339,7 +2357,6 @@ def _train_and_predict_on_device(
         patience=convergence_patience,
         min_delta=convergence_min_delta,
         rung_competence_threshold=rung_competence_threshold,
-        architecture=architecture,
         training_counter=training_counter,
         validation_counter=validation_counter,
         phase_timings=phase_timings,
@@ -2373,12 +2390,17 @@ def _train_and_predict_on_device(
                     evaluation_counter=evaluation_counter,
                     roofline=runtime_roofline_record(runtime),
                     work_estimates=_training_work_estimates(
-                        architecture=architecture,
+                        input_shape=_batch_sample_input_shape(batch=current_frontier().batch),
+                        output_shape=_expected_program_output_shape(
+                            batch=current_frontier().batch,
+                            target_contract=target_contract,
+                        ),
                         inference_cost=_module_projected_inference_cost_measurement(
                             runtime=runtime,
                             module=checked_module,
-                            input_shape=architecture.input_shape,
+                            input_shape=_batch_sample_input_shape(batch=current_frontier().batch),
                             batch_size=batch_size,
+                            target_contract=target_contract,
                         ),
                         training_cost=_training_history_latest_training_cost_measurement(
                             history
@@ -2444,14 +2466,19 @@ def _train_and_predict_on_device(
             evaluation_counter=evaluation_counter,
             roofline=runtime_roofline_record(runtime),
             work_estimates=_training_work_estimates(
-                architecture=architecture,
+                input_shape=_batch_sample_input_shape(batch=current_frontier().batch),
+                output_shape=_expected_program_output_shape(
+                    batch=current_frontier().batch,
+                    target_contract=target_contract,
+                ),
                 inference_cost=(
                     training_result.validation_inference_cost
                     or _module_projected_inference_cost_measurement(
                         runtime=runtime,
                         module=module,
-                        input_shape=architecture.input_shape,
+                        input_shape=_batch_sample_input_shape(batch=current_frontier().batch),
                         batch_size=batch_size,
+                        target_contract=target_contract,
                     )
                 ),
                 training_cost=_training_history_latest_training_cost_measurement(
@@ -2470,7 +2497,7 @@ def _train_and_predict_on_device(
 
 def evaluate_model_checkpoint_artifact(
     *,
-    architecture: ArchitectureManifest,
+    program_path: Path,
     generator: _TensorBenchmarkGenerator,
     target_contract: TargetContract,
     competence_factory: _BenchmarkTrainingCompetenceFactory | None = None,
@@ -2493,7 +2520,7 @@ def evaluate_model_checkpoint_artifact(
     phase_timings = TimingCollector()
     with phase_timings.span("checkpoint_evaluation.predictor_load"):
         predictor = load_model_checkpoint_predictor(
-            architecture=architecture,
+            program_path=program_path,
             target_contract=target_contract,
             checkpoint=checkpoint,
             tensor_device=tensor_device,
@@ -2515,7 +2542,6 @@ def evaluate_model_checkpoint_artifact(
         with phase_timings.span("checkpoint_evaluation.rung_preparation"):
             try:
                 rung = _evaluation_curriculum_rung(
-                    architecture=architecture,
                     generator=generator,
                     sample_count=1,
                     seed=seed,
@@ -2540,7 +2566,6 @@ def evaluate_model_checkpoint_artifact(
             with phase_timings.span("checkpoint_evaluation.rung_evaluation"):
                 rung_evidence = _evaluate_checkpoint_rung(
                     predictor=predictor,
-                    architecture=architecture,
                     generator=generator,
                     rung=rung,
                     outcome_ids=outcome_ids,
@@ -2589,7 +2614,6 @@ def evaluate_model_checkpoint_artifact(
         ) = (
             _evaluate_checkpoint_rung_measurements(
                 predictor=predictor,
-                architecture=architecture,
                 generator=generator,
                 rung=results[evaluation_frontier_index].rung,
                 outcome_ids=outcome_ids,
@@ -2765,6 +2789,39 @@ def _field_valued_ambient_horizons(
     return tuple((horizon * index) / float(step_count) for index in range(1, step_count + 1))
 
 
+def _validate_training_field_stepper(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    batch: GeneratedSampleSet,
+    target_contract: TargetContract,
+    outcome_ids: tuple[str, ...],
+) -> None:
+    fields, labels = _batch_tensors(
+        runtime=runtime,
+        batch=batch,
+        outcome_ids=outcome_ids,
+        device=runtime.device,
+    )
+    horizons = _field_valued_target_horizons(
+        batch=batch,
+        labels=labels,
+        target_contract=target_contract,
+    )
+    dt = _field_valued_cost_horizon(horizons)
+    if horizons:
+        dt = horizons[0]
+    try:
+        validate_field_stepper_nondegenerate(
+            runtime=runtime,
+            module=module,
+            fields=fields,
+            dt=dt,
+        )
+    except FieldEvolutionError as error:
+        raise BenchmarkRunnerError(str(error)) from error
+
+
 def _field_valued_cost_horizon(horizons: tuple[float, ...] | None) -> float:
     if horizons:
         return horizons[-1]
@@ -2797,7 +2854,6 @@ def _field_valued_model_trajectory(
     if label_time_count < 1:
         raise BenchmarkRunnerError("field-valued trajectory target must contain at least one time")
     time_count = 1 + len(horizons) if horizons else label_time_count
-    states = [fields]
     if time_count == 1:
         return fields
     if horizons is None:
@@ -2807,15 +2863,21 @@ def _field_valued_model_trajectory(
             "field-valued target horizon count must match target time steps after "
             "the initial state"
         )
+    state = fields
+    states = [fields]
+    previous_horizon = 0.0
     for horizon in horizons:
-        states.append(
-            _field_valued_model_state_at_horizon(
-                runtime=runtime,
-                module=module,
-                fields=fields,
-                horizon=horizon,
-            )
+        dt = horizon - previous_horizon
+        if dt <= 0.0 or not math.isfinite(dt):
+            raise BenchmarkRunnerError("field-valued target horizons must increase")
+        state = _field_valued_model_state_at_horizon(
+            runtime=runtime,
+            module=module,
+            fields=state,
+            horizon=dt,
         )
+        states.append(state)
+        previous_horizon = horizon
     return tensor_runtime_concat(runtime, states, dim=1)
 
 
@@ -2826,21 +2888,15 @@ def _field_valued_model_state_at_horizon(
     fields: Any,
     horizon: float,
 ) -> Any:
-    _ = runtime
     try:
-        state = module(fields, float(horizon))
-    except TypeError as error:
-        raise BenchmarkRunnerError(
-            "field-valued operator must accept an input state and horizon"
-        ) from error
-    except TensorRuntimeError as error:
-        raise BenchmarkRunnerError(str(error)) from error
-    if tuple(state.shape) != tuple(fields.shape):
-        raise BenchmarkRunnerError(
-            "field-valued operator must return state shape "
-            f"{tuple(fields.shape)}, got {tuple(state.shape)}"
+        return field_stepper_state(
+            runtime=runtime,
+            module=module,
+            fields=fields,
+            dt=horizon,
         )
-    return state
+    except (FieldEvolutionError, TensorRuntimeError) as error:
+        raise BenchmarkRunnerError(str(error)) from error
 
 
 def _module_inference_cost_measurement(
@@ -2884,6 +2940,7 @@ def _module_projected_inference_cost_measurement(
     module: Any,
     input_shape: tuple[int, ...],
     batch_size: int,
+    target_contract: TargetContract,
 ) -> tuple[CostMeasurement, int] | None:
     sample_count = max(1, batch_size)
     was_training = bool(module.training)
@@ -2896,7 +2953,13 @@ def _module_projected_inference_cost_measurement(
             device=runtime.device,
         )
         with no_grad_context(runtime):
-            return module(fields)
+            return _model_inference_for_cost(
+                runtime=runtime,
+                module=module,
+                fields=fields,
+                horizons=None,
+                target_contract=target_contract,
+            )
 
     try:
         return (
@@ -2918,7 +2981,6 @@ def _module_projected_inference_cost_measurement(
 def _evaluate_checkpoint_rung(
     *,
     predictor: CheckpointModelPredictor,
-    architecture: ArchitectureManifest,
     generator: _TensorBenchmarkGenerator,
     rung: _CurriculumRung,
     outcome_ids: tuple[str, ...],
@@ -2964,7 +3026,6 @@ def _evaluate_checkpoint_rung(
         )
         for chunk in _checkpoint_evaluation_chunks(
             predictor=predictor,
-            architecture=architecture,
             generator=generator,
             rung=rung,
             outcome_ids=outcome_ids,
@@ -3125,7 +3186,6 @@ class _CheckpointEvaluationChunk:
 def _evaluate_checkpoint_rung_measurements(
     *,
     predictor: CheckpointModelPredictor,
-    architecture: ArchitectureManifest,
     generator: _TensorBenchmarkGenerator,
     rung: _CurriculumRung,
     outcome_ids: tuple[str, ...],
@@ -3147,6 +3207,8 @@ def _evaluate_checkpoint_rung_measurements(
     probabilities: list[tuple[float, ...]] = []
     accepted_mass: list[float] = []
     competence_diagnostics: list[Mapping[str, object]] = []
+    field_batches: list[Any] = []
+    target_batches: list[Any] = []
     max_cost_measurement: tuple[CostMeasurement, int] | None = None
     census_indices = (
         _census_sample_indices(rung.batch.region)
@@ -3158,7 +3220,6 @@ def _evaluate_checkpoint_rung_measurements(
     )
     for chunk in _checkpoint_evaluation_chunks(
         predictor=predictor,
-        architecture=architecture,
         generator=generator,
         rung=rung,
         outcome_ids=outcome_ids,
@@ -3178,6 +3239,15 @@ def _evaluate_checkpoint_rung_measurements(
         probabilities.extend(chunk.probabilities)
         accepted_mass.extend(chunk.accepted_mass)
         competence_diagnostics.extend(chunk.competence_diagnostics)
+        if target_contract.kind == "field-valued":
+            fields, targets = _batch_tensors(
+                runtime=predictor.runtime,
+                batch=chunk.batch,
+                outcome_ids=outcome_ids,
+                device=predictor.runtime.device,
+            )
+            field_batches.append(fields)
+            target_batches.append(targets)
         max_cost_measurement = _max_cost_measurement(
             max_cost_measurement,
             _chunk_cost_measurement_pair(chunk),
@@ -3198,6 +3268,16 @@ def _evaluate_checkpoint_rung_measurements(
             region=rung.batch.region,
             request_outcome=rung.batch.request_outcome,
             samples=tuple(samples),
+            fields=(
+                None
+                if not field_batches
+                else tensor_runtime_concat(predictor.runtime, field_batches, dim=0)
+            ),
+            targets=(
+                None
+                if not target_batches
+                else tensor_runtime_concat(predictor.runtime, target_batches, dim=0)
+            ),
         ),
         tuple(probabilities),
         tuple(accepted_mass),
@@ -3210,7 +3290,6 @@ def _evaluate_checkpoint_rung_measurements(
 def _checkpoint_evaluation_chunks(
     *,
     predictor: CheckpointModelPredictor,
-    architecture: ArchitectureManifest,
     generator: _TensorBenchmarkGenerator,
     rung: _CurriculumRung,
     outcome_ids: tuple[str, ...],
@@ -3228,7 +3307,6 @@ def _checkpoint_evaluation_chunks(
     while remaining > 0:
         physical_sample_count = _physical_execution_sample_count(
             runtime=predictor.runtime,
-            architecture=architecture,
             generator=generator,
             rung=rung,
             requested_sample_count=remaining,
@@ -3417,7 +3495,6 @@ def _rung_tensor_input_shape(
     *,
     generator: _TensorBenchmarkGenerator,
     rung: _CurriculumRung,
-    architecture: ArchitectureManifest,
 ) -> tuple[int, ...]:
     tensor_input_shape = _tensor_input_shape(rung.batch.fields)
     if tensor_input_shape is not None:
@@ -3427,7 +3504,7 @@ def _rung_tensor_input_shape(
     height_axis = getattr(formation, "height_axis", None)
     width_axis = getattr(formation, "width_axis", None)
     if rung.resolution_assignment is None:
-        return architecture.input_shape
+        return _batch_sample_input_shape(batch=rung.batch)
     if (
         type(channel_count) is not int
         or channel_count < 1
@@ -3473,7 +3550,6 @@ def _estimated_runtime_batch_sample_bytes(
 def _physical_execution_sample_count(
     *,
     runtime: TensorRuntime,
-    architecture: ArchitectureManifest,
     generator: _TensorBenchmarkGenerator,
     rung: _CurriculumRung,
     requested_sample_count: int,
@@ -3489,7 +3565,6 @@ def _physical_execution_sample_count(
     input_shape = _rung_tensor_input_shape(
         generator=generator,
         rung=rung,
-        architecture=architecture,
     )
     used_bytes = _runtime_used_memory_bytes(runtime)
     available_bytes = budget_bytes
@@ -3513,13 +3588,24 @@ def _physical_execution_sample_count(
     return int(physical_sample_count)
 
 
+def _build_training_module(
+    *,
+    runtime: TensorRuntime,
+    program_path: Path,
+) -> Any:
+    try:
+        return load_program_graph(program_path, runtime).graph.build_module(runtime)
+    except ProgramGraphError as error:
+        raise BenchmarkRunnerError(str(error)) from error
+
+
 def _is_runtime_capacity_error(error: RuntimeError) -> bool:
     return runtime_capacity_error(error)
 
 
 def load_model_checkpoint_predictor(
     *,
-    architecture: ArchitectureManifest,
+    program_path: Path,
     target_contract: TargetContract,
     checkpoint: ModelCheckpointArtifact,
     tensor_device: TensorRuntimeDevice,
@@ -3530,11 +3616,9 @@ def load_model_checkpoint_predictor(
         runtime = resolve_tensor_runtime(tensor_device)
     except TensorRuntimeError as error:
         raise BenchmarkRunnerError(str(error)) from error
-    executable = ExecutableModelOperator(architecture)
-    module = OperationFallbackSequential(
+    module = _build_training_module(
         runtime=runtime,
-        operations=executable.operation_modules(),
-        input_conditioning=architecture.input_conditioning,
+        program_path=program_path,
     )
     _load_torch_checkpoint(module=module, runtime=runtime, checkpoint=checkpoint)
     module.eval()
@@ -3605,7 +3689,8 @@ def load_model_checkpoint_artifact(
 def _model_checkpoint_artifact_record(
     *,
     checkpoint: ModelCheckpointArtifact,
-    architecture: ArchitectureManifest,
+    program_graph: Mapping[str, object],
+    program_path: Path,
     benchmark_id: ProtocolIdentifier,
     run_slug: str,
     results_root: Path | None = None,
@@ -3623,8 +3708,12 @@ def _model_checkpoint_artifact_record(
     )
     record["benchmark_id"] = str(benchmark_id)
     record["run_slug"] = run_slug
-    record["architecture_manifest"] = architecture.to_record()
+    record["program_graph"] = dict(program_graph)
     record["model_manifest"] = checkpoint.manifest.to_record()
+    record["program_path"] = _portable_record_path(
+        program_path,
+        results_root=results_root or Path("results"),
+    )
     if checkpoint.score_estimate is not None:
         record["score"] = _checkpoint_score_estimate_selection_score(
             checkpoint.score_estimate
@@ -3671,6 +3760,19 @@ def _resolve_artifact_record_path(value: str, *, results_root: Path) -> Path:
     if not resolved.is_relative_to(results_root.resolve()):
         raise BenchmarkRunnerError(f"artifact path must stay inside results root: {value}")
     return resolved
+
+
+def _checkpoint_program_path(value: object, *, results_root: Path) -> Path:
+    if value is None:
+        raise BenchmarkRunnerError("checkpoint_artifact.program_path is required")
+    if not isinstance(value, str) or not value:
+        raise BenchmarkRunnerError("checkpoint_artifact.program_path must be a nonempty string")
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    if path.parts[:1] == (results_root.name,):
+        return (results_root.parent / path).resolve()
+    return path
 
 
 def _load_object_record(path: Path, *, description: str) -> Mapping[str, object]:
@@ -3756,7 +3858,6 @@ def _train_until_convergence(
     patience: int,
     min_delta: float,
     rung_competence_threshold: float,
-    architecture: ArchitectureManifest,
     training_counter: _ThroughputCounter,
     validation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
@@ -4860,7 +4961,6 @@ def _training_progress_record(
     *,
     plan: BenchmarkRunPlan,
     summary: BenchmarkRunSummary,
-    architecture: ArchitectureManifest,
     inspection: ModelInspectionRecord,
     evaluation_curriculum: Mapping[str, object],
     training_curriculum: Mapping[str, object],
@@ -4871,7 +4971,6 @@ def _training_progress_record(
     selected_model_checkpoint_score_estimate: Mapping[str, object] | None,
 ) -> Mapping[str, object]:
     training_estimate = _training_estimate_record(
-        architecture=architecture,
         summary=summary,
         training_run=training_run,
     )
@@ -4881,7 +4980,7 @@ def _training_progress_record(
         "run_slug": summary.run_slug,
         "run_status": "running",
         "benchmark_id": str(summary.benchmark_id),
-        "architecture_path": summary.architecture_path.as_posix(),
+        "program_path": summary.program_path.as_posix(),
         "seed": plan.seed,
         "train_steps": plan.train_steps,
         "optimizer": plan.optimizer,
@@ -4897,14 +4996,15 @@ def _training_progress_record(
         "throughput": throughput,
         "evaluation_curriculum": dict(evaluation_curriculum),
         "training_curriculum": dict(training_curriculum),
-        "architecture": inspection.architecture.to_record(),
+        "program": inspection.program.to_record(),
+        "program_graph": dict(inspection.program_graph),
         "cost_summary": _training_cost_summary(
             inspection=inspection,
             training_estimate=training_estimate,
             training_run=training_run,
         ),
         "model_inspection": inspection.to_record(),
-        "architecture_digest": str(architecture.digest),
+        "program_digest": str(inspection.program.record_digest),
         "model_inspection_digest": str(inspection.digest),
         "training_estimate": training_estimate,
         "model_checkpoints": [dict(checkpoint) for checkpoint in model_checkpoints],
@@ -4951,7 +5051,6 @@ def _training_history_artifact_point_record(
 
 def _training_estimate_record(
     *,
-    architecture: ArchitectureManifest,
     summary: BenchmarkRunSummary,
     training_run: TrainingRunRecord,
 ) -> dict[str, object]:
@@ -5076,7 +5175,7 @@ def _should_write_model_checkpoint(
 def _write_model_checkpoint_artifact(
     *,
     summary: BenchmarkRunSummary,
-    architecture: ArchitectureManifest,
+    program_graph: Mapping[str, object],
     model_interface: ModelInterface,
     training_run: TrainingRunRecord,
     module: Any,
@@ -5091,26 +5190,24 @@ def _write_model_checkpoint_artifact(
         kind="model-checkpoint",
         content_digest=checkpoint_digest,
     )
+    program_reference = reference_for_record(kind="program-graph", record=program_graph)
     manifest = ModelArtifactManifest(
         id=ProtocolIdentifier.parse(
             f"model-manifests.{_identifier_atom(summary.benchmark_id)}."
             f"{summary.run_slug}.{stem}@0.1.0"
         ),
-        architecture=reference_for_record(
-            kind="architecture-manifest",
-            record=architecture.to_record(),
-        ),
+        program=program_reference,
         interface=reference_for_record(
             kind="model-interface",
             record=model_interface.to_record(),
         ),
         execution_family=(
-            ModelExecutionFamily.reference_runner_pytorch_sequential()
+            ModelExecutionFamily.submitted_program_graph()
             if runtime == "pytorch"
             else ModelExecutionFamily(
                 kind=f"local-{runtime}",
                 runtime=runtime,
-                architecture_family="sequential-architecture-components",
+                program_family="open-node-program-graph",
             )
         ),
         model_artifacts=(checkpoint_reference,),
@@ -5389,7 +5486,8 @@ def _phase_roofline_record(
 
 def _training_work_estimates(
     *,
-    architecture: ArchitectureManifest,
+    input_shape: tuple[int, ...],
+    output_shape: tuple[int, ...],
     inference_cost: tuple[CostMeasurement, int] | None,
     training_cost: tuple[CostMeasurement, int] | None,
     storage_bytes: int | None,
@@ -5408,8 +5506,8 @@ def _training_work_estimates(
         or training_ops_per_sample <= 0
     ):
         return None
-    input_bytes = _shape_bytes(architecture.input_shape)
-    output_bytes = _shape_bytes(architecture.output_shape)
+    input_bytes = _shape_bytes(input_shape)
+    output_bytes = _shape_bytes(output_shape)
     batch_size_value = max(1, batch_size)
     storage_bytes_per_sample = float(storage_bytes or 0) / batch_size_value
     inference_bytes = input_bytes + output_bytes + storage_bytes_per_sample
