@@ -105,20 +105,20 @@ function assertArchitecturePanel() {
     'utf8',
   );
   for (const marker of [
-    "import { ArchitecturePanel }",
-    "{ id: 'architecture', label: 'Architecture'",
-    "hidden={activeTab !== 'architecture'}",
-    '<ArchitecturePanel />',
+    "import { ProgramPanel } from './ArchitecturePanel'",
+    "{ id: 'program', label: 'Program'",
+    "hidden={activeTab !== 'program'}",
+    '<ProgramPanel />',
   ]) {
     if (!shell.includes(marker)) {
-      throw new Error(`ConsoleShell must wire the Architecture tab: ${marker}`);
+      throw new Error(`ConsoleShell must wire the Program tab: ${marker}`);
     }
   }
-  if (shell.indexOf("id: 'architecture'") > shell.indexOf("id: 'benchmarks'")) {
-    throw new Error('Architecture tab must be declared before the Benchmarks tab');
+  if (shell.indexOf("id: 'program'") > shell.indexOf("id: 'benchmarks'")) {
+    throw new Error('Program tab must be declared before the Benchmarks tab');
   }
-  if (!/usePersistentState<TabId>\(\s*'leibniz\.console\.currentTab',\s*'architecture'/.test(shell)) {
-    throw new Error('Architecture must be the default console tab');
+  if (!/usePersistentState<TabId>\(\s*'leibniz\.console\.currentTab',\s*'program'/.test(shell)) {
+    throw new Error('Program must be the default console tab');
   }
   const panel = readFileSync(
     resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/ArchitecturePanel.tsx'),
@@ -369,8 +369,8 @@ function assertBenchmarkModelWorkbenchStructure() {
   if (panel.includes("label: 'Artifacts'")) {
     throw new Error('BenchmarksPanel must label provenance by the records it actually renders');
   }
-  if (panel.includes('run.architecture_digest === model.architecture_digest')) {
-    throw new Error('BenchmarksPanel must not group repeated training runs by architecture digest');
+  if (panel.includes('run.program_digest === model.program_digest')) {
+    throw new Error('BenchmarksPanel must not group repeated training runs by program digest');
   }
 
   const requiredStyleMarkers = [

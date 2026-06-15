@@ -141,7 +141,7 @@ export type CostSummaryRecord = {
 export type ModelResultRecord = {
   model_key: string;
   result_status: 'accepted' | 'provisional';
-  architecture_digest: string;
+  program_digest: string;
   benchmark_id: string;
   score: number;
   score_integral: StateSpaceIntegralRecord;
@@ -162,13 +162,14 @@ export type RunResultRecord = {
   run_id: string;
   run_slug: string;
   benchmark_id: string;
-  architecture_digest: string;
+  program_digest: string;
   model_key: string;
   log2_volume?: number;
   measurement_count: number;
   score: number;
   cost_summary: CostSummaryRecord;
-  architecture: Record<string, unknown>;
+  program: Record<string, unknown>;
+  program_graph: Record<string, unknown>;
   model_inspection_digest?: string;
   model_inspection_path?: string;
   measurement_dataset_digest: string;
@@ -321,14 +322,14 @@ function parseReferenceCurvePoint(value: unknown, path: string): ReferenceCurveP
 
 function parseModelResult(value: unknown, path: string): ModelResultRecord {
   const record = requireRecord(value, path, transportError);
-  requireStrings(record, path, ['model_key', 'result_status', 'architecture_digest', 'benchmark_id']);
+  requireStrings(record, path, ['model_key', 'result_status', 'program_digest', 'benchmark_id']);
   if (record.result_status !== 'accepted' && record.result_status !== 'provisional') {
     throw transportError(`${path}.result_status must be accepted or provisional`);
   }
   return withFields(record, {
     model_key: requireString(record.model_key, `${path}.model_key`, transportError),
     result_status: requireString(record.result_status, `${path}.result_status`, transportError) as 'accepted' | 'provisional',
-    architecture_digest: requireString(record.architecture_digest, `${path}.architecture_digest`, transportError),
+    program_digest: requireString(record.program_digest, `${path}.program_digest`, transportError),
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
     score_integral: parseStateSpaceIntegral(record.score_integral, `${path}.score_integral`),
@@ -425,7 +426,7 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
     'run_id',
     'run_slug',
     'benchmark_id',
-    'architecture_digest',
+    'program_digest',
     'model_key',
     'measurement_dataset_digest',
   ]);
@@ -436,7 +437,8 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
     measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
     cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
-    architecture: requireRecord(record.architecture, `${path}.architecture`, transportError),
+    program: requireRecord(record.program, `${path}.program`, transportError),
+    program_graph: requireRecord(record.program_graph, `${path}.program_graph`, transportError),
     training_diagnostics: optional(record.training_diagnostics, `${path}.training_diagnostics`, parseTrainingDiagnostics),
     console_view_model: optional(record.console_view_model, `${path}.console_view_model`, parseRunDetailViewModel),
   }) as RunResultRecord;

@@ -4,14 +4,12 @@ import { requireArray, requireNumber, requireRecord } from './transport.ts';
 export type ModelInspectionRecord = {
   id: string;
   source_path: string;
-  architecture: ArtifactReferenceRecord;
+  program: ArtifactReferenceRecord;
   input_shape: number[];
   output_shape: number[];
   components: ModelInspectionComponentRecord[];
   cost_summary: ModelInspectionCostSummaryRecord;
-  architecture_trace: ModelInspectionTraceRecord;
-  architecture_graph: ModelInspectionArchitectureGraphRecord;
-  architecture_summary: ModelInspectionGraphSummaryRecord;
+  program_graph: ModelInspectionProgramGraphRecord;
   node_evidence: ModelGraphNodeEvidenceRecord[];
   model_manifest?: ArtifactReferenceRecord;
   submission_package?: ArtifactReferenceRecord;
@@ -38,25 +36,29 @@ export type ModelInspectionComponentRecord = {
   storage_bytes?: number;
 };
 
-export type ModelInspectionArchitectureGraphRecord = {
-  nodes: ModelInspectionArchitectureGraphNodeRecord[];
-  edges: ModelInspectionArchitectureGraphEdgeRecord[];
-  input_node_ids: string[];
-  output_node_ids: string[];
+export type ModelInspectionProgramGraphRecord = {
+  nodes: ModelInspectionProgramGraphNodeRecord[];
+  edges: ModelInspectionProgramGraphEdgeRecord[];
+  inputs: ModelInspectionProgramGraphTensorContractRecord[];
+  outputs: ModelInspectionProgramGraphTensorContractRecord[];
+  contract_kind: string;
 };
 
-export type ModelInspectionArchitectureGraphNodeRecord = {
+export type ModelInspectionProgramGraphNodeRecord = {
   id: string;
-  component: {
-    kind: string;
-    parameters?: Record<string, string | number | boolean>;
-  };
+  kind: string;
+  parameters?: Record<string, string | number | boolean>;
 };
 
-export type ModelInspectionArchitectureGraphEdgeRecord = {
-  source_node_id: string;
-  target_node_id: string;
-  kind: string;
+export type ModelInspectionProgramGraphEdgeRecord = {
+  source_id: string;
+  target_id: string;
+  target_input_index: number;
+};
+
+export type ModelInspectionProgramGraphTensorContractRecord = {
+  name: string;
+  axes: Array<string | number>;
 };
 
 export type ModelInspectionCostSummaryRecord = {
@@ -79,38 +81,6 @@ export type ModelInspectionCostSummaryRecord = {
   training_cost_sample_count?: number;
   unknown_parameter_components: number[];
   unknown_cost_components: number[];
-};
-
-export type ModelInspectionGraphSummaryRecord = {
-  component_count: number;
-  edge_count: number;
-  input_count: number;
-  output_count: number;
-  input_node_ids: string[];
-  output_node_ids: string[];
-  component_kinds: string[];
-  unsupported_parameter_components: number[];
-  unsupported_cost_components: number[];
-};
-
-export type ModelInspectionTraceRecord = {
-  input_shape: number[];
-  output_shape: number[];
-  stages: ModelInspectionTraceStageRecord[];
-  program_effects: Record<string, unknown>[];
-};
-
-export type ModelInspectionTraceStageRecord = {
-  index: number;
-  kind: 'operator';
-  syntax_alias: string;
-  operator_kind: string;
-  input_shape: number[];
-  output_shape: number[];
-  descriptor_axes: Record<string, string>;
-  shape_law: string;
-  cost_law: string;
-  parameter_count?: number;
 };
 
 export class ModelInspectionError extends Error {

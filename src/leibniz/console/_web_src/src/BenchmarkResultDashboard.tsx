@@ -474,7 +474,7 @@ function ModelResultTable({
             role="row"
             type="button"
           >
-            <span role="cell">{shortDigest(model.architecture_digest)}</span>
+            <span role="cell">{shortDigest(model.program_digest)}</span>
             <span role="cell">{scoreLabel(scoreValue(model))}</span>
             <span role="cell">{formatCost(costValue(model.cost_summary))}</span>
           </button>
@@ -515,7 +515,7 @@ function PredictabilityBoundaryTable({
             key={`${model.model_key}-${point.log2_volume}`}
             role="row"
           >
-            <span role="cell">{shortDigest(model.architecture_digest)}</span>
+            <span role="cell">{shortDigest(model.program_digest)}</span>
             <span role="cell">{boundary === undefined ? 'gate not reached' : boundary.toFixed(3)}</span>
             <span role="cell">{scoreLabel(point.score)}</span>
           </div>

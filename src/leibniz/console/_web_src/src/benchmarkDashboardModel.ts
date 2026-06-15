@@ -108,8 +108,8 @@ export function modelComparisonRows(
   const inspectionsByDigest = new Map<string, ModelInspectionRecord>();
   for (const inspection of [...inspections, ...result.model_inspections]) {
     for (const digest of [
-      inspection.architecture.record_digest,
-      inspection.architecture.content_digest,
+      inspection.program.record_digest,
+      inspection.program.content_digest,
     ]) {
       if (digest !== undefined) {
         inspectionsByDigest.set(normalizedDigest(digest), inspection);
@@ -119,7 +119,7 @@ export function modelComparisonRows(
 
   return result.model_candidates.map((model) => ({
     model,
-    inspection: inspectionsByDigest.get(normalizedDigest(model.architecture_digest)),
+    inspection: inspectionsByDigest.get(normalizedDigest(model.program_digest)),
   }));
 }
 
@@ -319,7 +319,7 @@ function plotPoint(
   }
   return {
     id: model.model_key,
-    label: shortDigest(model.architecture_digest),
+    label: shortDigest(model.program_digest),
     cost,
     logCost: logCost(cost),
     score,
@@ -349,7 +349,7 @@ function plotRunPoint(
   }
   return {
     id: runSelectionId(run),
-    label: shortDigest(run.architecture_digest),
+    label: shortDigest(run.program_digest),
     cost,
     logCost: logCost(cost),
     score,

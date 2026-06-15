@@ -2,12 +2,12 @@ import { BookOpenCheck, Network } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { useEffect, useState } from 'react';
 
-import { ArchitecturePanel } from './ArchitecturePanel';
+import { ProgramPanel } from './ArchitecturePanel';
 import { BenchmarksPanel } from './BenchmarksPanel';
 import { usePersistentState } from './persistentState';
 import initialConsoleData, { subscribeConsoleData } from 'virtual:leibniz-console-data';
 
-type TabId = 'architecture' | 'benchmarks';
+type TabId = 'program' | 'benchmarks';
 
 type ConsoleTab = {
   id: TabId;
@@ -16,14 +16,14 @@ type ConsoleTab = {
 };
 
 const tabs: ConsoleTab[] = [
-  { id: 'architecture', label: 'Architecture', icon: Network },
+  { id: 'program', label: 'Program', icon: Network },
   { id: 'benchmarks', label: 'Benchmarks', icon: BookOpenCheck },
 ];
 
 export function ConsoleShell() {
   const [currentTab, setCurrentTab] = usePersistentState<TabId>(
     'leibniz.console.currentTab',
-    'architecture',
+    'program',
   );
   const [consoleData, setConsoleData] = useState(initialConsoleData);
   const activeTab = tabs.some((tab) => tab.id === currentTab) ? currentTab : 'benchmarks';
@@ -55,13 +55,12 @@ export function ConsoleShell() {
       </nav>
 
       <section className="tab-content">
-        <div className="console-architecture" hidden={activeTab !== 'architecture'}>
-          <ArchitecturePanel />
+        <div className="console-architecture" hidden={activeTab !== 'program'}>
+          <ProgramPanel />
         </div>
         <div className="console-overview" hidden={activeTab !== 'benchmarks'}>
           <BenchmarksPanel
             modelInspections={consoleData.model_inspections}
-            operatorVocabulary={consoleData.operator_vocabulary}
             resultViews={consoleData.result_views}
             tasks={consoleData.benchmark_tasks}
           />

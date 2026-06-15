@@ -67,8 +67,22 @@ export class OperatorVocabularyError extends Error {
 
 const error = (message: string) => new OperatorVocabularyError(message);
 
+const emptyOperatorVocabulary: OperatorVocabularyRecord = {
+  format: 'leibniz.model-operator-vocabulary',
+  format_version: 1,
+  operators: [],
+  descriptor_axis_descriptors: [],
+  descriptor_axes: {},
+  syntax_aliases: [],
+  coordinate_descriptors: [],
+  program_effects: [],
+};
+
 export function parseOperatorVocabularyRecord(value: unknown): OperatorVocabularyRecord {
   const record = requireRecord(value, 'operator vocabulary', error);
+  if (Object.keys(record).length === 0) {
+    return emptyOperatorVocabulary;
+  }
   requireLiteral(
     record.format,
     'operator vocabulary.format',
