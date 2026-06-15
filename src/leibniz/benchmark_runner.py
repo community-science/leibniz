@@ -3207,6 +3207,8 @@ def _evaluate_checkpoint_rung_measurements(
     probabilities: list[tuple[float, ...]] = []
     accepted_mass: list[float] = []
     competence_diagnostics: list[Mapping[str, object]] = []
+    field_batches: list[Any] = []
+    target_batches: list[Any] = []
     max_cost_measurement: tuple[CostMeasurement, int] | None = None
     census_indices = (
         _census_sample_indices(rung.batch.region)
@@ -3237,6 +3239,15 @@ def _evaluate_checkpoint_rung_measurements(
         probabilities.extend(chunk.probabilities)
         accepted_mass.extend(chunk.accepted_mass)
         competence_diagnostics.extend(chunk.competence_diagnostics)
+        if target_contract.kind == "field-valued":
+            fields, targets = _batch_tensors(
+                runtime=predictor.runtime,
+                batch=chunk.batch,
+                outcome_ids=outcome_ids,
+                device=predictor.runtime.device,
+            )
+            field_batches.append(fields)
+            target_batches.append(targets)
         max_cost_measurement = _max_cost_measurement(
             max_cost_measurement,
             _chunk_cost_measurement_pair(chunk),
@@ -3257,6 +3268,16 @@ def _evaluate_checkpoint_rung_measurements(
             region=rung.batch.region,
             request_outcome=rung.batch.request_outcome,
             samples=tuple(samples),
+            fields=(
+                None
+                if not field_batches
+                else tensor_runtime_concat(predictor.runtime, field_batches, dim=0)
+            ),
+            targets=(
+                None
+                if not target_batches
+                else tensor_runtime_concat(predictor.runtime, target_batches, dim=0)
+            ),
         ),
         tuple(probabilities),
         tuple(accepted_mass),

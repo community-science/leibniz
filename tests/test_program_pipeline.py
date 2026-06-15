@@ -1,0 +1,314 @@
+from __future__ import annotations
+
+import math
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
+
+import pytest
+from ks_oracle import ks_reference_step
+
+from leibniz.benchmark_implementations import load_benchmark
+from leibniz.benchmark_runner import (
+    BenchmarkEvaluationPlan,
+    BenchmarkRunnerError,
+    BenchmarkRunPlan,
+    evaluate_benchmark_checkpoint,
+    run_benchmark,
+)
+from leibniz.cli import main
+from leibniz.documents import load_object_document
+from leibniz.field_evolution import (
+    FieldEvolutionError,
+    field_stepper_trajectory,
+    validate_field_stepper_nondegenerate,
+)
+from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
+from leibniz.tensor_runtime import resolve_tensor_runtime
+
+_repository_root = Path(__file__).parents[1]
+_digits_benchmark_root = _repository_root / "src/leibniz/benchmarks/digits"
+_ks_benchmark_root = _repository_root / "src/leibniz/benchmarks/ks"
+_ks_program = _repository_root / "tests/fixtures/programs/ks_variable_conv.py"
+
+
+def test_field_stepper_rollout_is_autoregressive_and_time_dependent() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    fields = torch.zeros((2, 1, 3), dtype=torch.float32, device=runtime.device)
+
+    class AddDtStep:
+        def __call__(self, state: Any, dt: float) -> Any:
+            return state + float(dt)
+
+    trajectory = field_stepper_trajectory(
+        runtime=runtime,
+        module=AddDtStep(),
+        fields=fields,
+        horizon=1.0,
+        time_count=5,
+    )
+
+    assert trajectory.shape == (2, 5, 3)
+    assert torch.allclose(trajectory[:, 0, :], torch.zeros((2, 3), device=runtime.device))
+    assert torch.allclose(trajectory[:, 1, :], torch.full((2, 3), 0.25, device=runtime.device))
+    assert torch.allclose(trajectory[:, -1, :], torch.ones((2, 3), device=runtime.device))
+
+
+def test_field_stepper_nondegeneracy_rejects_identity_and_dt_insensitive_steps() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    fields = torch.zeros((1, 1, 4), dtype=torch.float32, device=runtime.device)
+
+    class IdentityStep:
+        def __call__(self, state: Any, dt: float) -> Any:
+            _ = dt
+            return state
+
+    class DtInsensitiveStep:
+        def __call__(self, state: Any, dt: float) -> Any:
+            _ = dt
+            return state + 1.0
+
+    with pytest.raises(FieldEvolutionError, match="must not be identity"):
+        validate_field_stepper_nondegenerate(
+            runtime=runtime,
+            module=IdentityStep(),
+            fields=fields,
+            dt=0.125,
+        )
+    with pytest.raises(FieldEvolutionError, match="must vary with dt"):
+        validate_field_stepper_nondegenerate(
+            runtime=runtime,
+            module=DtInsensitiveStep(),
+            fields=fields,
+            dt=0.125,
+        )
+
+
+def test_ks_oracle_stepper_scores_positive_through_real_residual() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    loaded = cast(Any, load_benchmark(_ks_benchmark_root))
+    batch = loaded.generator(
+        seed=101,
+        shape=1,
+        sample_indices=(0,),
+        runtime=runtime,
+        spatial_points=32,
+    )
+    fields, targets = batch.require_tensors()
+
+    class ReferenceStep:
+        def __call__(self, state: Any, dt: float) -> Any:
+            return ks_reference_step(runtime=runtime, fields=state, dt=float(dt)).to(
+                dtype=state.dtype
+            )
+
+    predictions = field_stepper_trajectory(
+        runtime=runtime,
+        module=ReferenceStep(),
+        fields=fields,
+        horizon=1.0,
+        time_count=9,
+    )
+    competence = loaded.implementation.build_training_competence(
+        runtime,
+        loaded.target_contract,
+    )
+    bits = competence(
+        SimpleNamespace(
+            runtime=runtime,
+            module=ReferenceStep(),
+            generator=loaded.generator,
+            batch=batch,
+            sample_keys=tuple(sample.to_record() for sample in batch.samples),
+            predictions=predictions,
+            targets=targets,
+            horizons=tuple(index / 8 for index in range(1, 9)),
+        )
+    )
+    diagnostics = bits.leibniz_competence_diagnostics
+
+    assert math.isclose(
+        cast(float, diagnostics[0]["residual_observed_order"]),
+        2.0,
+        abs_tol=0.1,
+    )
+    assert diagnostics[0]["residual_extrapolated_limit"] <= diagnostics[0][
+        "residual_extrapolation_uncertainty"
+    ]
+    assert diagnostics[0]["gate_decision"] == "passed"
+    assert diagnostics[0]["predictability_boundary"] > 0.0
+    assert float(bits[0]) > 0.0
+
+
+def test_program_checkpoint_evaluation_materializes_ks_result_view(tmp_path: Path) -> None:
+    results_root = tmp_path / "results"
+    training_summary = run_benchmark(
+        BenchmarkRunPlan(
+            program_path=_ks_program,
+            benchmark_root=_ks_benchmark_root,
+            results_root=results_root,
+            seed=101,
+            train_steps=0,
+            gate_check_interval=1,
+            model_checkpoint_gate_interval=1,
+            tensor_device="cpu",
+            optimizer="adam",
+            learning_rate=1e-3,
+        )
+    )
+    evaluation_summary = evaluate_benchmark_checkpoint(
+        BenchmarkEvaluationPlan(
+            checkpoint_artifact_path=_selected_checkpoint_artifact_path(
+                training_summary.training_summary_path,
+                results_root=results_root,
+            ),
+            benchmark_root=_ks_benchmark_root,
+            results_root=results_root,
+            tensor_device="cpu",
+        )
+    )
+
+    assert evaluation_summary.measurement_count == 0
+    view_summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        results_root=results_root,
+    )
+    view = load_console_result_view(view_summary.view_file.read_bytes())
+    benchmark_results = cast(list[dict[str, object]], view["benchmark_results"])
+    result = benchmark_results[0]
+    leaderboard = cast(list[dict[str, object]], result["leaderboard"])
+    plot_runs = cast(list[dict[str, object]], result["plot_runs"])
+    point = cast(list[dict[str, object]], leaderboard[0]["points"])[0]
+
+    assert result["benchmark_id"] == "benchmarks.ks@0.1.0"
+    assert leaderboard
+    assert [run["result_status"] for run in plot_runs] == ["accepted"]
+    assert math.isfinite(cast(float, leaderboard[0]["score"]))
+    assert math.isfinite(cast(float, point["predictability_boundary"]))
+    assert "program_digest" in leaderboard[0]
+    assert "program_graph" in plot_runs[0]
+
+
+def test_cli_benchmark_train_accepts_program_flag(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    program_path = tmp_path / "digits_28_pool.py"
+    program_path.write_text(
+        """\
+from leibniz.program_graphs import (
+    ProgramGraph,
+    ProgramGraphEdge,
+    ProgramGraphNode,
+    ProgramTensorContract,
+)
+
+
+def build_program_graph(runtime):
+    torch = runtime.torch
+    return ProgramGraph(
+        contract_kind="classification",
+        inputs=(ProgramTensorContract("image", (1, 28, 28)),),
+        outputs=(ProgramTensorContract("class_logits", (10,)),),
+        nodes=(
+            ProgramGraphNode("pool", torch.nn.AdaptiveAvgPool2d((2, 2)), "pool"),
+            ProgramGraphNode("flatten", torch.nn.Flatten(), "flatten"),
+            ProgramGraphNode("readout", torch.nn.Linear(4, 10), "readout"),
+        ),
+        edges=(
+            ProgramGraphEdge("image", "pool"),
+            ProgramGraphEdge("pool", "flatten"),
+            ProgramGraphEdge("flatten", "readout"),
+            ProgramGraphEdge("readout", "class_logits"),
+        ),
+    )
+""",
+        encoding="utf-8",
+    )
+    exit_code = main(
+        [
+            "benchmark",
+            "train",
+            "--program",
+            str(program_path),
+            "--benchmark-root",
+            str(_digits_benchmark_root),
+            "--results-root",
+            str(tmp_path / "results"),
+            "--device",
+            "cpu",
+            "--dry-run",
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "planned benchmark training run digits-program-" in output
+    assert "training summary:" in output
+
+
+def test_field_program_scale_violation_is_rejected_before_training(tmp_path: Path) -> None:
+    program_path = tmp_path / "fixed_width_stepper.py"
+    program_path.write_text(
+        """\
+from leibniz.program_graphs import (
+    ProgramGraph,
+    ProgramGraphEdge,
+    ProgramGraphNode,
+    ProgramTensorContract,
+)
+
+
+def build_program_graph(runtime):
+    torch = runtime.torch
+    return ProgramGraph(
+        contract_kind="prediction",
+        inputs=(
+            ProgramTensorContract("field", (1, "S")),
+            ProgramTensorContract("dt", ()),
+        ),
+        outputs=(ProgramTensorContract("future_field", (1, "S")),),
+        nodes=(
+            ProgramGraphNode(
+                "pool",
+                torch.nn.AdaptiveAvgPool1d(4),
+                "fixed-pool",
+            ),
+        ),
+        edges=(
+            ProgramGraphEdge("field", "pool"),
+            ProgramGraphEdge("pool", "future_field"),
+        ),
+    )
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BenchmarkRunnerError, match="does not match symbolic axis"):
+        run_benchmark(
+            BenchmarkRunPlan(
+                program_path=program_path,
+                benchmark_root=_ks_benchmark_root,
+                results_root=tmp_path / "results",
+                train_steps=0,
+                tensor_device="cpu",
+                dry_run=True,
+                optimizer="adam",
+                learning_rate=1e-3,
+            )
+        )
+
+
+def _selected_checkpoint_artifact_path(
+    training_summary_path: Path,
+    *,
+    results_root: Path,
+) -> Path:
+    training_summary = load_object_document(
+        training_summary_path.read_bytes(),
+        description="training summary",
+    )
+    checkpoint = cast(dict[str, object], training_summary["selected_model_checkpoint"])
+    return results_root / cast(str, checkpoint["record_path"]).removeprefix("results/")

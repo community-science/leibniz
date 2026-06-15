@@ -1488,7 +1488,7 @@ def _model_result_records(
         score = score_integral.value
         best_run = max(
             ordered_runs,
-            key=lambda run: (run.score, -_cost_value(run.cost_summary, "storage_bytes")),
+            key=lambda run: (run.score, -_storage_sort_value(run.cost_summary)),
         )
         result_status = (
             "accepted"
@@ -2750,9 +2750,14 @@ def _model_sort_key(record: Mapping[str, object]) -> tuple[float, float, str]:
     cost_summary = _extract.mapping(record["cost_summary"], "cost_summary")
     return (
         -_as_nonnegative_number(record["score"], "score"),
-        _cost_value(cost_summary, "storage_bytes"),
+        _storage_sort_value(cost_summary),
         str(record["model_key"]),
     )
+
+
+def _storage_sort_value(cost_summary: Mapping[str, object]) -> float:
+    value = _optional_cost_value(cost_summary, "storage_bytes")
+    return math.inf if value is None else value
 
 
 def _run_sort_key(run: _BenchmarkRunRecord) -> tuple[str, str, str]:

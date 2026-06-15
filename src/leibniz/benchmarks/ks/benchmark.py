@@ -914,9 +914,9 @@ def _per_sample_richardson_field(
     safe_first = first_gap.clamp_min(numeric_floor)
     safe_second = second_gap.clamp_min(numeric_floor)
     observed_order = (safe_first / safe_second).log() / math.log(float(factor))
-    denominator = observed_order.mul(math.log(float(factor))).exp().sub(1.0).clamp_min(
-        numeric_floor
-    )
+    denominator = observed_order.mul(math.log(float(factor))).exp().sub(1.0)
+    fallback = (denominator <= numeric_floor).to(dtype=denominator.dtype)
+    denominator = denominator + (fallback * (1.0 - denominator))
     correction = (finest - current) / denominator.reshape((-1, 1, 1))
     error = correction.pow(2).mean(dim=(1, 2)).sqrt()
     return _PerSampleFieldEstimate(observed_order=observed_order, error=error)
