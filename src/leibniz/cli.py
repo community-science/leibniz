@@ -11,11 +11,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple, cast
 
-from leibniz.architecture_semantics import validate_architecture_semantics
-from leibniz.architectures import (
-    ArchitectureManifestDocument,
-    ArchitectureManifestValidationError,
-)
 from leibniz.artifacts import ArtifactIndexDocument, ArtifactReferenceDocument
 from leibniz.authority_indexes import AuthorityIndexDocument
 from leibniz.benchmark_implementations import (
@@ -60,9 +55,14 @@ from leibniz.model_lineage import ModelLineageDocument
 from leibniz.model_manifests import ModelArtifactManifestDocument
 from leibniz.model_operations import ModelOperationDocument
 from leibniz.outcomes import OutcomeSpace
+from leibniz.program_graphs import ProgramGraphError, load_program_graph
 from leibniz.resources import ResourceReportDocument, ResourceReportSetDocument
 from leibniz.submission_registries import SubmissionRegistryDocument
-from leibniz.tensor_runtime import tensor_runtime_device_choices
+from leibniz.tensor_runtime import (
+    TensorRuntimeError,
+    resolve_host_tensor_runtime,
+    tensor_runtime_device_choices,
+)
 
 __all__ = ["main"]
 
@@ -157,12 +157,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     model_manifest.add_argument("path", type=Path)
 
-    architecture = validate_subcommands.add_parser(
-        "architecture",
-        help="validate an architecture manifest document",
+    program = validate_subcommands.add_parser(
+        "program",
+        help="validate a submitted program source file",
     )
-    architecture.add_argument("path", type=Path)
-    architecture.add_argument("--semantic", action="store_true")
+    program.add_argument("path", type=Path)
 
     model_operation = validate_subcommands.add_parser(
         "model-operation",
@@ -290,7 +289,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     clean_benchmark = benchmark_subcommands.add_parser(
         "clean",
-        description="remove generated benchmark result state while preserving architectures",
+        description="remove generated benchmark result state while preserving programs",
         help="remove generated result state",
     )
     clean_benchmark.add_argument(
@@ -307,19 +306,19 @@ def _parser() -> argparse.ArgumentParser:
     train = benchmark_subcommands.add_parser(
         "train",
         description=(
-            "train locally available architecture manifests; default optimizer "
+            "train locally available submitted programs; default optimizer "
             "is hyperparameter-free loss-search"
         ),
-        help="train architecture manifests",
+        help="train submitted programs",
     )
     train.add_argument(
-        "--architecture",
+        "--program",
         type=Path,
         action="append",
         default=[],
         help=(
-            "architecture manifest or directory to train; may be repeated, "
-            "defaults to architecture manifests discovered under results/training"
+            "program source file or directory to train; may be repeated, "
+            "defaults to programs discovered under results/programs"
         ),
     )
     train.add_argument(
@@ -520,12 +519,12 @@ def _benchmark(args: argparse.Namespace) -> int:
             )
             for root in summary.cleaned_roots:
                 print(f"cleaned: {root}")
-            print(f"preserved: {args.results_root / 'architectures'}")
+            print(f"preserved: {args.results_root / 'programs'}")
             return 0
         if str(args.benchmark_command) == "train":
             summaries, skipped, moved = _run_benchmark_training(args)
             if not summaries and not skipped:
-                print("no uncompleted benchmark training manifests found")
+                print("no uncompleted benchmark programs found")
             for summary in summaries:
                 prefix = "planned" if summary.dry_run else "completed"
                 print(
@@ -621,26 +620,21 @@ def _run_benchmark_training(args: argparse.Namespace) -> tuple[list[BenchmarkRun
         explicit_roots=tuple(args.benchmark_root),
         benchmark_selectors=tuple(args.benchmarks),
     )
-    for architecture in _training_architecture_manifests(
-        architecture_inputs=tuple(args.architecture),
+    for program in _training_programs(
+        program_inputs=tuple(args.program),
         results_root=args.results_root,
     ):
-        architecture_path = architecture.path
-        if not args.architecture and not args.dry_run:
-            moved_architecture_path = _move_training_manifest_out_of_pending(architecture_path)
-            if moved_architecture_path is not None:
-                architecture_path = moved_architecture_path
-                moved += 1
-        for benchmark_root in _training_benchmark_roots_for_architecture(
-            benchmark_scope=architecture.benchmark_scope,
+        program_path = program.path
+        for benchmark_root in _training_benchmark_roots_for_program(
+            benchmark_scope=program.benchmark_scope,
             benchmark_roots_by_id=benchmark_roots_by_id,
         ):
             plan = _benchmark_run_plan(
                 args,
-                architecture_path=architecture_path,
+                program_path=program_path,
                 benchmark_root=benchmark_root,
             )
-            if not args.architecture and _benchmark_training_completed(plan):
+            if not args.program and _benchmark_training_completed(plan):
                 skipped += 1
                 continue
             summaries.append(run_benchmark(plan))
@@ -703,12 +697,12 @@ def _remove_generated_result_path(path: Path) -> None:
 def _benchmark_run_plan(
     args: argparse.Namespace,
     *,
-    architecture_path: Path,
+    program_path: Path,
     benchmark_root: Path,
     dry_run: bool | None = None,
 ) -> BenchmarkRunPlan:
     return BenchmarkRunPlan(
-        architecture_path=architecture_path,
+        program_path=program_path,
         results_root=args.results_root,
         benchmark_root=benchmark_root,
         seed=args.seed,
@@ -743,55 +737,55 @@ def _selected_benchmark_roots_by_id(
     return roots
 
 
-class _TrainingArchitecture(NamedTuple):
+class _TrainingProgram(NamedTuple):
     path: Path
     benchmark_scope: frozenset[str]
 
 
-def _training_architecture_manifests(
+def _training_programs(
     *,
-    architecture_inputs: tuple[Path, ...],
+    program_inputs: tuple[Path, ...],
     results_root: Path,
-) -> tuple[_TrainingArchitecture, ...]:
-    if not architecture_inputs:
-        return _pending_training_architecture_manifests(results_root=results_root)
-    entries: list[_TrainingArchitecture] = []
-    for root in architecture_inputs:
+) -> tuple[_TrainingProgram, ...]:
+    if not program_inputs:
+        return _pending_training_programs(results_root=results_root)
+    entries: list[_TrainingProgram] = []
+    for root in program_inputs:
         if root.is_file():
-            if _is_architecture_manifest(root):
-                entries.append(_TrainingArchitecture(path=root, benchmark_scope=frozenset()))
+            if _is_program_source(root):
+                entries.append(_TrainingProgram(path=root, benchmark_scope=frozenset()))
             else:
-                raise ValueError(f"architecture manifest is invalid: {root}")
+                raise ValueError(f"program source is invalid: {root}")
             continue
         if root.is_dir():
             entries.extend(
-                _TrainingArchitecture(
+                _TrainingProgram(
                     path=path,
-                    benchmark_scope=_architecture_benchmark_scope(path, root=root),
+                    benchmark_scope=_program_benchmark_scope(path, root=root),
                 )
-                for path in sorted(root.rglob("*" + document_filename_suffix()))
-                if _is_architecture_manifest(path)
+                for path in sorted(root.rglob("*.py"))
+                if _is_program_source(path)
             )
             continue
-        raise ValueError(f"architecture path does not exist: {root}")
-    deduped: dict[Path, _TrainingArchitecture] = {}
+        raise ValueError(f"program path does not exist: {root}")
+    deduped: dict[Path, _TrainingProgram] = {}
     for entry in entries:
         deduped.setdefault(entry.path, entry)
     return tuple(deduped.values())
 
 
-def _architecture_benchmark_scope(path: Path, *, root: Path) -> frozenset[str]:
-    """Return the benchmark-name scope for a manifest discovered under an input root.
+def _program_benchmark_scope(path: Path, *, root: Path) -> frozenset[str]:
+    """Return the benchmark-name scope for a program discovered under an input root.
 
     Only the input root's own name and directory names below it participate in
     benchmark scoping; ancestor directories outside the supplied root must not
-    rescope an architecture.
+    rescope a program.
     """
 
     return frozenset((root.name, *path.relative_to(root).parts[:-1]))
 
 
-def _training_benchmark_roots_for_architecture(
+def _training_benchmark_roots_for_program(
     *,
     benchmark_scope: frozenset[str],
     benchmark_roots_by_id: tuple[tuple[str, Path], ...],
@@ -811,35 +805,35 @@ def _training_benchmark_roots_for_architecture(
     return tuple(root for _benchmark_id, root in benchmark_roots_by_id)
 
 
-def _pending_training_architecture_manifests(
+def _pending_training_programs(
     *,
     results_root: Path,
-) -> tuple[_TrainingArchitecture, ...]:
-    training_root = results_root / "training"
-    if not training_root.is_dir():
+) -> tuple[_TrainingProgram, ...]:
+    program_root = results_root / "programs"
+    if not program_root.is_dir():
         return ()
-    entries: list[_TrainingArchitecture] = []
-    for pending_root in sorted(training_root.rglob("pending")):
+    entries: list[_TrainingProgram] = []
+    for pending_root in sorted(program_root.rglob("pending")):
         if not pending_root.is_dir():
             continue
         entries.extend(
-            _TrainingArchitecture(
+            _TrainingProgram(
                 path=path,
-                benchmark_scope=_architecture_benchmark_scope(path, root=training_root),
+                benchmark_scope=_program_benchmark_scope(path, root=program_root),
             )
-            for path in sorted(pending_root.rglob("*" + document_filename_suffix()))
-            if _is_architecture_manifest(path)
+            for path in sorted(pending_root.rglob("*.py"))
+            if _is_program_source(path)
         )
-    deduped: dict[Path, _TrainingArchitecture] = {}
+    deduped: dict[Path, _TrainingProgram] = {}
     for entry in entries:
         deduped.setdefault(entry.path, entry)
     return tuple(deduped.values())
 
 
-def _is_architecture_manifest(path: Path) -> bool:
+def _is_program_source(path: Path) -> bool:
     try:
-        ArchitectureManifestDocument.from_bytes(path.read_bytes())
-    except (OSError, ArchitectureManifestValidationError):
+        load_program_graph(path, resolve_host_tensor_runtime())
+    except (OSError, ProgramGraphError, TensorRuntimeError):
         return False
     return True
 
@@ -847,7 +841,7 @@ def _is_architecture_manifest(path: Path) -> bool:
 def _benchmark_training_completed(plan: BenchmarkRunPlan) -> bool:
     summary = run_benchmark(
         BenchmarkRunPlan(
-            architecture_path=plan.architecture_path,
+            program_path=plan.program_path,
             benchmark_root=plan.benchmark_root,
             results_root=plan.results_root,
             seed=plan.seed,
@@ -868,59 +862,7 @@ def _benchmark_training_completed(plan: BenchmarkRunPlan) -> bool:
         return False
     record = _load_object_record(summary.training_summary_path, description="training summary")
     completed = record.get("run_status") == "completed"
-    if completed:
-        _rewrite_training_summary_architecture_path(
-            summary.training_summary_path,
-            architecture_path=summary.architecture_path,
-            results_root=summary.results_root,
-        )
     return completed
-
-
-def _move_training_manifest_out_of_pending(path: Path) -> Path | None:
-    if path.parent.name != "pending" or not path.is_file():
-        return None
-    completed_root = path.parent.parent / "completed"
-    completed_root.mkdir(parents=True, exist_ok=True)
-    target = completed_root / path.name
-    if target.exists():
-        if target.read_bytes() == path.read_bytes():
-            path.unlink()
-            return target
-        manifest = ArchitectureManifestDocument.from_bytes(path.read_bytes()).manifest
-        target = completed_root / f"{path.stem}-{manifest.digest.hex[:12]}{path.suffix}"
-    path.replace(target)
-    return target
-
-
-def _rewrite_training_summary_architecture_path(
-    summary_path: Path,
-    *,
-    architecture_path: Path,
-    results_root: Path,
-) -> None:
-    record = _load_object_record(summary_path, description="training summary")
-    architecture_path_record = _portable_record_path(
-        architecture_path,
-        results_root=results_root,
-    )
-    if record.get("architecture_path") == architecture_path_record:
-        return
-    record["architecture_path"] = architecture_path_record
-    summary_path.write_bytes(canonical_document_bytes(record) + b"\n")
-
-
-def _portable_record_path(path: Path, *, results_root: Path) -> str:
-    if not path.is_absolute():
-        return path.as_posix()
-    resolved = path.resolve()
-    resolved_results_root = results_root.resolve()
-    if resolved.is_relative_to(resolved_results_root):
-        return (Path(results_root.name) / resolved.relative_to(resolved_results_root)).as_posix()
-    working_root = Path.cwd().resolve()
-    if resolved.is_relative_to(working_root):
-        return resolved.relative_to(working_root).as_posix()
-    return path.as_posix()
 
 
 def _materialize_benchmark_views_if_present(*, results_root: Path) -> None:
@@ -1187,11 +1129,9 @@ def _validate(args: argparse.Namespace) -> int:
             document = ModelArtifactManifestDocument.from_bytes(args.path.read_bytes())
             print(f"valid model manifest {document.manifest.id}")
             return 0
-        if artifact == "architecture":
-            document = ArchitectureManifestDocument.from_bytes(args.path.read_bytes())
-            if bool(getattr(args, "semantic", False)):
-                validate_architecture_semantics(document.manifest)
-            print(f"valid architecture {document.manifest.id}")
+        if artifact == "program":
+            program = load_program_graph(args.path, resolve_host_tensor_runtime())
+            print(f"valid program {program.graph.digest}")
             return 0
         if artifact == "model-operation":
             document = ModelOperationDocument.from_bytes(args.path.read_bytes())

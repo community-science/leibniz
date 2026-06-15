@@ -14,15 +14,10 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Literal, Self, cast
 
-from leibniz.architectures import ArchitectureManifest
 from leibniz.target_contracts import TargetContract
 from leibniz.tensor_shapes import TensorShape
 
 __all__ = [
-    "architecture_tensor_runtime_issue",
-    "architecture_supported_by_tensor_runtime",
-    "build_architecture_modules",
-    "build_architecture_sequential",
     "build_cosine_lr_schedule",
     "build_cross_entropy_loss",
     "build_loss",
@@ -35,7 +30,6 @@ __all__ = [
     "make_long_tensor",
     "no_grad_context",
     "optimizer_step",
-    "OperationFallbackSequential",
     "seed_runtime",
     "softmax_prediction_rows",
     "softmax_target_mass_tensor",
@@ -482,110 +476,6 @@ def runtime_capacity_error(error: RuntimeError) -> bool:
     )
 
 
-@dataclass(slots=True)
-class _OperationPlacement:
-    device: Any
-    device_kind: TensorRuntimeDeviceKind
-
-
-class OperationFallbackSequential:
-    """Sequential module with per-operation CPU fallback for backend failures."""
-
-    def __new__(
-        cls,
-        *,
-        runtime: TensorRuntime,
-        operations: Sequence[Any],
-        input_conditioning: Mapping[str, object] | None = None,
-    ) -> Any:
-        torch = runtime.torch
-
-        class Module(torch.nn.Module):
-            def __init__(self) -> None:
-                torch.nn.Module.__init__(self)
-                self._preferred = _OperationPlacement(
-                    device=runtime.device,
-                    device_kind=runtime.device_kind,
-                )
-                self._fallback = _OperationPlacement(
-                    device=torch.device("cpu"),
-                    device_kind="cpu",
-                )
-                self._operations = torch.nn.ModuleList(
-                    operation.to(self._preferred.device) for operation in operations
-                )
-                self._placements = [
-                    _OperationPlacement(
-                        device=self._preferred.device,
-                        device_kind=self._preferred.device_kind,
-                    )
-                    for _operation in self._operations
-                ]
-                self._optimizer: Any | None = None
-                self._fallback_records: list[dict[str, object]] = []
-
-            def attach_optimizer(self, optimizer: Any) -> None:
-                self._optimizer = optimizer
-
-            def operation_fallback_records(self) -> tuple[dict[str, object], ...]:
-                return tuple(dict(record) for record in self._fallback_records)
-
-            def forward(self, value: Any, horizon: float | None = None) -> Any:
-                current = _conditioned_model_input(
-                    runtime,
-                    value,
-                    input_conditioning=input_conditioning,
-                    horizon=horizon,
-                )
-                for index, operation in enumerate(self._operations):
-                    placement = self._placements[index]
-                    current = current.to(placement.device)
-                    try:
-                        current = operation(current)
-                    except RuntimeError as error:
-                        if placement.device_kind == "cpu":
-                            raise
-                        reason = str(error)
-                        if _truthy_environment_flag(
-                            _require_device_residency_environment_variable
-                        ):
-                            raise TensorRuntimeError(
-                                "LEIBNIZ_REQUIRE_DEVICE_RESIDENCY blocked CPU "
-                                f"fallback for operation {index}: {reason}"
-                            ) from error
-                        self._move_operation_to_fallback(index=index, reason=reason)
-                        current = self._operations[index](current.to(self._fallback.device))
-                return current.to(self._preferred.device)
-
-            def _move_operation_to_fallback(self, *, index: int, reason: str) -> None:
-                operation = self._operations[index]
-                operation.to(self._fallback.device)
-                self._move_optimizer_state(operation=operation, device=self._fallback.device)
-                previous = self._placements[index]
-                self._placements[index] = _OperationPlacement(
-                    device=self._fallback.device,
-                    device_kind=self._fallback.device_kind,
-                )
-                self._fallback_records.append(
-                    {
-                        "operation_index": index,
-                        "from_device": previous.device_kind,
-                        "to_device": self._fallback.device_kind,
-                        "reason": reason,
-                    }
-                )
-
-            def _move_optimizer_state(self, *, operation: Any, device: Any) -> None:
-                if self._optimizer is None:
-                    return
-                for parameter in operation.parameters():
-                    state = self._optimizer.state.get(parameter)
-                    if state is not None:
-                        _optimizer_state_to_device(state, device=device)
-
-        return Module()
-
-
 def save_tensor_runtime_state(path: Any, state: Mapping[str, object]) -> None:
     """Persist a tensor-runtime state payload."""
 
@@ -606,34 +496,6 @@ def load_tensor_runtime_state(
         map_location=runtime.device,
         weights_only=weights_only,
     )
-
-
-def _optimizer_state_to_device(
-    value: dict[object, object] | list[object],
-    *,
-    device: Any,
-) -> None:
-    if isinstance(value, dict):
-        for key, item in tuple(value.items()):
-            value[key] = _optimizer_state_value_to_device(item, device=device)
-    else:
-        for index, item in enumerate(value):
-            value[index] = _optimizer_state_value_to_device(item, device=device)
-
-
-def _optimizer_state_value_to_device(value: object, *, device: Any) -> object:
-    to_device = getattr(value, "to", None)
-    if callable(to_device):
-        return to_device(device)
-    if isinstance(value, dict):
-        mapping = cast(dict[object, object], value)
-        _optimizer_state_to_device(mapping, device=device)
-        return mapping
-    if isinstance(value, list):
-        sequence = cast(list[object], value)
-        _optimizer_state_to_device(sequence, device=device)
-        return sequence
-    return value
 
 
 def tensor_runtime_available_memory_bytes(runtime: TensorRuntime) -> int:
@@ -697,34 +559,6 @@ def tensor_runtime_device_kinds(
     return _resolve_device_kinds(torch=_torch(), requested_device=requested_device)
 
 
-def architecture_supported_by_tensor_runtime(
-    architecture: ArchitectureManifest,
-    *,
-    device_kind: TensorRuntimeDeviceKind,
-) -> bool:
-    """Return whether an architecture is eligible for a resolved tensor device."""
-
-    return (
-        architecture_tensor_runtime_issue(
-            architecture,
-            device_kind=device_kind,
-        )
-        is None
-    )
-
-
-def architecture_tensor_runtime_issue(
-    architecture: ArchitectureManifest,
-    *,
-    device_kind: TensorRuntimeDeviceKind,
-) -> str | None:
-    """Return the first known runtime-specific architecture incompatibility."""
-
-    _ = architecture
-    _ = device_kind
-    return None
-
-
 def runtime_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
     """Return best-effort local hardware roofline metadata for a tensor runtime."""
 
@@ -735,147 +569,6 @@ def runtime_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
     record = _calibrated_roofline_record(runtime)
     _roofline_cache[key] = record
     return dict(record)
-
-
-def build_architecture_modules(
-    architecture: ArchitectureManifest,
-    *,
-    canonical_layer_kinds: tuple[str, ...],
-) -> tuple[Any, ...]:
-    """Build PyTorch operation modules for an architecture with pre-resolved layer kinds."""
-
-    if len(canonical_layer_kinds) != len(architecture.layers):
-        raise TensorRuntimeError("canonical_layer_kinds length must match architecture layers")
-    torch = _torch()
-    modules: list[Any] = []
-    shape = _conditioned_input_shape(architecture)
-    for layer, kind in zip(architecture.layers, canonical_layer_kinds, strict=True):
-        parameters = layer.parameters
-        if kind == "local-aggregation":
-            dimension = _require_int_parameter(parameters, "dimension")
-            pool_class = _adaptive_pool_class(torch, dimension=dimension)
-            output_axes = _require_fixed_support(parameters, dimension=dimension)
-            modules.append(pool_class(output_axes))
-            shape = (*shape[: len(shape) - dimension], *output_axes)
-        elif kind == "fixed-support-affine":
-            dimension = _require_int_parameter(parameters, "dimension")
-            pool_class = _adaptive_pool_class(torch, dimension=dimension)
-            conv_class = _conv_class(torch, dimension=dimension)
-            if len(shape) <= dimension:
-                raise TensorRuntimeError(
-                    "fixed support affine requires a channel axis before support axes"
-                )
-            channel_axis_index = len(shape) - dimension - 1
-            out_channels = _require_int_parameter(parameters, "out_channels")
-            output_axes = _require_fixed_support(parameters, dimension=dimension)
-            modules.append(
-                torch.nn.Sequential(
-                    pool_class(output_axes),
-                    conv_class(
-                        in_channels=shape[channel_axis_index],
-                        out_channels=out_channels,
-                        kernel_size=1,
-                    ),
-                )
-            )
-            shape = (*shape[:channel_axis_index], out_channels, *output_axes)
-        elif kind == "local-affine":
-            dimension = _require_int_parameter(parameters, "dimension")
-            conv_class = _conv_class(torch, dimension=dimension)
-            if len(shape) <= dimension:
-                raise TensorRuntimeError(
-                    "local affine requires a channel axis before local support axes"
-                )
-            channel_axis_index = len(shape) - dimension - 1
-            spatial_axis_start = len(shape) - dimension
-            size = _require_int_parameter(parameters, "size")
-            out_channels = _require_int_parameter(parameters, "out_channels")
-            stride = _require_int_parameter(parameters, "stride")
-            padding = _require_nonneg_int_parameter(parameters, "padding")
-            padding_mode = _require_padding_mode(parameters)
-            modules.append(
-                conv_class(
-                    in_channels=shape[channel_axis_index],
-                    out_channels=out_channels,
-                    kernel_size=size,
-                    stride=stride,
-                    padding=padding,
-                    padding_mode=padding_mode,
-                )
-            )
-            output_spatial_axes = tuple(
-                _local_window_output_size(axis, size=size, stride=stride, padding=padding)
-                for axis in shape[spatial_axis_start:]
-            )
-            shape = (*shape[:channel_axis_index], out_channels, *output_spatial_axes)
-        elif kind == "rectified-linear-activation":
-            modules.append(torch.nn.ReLU())
-        elif kind == "rank-collapse":
-            modules.append(torch.nn.Flatten())
-            shape = (TensorShape.from_axes(shape).element_count,)
-        elif kind == "affine-readout":
-            if len(shape) != 1:
-                raise TensorRuntimeError("affine readout requires rank-1 input")
-            out = _require_int_parameter(parameters, "out")
-            modules.append(torch.nn.Linear(shape[0], out))
-            shape = (out,)
-        else:
-            raise TensorRuntimeError(f"unsupported operator kind: {kind}")
-    return tuple(modules)
-
-
-def build_architecture_sequential(
-    architecture: ArchitectureManifest,
-    *,
-    canonical_layer_kinds: tuple[str, ...],
-) -> Any:
-    """Build a PyTorch Sequential module for an architecture with pre-resolved layer kinds."""
-
-    torch = _torch()
-    modules = build_architecture_modules(architecture, canonical_layer_kinds=canonical_layer_kinds)
-    return torch.nn.Sequential(*modules)
-
-
-def _conditioned_input_shape(architecture: ArchitectureManifest) -> tuple[int, ...]:
-    conditioning = architecture.input_conditioning
-    if conditioning is None:
-        return architecture.input_shape
-    if conditioning.get("kind") != "horizon-channel":
-        raise TensorRuntimeError("unsupported architecture input conditioning")
-    if len(architecture.input_shape) < 2:
-        raise TensorRuntimeError("horizon-channel input conditioning requires a channel axis")
-    return (
-        *architecture.input_shape[:-2],
-        architecture.input_shape[-2] + 1,
-        architecture.input_shape[-1],
-    )
-
-
-def _conditioned_model_input(
-    runtime: TensorRuntime,
-    value: Any,
-    *,
-    input_conditioning: Mapping[str, object] | None,
-    horizon: float | None,
-) -> Any:
-    if input_conditioning is None:
-        if horizon is not None:
-            raise TensorRuntimeError("unconditioned model does not accept a horizon")
-        return value
-    if input_conditioning.get("kind") != "horizon-channel":
-        raise TensorRuntimeError("unsupported architecture input conditioning")
-    if horizon is None:
-        raise TensorRuntimeError("horizon-channel input conditioning requires a horizon")
-    if len(tuple(value.shape)) < 3:
-        raise TensorRuntimeError("horizon-channel input conditioning requires rank >= 3")
-    torch = _torch()
-    horizon_channel = torch.full(
-        (*tuple(value.shape[:-2]), 1, value.shape[-1]),
-        float(horizon),
-        dtype=value.dtype,
-        device=value.device,
-    )
-    return torch.cat((value, horizon_channel), dim=-2)
 
 
 def synchronize_runtime(runtime: TensorRuntime) -> None:
@@ -1478,10 +1171,6 @@ def _mps_available(torch: Any) -> bool:
     mps = getattr(backends, "mps", None)
     is_available = getattr(mps, "is_available", None)
     return bool(callable(is_available) and is_available())
-
-
-def _truthy_environment_flag(name: str) -> bool:
-    return os.environ.get(name, "") not in {"", "0"}
 
 
 def _positive_tensor_extent(value: object) -> int:
@@ -2093,41 +1782,6 @@ def _host_memory_bytes() -> int:
     return 1_073_741_824
 
 
-def _require_int_parameter(parameters: Mapping[str, object], key: str) -> int:
-    value = parameters.get(key)
-    if type(value) is not int or value < 1:
-        raise TensorRuntimeError(f"{key} must be a positive integer")
-    return value
-
-
-def _require_nonneg_int_parameter(parameters: Mapping[str, object], key: str) -> int:
-    value = parameters.get(key)
-    if type(value) is not int or value < 0:
-        raise TensorRuntimeError(f"{key} must be a nonnegative integer")
-    return value
-
-
-def _require_fixed_support(
-    parameters: Mapping[str, object],
-    *,
-    dimension: int,
-) -> tuple[int, ...]:
-    axis_names = _spatial_axis_names(dimension)
-    values = tuple(parameters.get(name) for name in axis_names)
-    if any(value is not None for value in values):
-        if any(type(value) is not int or value < 1 for value in values):
-            raise TensorRuntimeError("fixed support axes must be positive integers")
-        return cast(tuple[int, ...], values)
-    size = _require_int_parameter(parameters, "size")
-    return tuple(size for _index in range(dimension))
-
-
-# Single source of truth for fixed-support output-axis parameter names per
-# spatial dimension; the semantics layer (operator_interpretation) reads it
-# through spatial_axis_names_for_dimension rather than keeping a second copy.
-# Names exist for every interpretable dimension (1-3); which dimensions can
-# actually be *built* is gated separately by the pool/conv class maps below
-# ({1, 2} today).
 _spatial_axis_names_by_dimension: dict[int, tuple[str, ...]] = {
     1: ("out_length",),
     2: ("out_height", "out_width"),
@@ -2140,43 +1794,3 @@ def spatial_axis_names_for_dimension(dimension: int) -> tuple[str, ...] | None:
 
     return _spatial_axis_names_by_dimension.get(dimension)
 
-
-def _spatial_axis_names(dimension: int) -> tuple[str, ...]:
-    names = _spatial_axis_names_by_dimension.get(dimension)
-    if names is None:
-        raise TensorRuntimeError(
-            f"local support has no spatial-axis names for dimension {dimension}"
-        )
-    return names
-
-
-def _adaptive_pool_class(torch: Any, *, dimension: int) -> Any:
-    if dimension == 1:
-        return torch.nn.AdaptiveAvgPool1d
-    if dimension == 2:
-        return torch.nn.AdaptiveAvgPool2d
-    raise TensorRuntimeError("local aggregation currently supports dimensions 1 and 2")
-
-
-def _conv_class(torch: Any, *, dimension: int) -> Any:
-    if dimension == 1:
-        return torch.nn.Conv1d
-    if dimension == 2:
-        return torch.nn.Conv2d
-    raise TensorRuntimeError("local affine currently supports dimensions 1 and 2")
-
-
-def _require_padding_mode(parameters: Mapping[str, object]) -> str:
-    value = parameters.get("padding_mode", "zeros")
-    if value == "zeros":
-        return "zeros"
-    if value == "periodic":
-        return "circular"
-    raise TensorRuntimeError("padding_mode must be one of: zeros, periodic")
-
-
-def _local_window_output_size(axis: int, *, size: int, stride: int, padding: int) -> int:
-    result = ((axis + 2 * padding - size) // stride) + 1
-    if result < 1:
-        raise TensorRuntimeError("local affine output axis must be positive")
-    return result

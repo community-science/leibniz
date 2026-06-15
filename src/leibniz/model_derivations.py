@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast
 
-from leibniz.architectures import ArchitectureManifest
 from leibniz.artifacts import (
     ArtifactReference,
     first_duplicate,
@@ -43,7 +42,7 @@ _compatibility_report_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
         "source_model": FieldSpec(kind="record"),
-        "target_architecture": FieldSpec(kind="record"),
+        "target_program": FieldSpec(kind="record"),
         "target_interface": FieldSpec(kind="record"),
         "operator_id": FieldSpec(kind="identifier"),
         "status": FieldSpec(kind="string"),
@@ -118,7 +117,7 @@ class ModelDerivationCompatibilityReport:
 
     id: ProtocolIdentifier
     source_model: ArtifactReference
-    target_architecture: ArtifactReference
+    target_program: ArtifactReference
     target_interface: ArtifactReference
     operator_id: ProtocolIdentifier
     status: _Status
@@ -145,9 +144,9 @@ class ModelDerivationCompatibilityReport:
             raise ModelDerivationCompatibilityValidationError(
                 "source_model reference must have kind model-manifest"
             )
-        if self.target_architecture.kind != "architecture-manifest":
+        if self.target_program.kind != "program-graph":
             raise ModelDerivationCompatibilityValidationError(
-                "target_architecture reference must have kind architecture-manifest"
+                "target_program reference must have kind program-graph"
             )
         if self.target_interface.kind != "model-interface":
             raise ModelDerivationCompatibilityValidationError(
@@ -202,7 +201,7 @@ class ModelDerivationCompatibilityReport:
         record: Mapping[str, object],
         *,
         source_model_manifest: ModelArtifactManifest | None = None,
-        target_architecture_manifest: ArchitectureManifest | None = None,
+        target_program: Mapping[str, object] | None = None,
         target_model_interface: ModelInterface | None = None,
     ) -> ModelDerivationCompatibilityReport:
         try:
@@ -237,8 +236,8 @@ class ModelDerivationCompatibilityReport:
             source_model=ArtifactReference.from_record(
                 _extract.mapping(validated["source_model"], "source_model")
             ),
-            target_architecture=ArtifactReference.from_record(
-                _extract.mapping(validated["target_architecture"], "target_architecture")
+            target_program=ArtifactReference.from_record(
+                _extract.mapping(validated["target_program"], "target_program")
             ),
             target_interface=ArtifactReference.from_record(
                 _extract.mapping(validated["target_interface"], "target_interface")
@@ -258,8 +257,8 @@ class ModelDerivationCompatibilityReport:
         )
         if source_model_manifest is not None:
             report.validate_source_model(source_model_manifest)
-        if target_architecture_manifest is not None:
-            report.validate_target_architecture(target_architecture_manifest)
+        if target_program is not None:
+            report.validate_target_program(target_program)
         if target_model_interface is not None:
             report.validate_target_interface(target_model_interface)
         return report
@@ -274,17 +273,17 @@ class ModelDerivationCompatibilityReport:
                 "source_model reference does not match source model manifest"
             )
 
-    def validate_target_architecture(
+    def validate_target_program(
         self,
-        target_architecture_manifest: ArchitectureManifest,
+        target_program: Mapping[str, object],
     ) -> None:
         target_reference = reference_for_record(
-            kind="architecture-manifest",
-            record=target_architecture_manifest.to_record(),
+            kind="program-graph",
+            record=target_program,
         )
-        if self.target_architecture != target_reference:
+        if self.target_program != target_reference:
             raise ModelDerivationCompatibilityValidationError(
-                "target_architecture reference does not match target architecture manifest"
+                "target_program reference does not match target program graph"
             )
 
     def validate_target_interface(self, target_model_interface: ModelInterface) -> None:
@@ -301,7 +300,7 @@ class ModelDerivationCompatibilityReport:
         record: dict[str, object] = {
             "id": str(self.id),
             "source_model": self.source_model.to_record(),
-            "target_architecture": self.target_architecture.to_record(),
+            "target_program": self.target_program.to_record(),
             "target_interface": self.target_interface.to_record(),
             "operator_id": str(self.operator_id),
             "status": self.status,
@@ -328,7 +327,7 @@ class ModelDerivationCompatibilityReportDocument:
         data: bytes,
         *,
         source_model_manifest: ModelArtifactManifest | None = None,
-        target_architecture_manifest: ArchitectureManifest | None = None,
+        target_program: Mapping[str, object] | None = None,
         target_model_interface: ModelInterface | None = None,
     ) -> ModelDerivationCompatibilityReportDocument:
         try:
@@ -341,7 +340,7 @@ class ModelDerivationCompatibilityReportDocument:
         report = ModelDerivationCompatibilityReport.from_record(
             record,
             source_model_manifest=source_model_manifest,
-            target_architecture_manifest=target_architecture_manifest,
+            target_program=target_program,
             target_model_interface=target_model_interface,
         )
         return cls(report=report, digest=report.digest)

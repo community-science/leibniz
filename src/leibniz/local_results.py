@@ -11,7 +11,6 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, cast
 
-from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_evaluation import (
     CompetencePoint,
     StateSpaceIntegral,
@@ -428,13 +427,14 @@ class _BenchmarkRunRecord:
     run_id: str
     run_slug: str
     benchmark_id: ProtocolIdentifier
-    architecture_digest: ContentDigest
+    program_digest: ContentDigest
     model_key: str
     log2_volume: float | None
     measurement_count: int
     score: float
     cost_summary: Mapping[str, object]
-    architecture: Mapping[str, object]
+    program: Mapping[str, object]
+    program_graph: Mapping[str, object]
     model_inspection: Mapping[str, object]
     model_inspection_digest: ContentDigest
     model_inspection_path: Path | None
@@ -451,12 +451,13 @@ class _BenchmarkRunRecord:
             "run_id": self.run_id,
             "run_slug": self.run_slug,
             "benchmark_id": str(self.benchmark_id),
-            "architecture_digest": str(self.architecture_digest),
+            "program_digest": str(self.program_digest),
             "model_key": self.model_key,
             "measurement_count": self.measurement_count,
             "score": self.score,
             "cost_summary": _run_cost_summary(self),
-            "architecture": dict(self.architecture),
+            "program": dict(self.program),
+            "program_graph": dict(self.program_graph),
             "model_inspection_digest": str(self.model_inspection_digest),
             "measurement_dataset_digest": str(self.measurement_dataset_digest),
             "console_view_model": _run_console_view_model(
@@ -479,7 +480,7 @@ class _BenchmarkRunRecord:
 class _EvaluationBundleSummary:
     run_slug: str
     benchmark_manifest: Mapping[str, object]
-    architecture_manifest: ArchitectureManifest
+    program_graph: Mapping[str, object]
     model_checkpoint: Mapping[str, object]
     model_inspection: Mapping[str, object]
     measurement_score_view: Mapping[str, object]
@@ -566,7 +567,7 @@ def _local_run_records(
                 run_id=summary.run_slug,
                 run_slug=summary.run_slug,
                 benchmark_id=benchmark_id,
-                architecture_digest=summary.architecture_manifest.digest,
+                program_digest=ContentDigest.from_value(summary.program_graph),
                 model_key=model_key,
                 log2_volume=_sampled_competence_record_log2_volume(summary.sampled_competence),
                 measurement_count=_as_positive_int(
@@ -578,7 +579,11 @@ def _local_run_records(
                     "sampled_competence.mean_accepted_mass",
                 ),
                 cost_summary=cost_summary,
-                architecture=summary.architecture_manifest.to_record(),
+                program=_extract.mapping(
+                    summary.model_inspection.get("program"),
+                    "model_inspection.program",
+                ),
+                program_graph=summary.program_graph,
                 model_inspection=model_inspection,
                 model_inspection_digest=model_inspection_digest,
                 model_inspection_path=model_inspection_path,
@@ -640,11 +645,11 @@ def _local_training_estimate_records(
             sampled_competence=sampled_competence,
             estimate=estimate,
         )
-        architecture = _architecture_manifest_from_training_record(
-            repository_root=repository_root,
-            training_summary=summary,
+        program_graph = _extract.mapping(summary.get("program_graph"), "program_graph")
+        program_digest = ContentDigest.from_value(program_graph)
+        inspection = ModelInspectionRecord.from_record(
+            _extract.mapping(summary.get("model_inspection"), "model_inspection")
         )
-        inspection = _inspection_from_architecture(architecture)
         cost_summary = dict(_extract.mapping(summary.get("cost_summary"), "cost_summary"))
         records.append(
             _BenchmarkRunRecord(
@@ -654,8 +659,8 @@ def _local_training_estimate_records(
                 run_id=run_slug,
                 run_slug=run_slug,
                 benchmark_id=_as_identifier(summary.get("benchmark_id"), "benchmark_id"),
-                architecture_digest=architecture.digest,
-                model_key=str(architecture.digest),
+                program_digest=program_digest,
+                model_key=str(program_digest),
                 log2_volume=_sampled_competence_record_log2_volume(sampled_competence),
                 measurement_count=0,
                 score=_as_nonnegative_number(
@@ -663,7 +668,8 @@ def _local_training_estimate_records(
                     "training_estimate.score",
                 ),
                 cost_summary=cost_summary,
-                architecture=architecture.to_record(),
+                program=_extract.mapping(summary.get("program"), "program"),
+                program_graph=program_graph,
                 model_inspection=_model_inspection_view_record(
                     inspection=inspection.to_record(),
                     source_path=_result_state_record_path(path, results_root=results_root),
@@ -763,8 +769,9 @@ def _evaluation_bundle_summary_from_record(
             record.get("benchmark_manifest"),
             "benchmark_manifest",
         ),
-        architecture_manifest=ArchitectureManifest.from_record(
-            _extract.mapping(record.get("architecture_manifest"), "architecture_manifest")
+        program_graph=_extract.mapping(
+            record.get("program_graph"),
+            "program_graph",
         ),
         model_checkpoint=_extract.mapping(record.get("model_checkpoint"), "model_checkpoint"),
         model_inspection=_extract.mapping(record.get("model_inspection"), "model_inspection"),
@@ -1300,32 +1307,6 @@ def _console_validation_history_row(point: object) -> list[str]:
     ]
 
 
-def _architecture_manifest_from_training_record(
-    *,
-    repository_root: Path,
-    training_summary: Mapping[str, object],
-) -> ArchitectureManifest:
-    path = Path(
-        _extract.non_empty_string(
-            training_summary.get("architecture_path"), "architecture_path"
-        )
-    )
-    resolved = path if path.is_absolute() else repository_root / path
-    if not resolved.is_file():
-        raise LocalResultImportError(f"architecture_path does not exist: {path}")
-    return ArchitectureManifestDocument.from_bytes(resolved.read_bytes()).manifest
-
-
-def _inspection_from_architecture(architecture: ArchitectureManifest) -> ModelInspectionRecord:
-    digest_atom = str(architecture.digest).split(":", maxsplit=1)[1][:16]
-    return ModelInspectionRecord.from_architecture(
-        id=ProtocolIdentifier.parse(
-            f"model-inspections.imported.sha-{digest_atom}@0.1.0"
-        ),
-        architecture_manifest=architecture,
-    )
-
-
 def _benchmark_result_record(
     *,
     benchmark: Benchmark,
@@ -1536,7 +1517,7 @@ def _model_result_records(
         record: dict[str, object] = {
             "model_key": model_key,
             "result_status": result_status,
-            "architecture_digest": str(best_run.architecture_digest),
+            "program_digest": str(best_run.program_digest),
             "benchmark_id": str(best_run.benchmark_id),
             "score": score,
             "score_integral": score_integral.to_record(
@@ -1605,7 +1586,7 @@ def _compact_model_result_record(model: Mapping[str, object]) -> dict[str, objec
     record: dict[str, object] = {
         "model_key": model["model_key"],
         "result_status": model["result_status"],
-        "architecture_digest": model["architecture_digest"],
+        "program_digest": model["program_digest"],
         "benchmark_id": model["benchmark_id"],
         "score": model["score"],
         "cost_summary": dict(_extract.mapping(model.get("cost_summary"), "cost_summary")),
@@ -1666,7 +1647,7 @@ def _compact_run_result_record(run: _BenchmarkRunRecord) -> dict[str, object]:
         "run_id": run.run_id,
         "run_slug": run.run_slug,
         "benchmark_id": str(run.benchmark_id),
-        "architecture_digest": str(run.architecture_digest),
+        "program_digest": str(run.program_digest),
         "model_key": run.model_key,
         "measurement_count": run.measurement_count,
         "score": run.score,
@@ -2003,9 +1984,19 @@ def _model_console_view_model(
     runs: tuple[_BenchmarkRunRecord, ...],
     inspection: Mapping[str, object],
 ) -> Mapping[str, object]:
-    architecture_summary = _extract.mapping(
-        inspection.get("architecture_summary"),
-        "model_inspection.architecture_summary",
+    program_graph = _extract.mapping(
+        inspection.get("program_graph"),
+        "model_inspection.program_graph",
+    )
+    program_nodes = _as_sequence(program_graph.get("nodes"), "model_inspection.program_graph.nodes")
+    program_edges = _as_sequence(program_graph.get("edges"), "model_inspection.program_graph.edges")
+    program_inputs = _as_sequence(
+        program_graph.get("inputs"),
+        "model_inspection.program_graph.inputs",
+    )
+    program_outputs = _as_sequence(
+        program_graph.get("outputs"),
+        "model_inspection.program_graph.outputs",
     )
     cost_summary = _extract.mapping(model.get("cost_summary"), "model.cost_summary")
     node_evidence = _as_sequence(
@@ -2045,22 +2036,15 @@ def _model_console_view_model(
             ),
         ),
         _console_detail_entries_section(
-            title="Architecture Graph",
+            title="Program Graph",
             entries=(
-                ("Components", _console_number_value(architecture_summary.get("component_count"))),
-                ("Edges", _console_number_value(architecture_summary.get("edge_count"))),
-                ("Inputs", _node_list_label(architecture_summary.get("input_node_ids"))),
-                ("Outputs", _node_list_label(architecture_summary.get("output_node_ids"))),
+                ("Components", _console_number_value(len(program_nodes))),
+                ("Edges", _console_number_value(len(program_edges))),
+                ("Inputs", _console_number_value(len(program_inputs))),
+                ("Outputs", _console_number_value(len(program_outputs))),
                 (
                     "Component Kinds",
-                    ", ".join(
-                        str(kind)
-                        for kind in _as_sequence(
-                            architecture_summary.get("component_kinds"),
-                            "architecture_summary.component_kinds",
-                        )
-                    )
-                    or "unknown",
+                    _program_node_kind_label(program_nodes),
                 ),
             ),
         ),
@@ -2214,11 +2198,14 @@ def _model_volume_label(manifest: BenchmarkManifest) -> str:
     return "Volume (bits)"
 
 
-def _node_list_label(value: object) -> str:
-    if not isinstance(value, list):
-        return "unknown"
-    labels = [str(item) for item in cast(list[object], value) if isinstance(item, str) and item]
-    return ", ".join(labels) if labels else "none"
+def _program_node_kind_label(nodes: Sequence[object]) -> str:
+    kinds = tuple(
+        str(kind)
+        for node in nodes
+        for kind in (_extract.mapping(node, "program_graph.nodes").get("kind"),)
+        if isinstance(kind, str) and kind
+    )
+    return ", ".join(kinds) if kinds else "unknown"
 
 
 def _competence_points(
@@ -3142,10 +3129,8 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
                 inspection_record,
                 field,
                 (
-                    "architecture",
-                    "architecture_graph",
-                    "architecture_summary",
-                    "architecture_trace",
+                    "program",
+                    "program_graph",
                     "cost_summary",
                 ),
             )
@@ -3179,7 +3164,7 @@ def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
     _require_string_fields(
         record,
         prefix,
-        ("model_key", "result_status", "architecture_digest", "benchmark_id"),
+        ("model_key", "result_status", "program_digest", "benchmark_id"),
     )
     if record.get("result_status") not in {"accepted", "provisional"}:
         raise LocalResultImportError(f"{_field_path(prefix, 'result_status')} is invalid")
@@ -3324,7 +3309,7 @@ def _validate_run_result(record: Mapping[str, object], prefix: str) -> None:
             "run_id",
             "run_slug",
             "benchmark_id",
-            "architecture_digest",
+            "program_digest",
             "model_key",
             "measurement_dataset_digest",
         ),
@@ -3336,7 +3321,7 @@ def _validate_run_result(record: Mapping[str, object], prefix: str) -> None:
         _field_path(prefix, "measurement_count"),
     )
     _as_nonnegative_number(record.get("score"), _field_path(prefix, "score"))
-    _require_mapping_fields(record, prefix, ("cost_summary", "architecture"))
+    _require_mapping_fields(record, prefix, ("cost_summary", "program", "program_graph"))
     for field in ("model_inspection_digest", "model_inspection_path"):
         if field in record:
             _extract.non_empty_string(record[field], _field_path(prefix, field))

@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.artifacts import ArtifactReference
 from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.console.protocol import (
@@ -25,6 +24,7 @@ from leibniz.materialization import (
 from leibniz.measurements import MeasurementDocument
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
 from leibniz.observation_showcases import ObservationShowcaseDocument
+from leibniz.program_graphs import ProgramGraphDocument
 
 __all__ = [
     "ConsoleArtifactIndex",
@@ -190,10 +190,10 @@ class ConsoleArtifactIndexBuilder:
         return path
 
 
-def _load_architecture_manifest(data: bytes) -> _LoadedArtifact:
-    document = ArchitectureManifestDocument.from_bytes(data)
-    record = document.manifest.to_record()
-    return document.manifest.id, record, document.digest, ()
+def _load_program_graph(data: bytes) -> _LoadedArtifact:
+    document = ProgramGraphDocument.from_bytes(data)
+    record = document.spec.to_record()
+    return None, record, document.digest, ()
 
 
 def _load_benchmark_manifest(data: bytes) -> _LoadedArtifact:
@@ -273,7 +273,7 @@ def _load_observation_showcase(data: bytes) -> _LoadedArtifact:
 
 
 _artifact_loaders: Mapping[str, _ArtifactLoader] = {
-    "architecture-manifest": _load_architecture_manifest,
+    "program-graph": _load_program_graph,
     "benchmark-manifest": _load_benchmark_manifest,
     "latent-factor-declaration": _load_latent_factor_declaration,
     "materialization-declaration": _load_materialization_declaration,

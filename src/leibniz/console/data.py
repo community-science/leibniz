@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
-from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_implementations import (
     Generator as BenchmarkGenerator,
 )
@@ -30,24 +29,25 @@ from leibniz.console.protocol import (
     console_protocol_format_versions,
     console_protocol_formats,
 )
+from leibniz.content import ContentDigest
 from leibniz.documents import (
     canonical_document_bytes,
     document_filename_suffix,
     load_object_document,
 )
-from leibniz.identifiers import ProtocolIdentifier, ProtocolName
+from leibniz.identifiers import ProtocolIdentifier, ProtocolName, SemanticVersion
 from leibniz.local_results import (
     LocalResultImportError,
     load_console_result_view,
     materialize_benchmark_result_views,
 )
 from leibniz.model_inspection import ModelInspectionRecord
-from leibniz.model_operators import model_operator_vocabulary
 from leibniz.observation_generation import (
     StateSpaceVolumeRequest,
     load_generator,
     sample_indices_for_even_state_coverage,
 )
+from leibniz.program_graphs import ProgramGraphSpec
 
 __all__ = [
     "ConsoleData",
@@ -238,7 +238,7 @@ class ConsoleDataBuilder:
             result_views=result_views,
             model_inspections=model_inspections,
             benchmark_tasks=benchmark_tasks,
-            operator_vocabulary=model_operator_vocabulary(),
+            operator_vocabulary={},
         )
 
     def _discover_sources(
@@ -305,13 +305,13 @@ class ConsoleDataBuilder:
         kind: str,
         record: Mapping[str, object],
     ) -> Mapping[str, object]:
-        if kind == "architecture-manifest":
-            graph = ArchitectureManifest.from_record(record).graph
+        if kind == "program-graph":
             return {
-                "input_shape": record["input_shape"],
-                "output_shape": record["output_shape"],
-                "layers": record["layers"],
-                "architecture_graph": graph.to_record(),
+                "contract_kind": record["contract_kind"],
+                "inputs": record["inputs"],
+                "outputs": record["outputs"],
+                "nodes": record["nodes"],
+                "edges": record["edges"],
             }
         if kind == "benchmark-manifest":
             summary: dict[str, object] = {
@@ -401,14 +401,23 @@ class ConsoleDataBuilder:
     ) -> tuple[Mapping[str, object], ...]:
         inspections: list[Mapping[str, object]] = []
         for entry in entries:
-            if entry.kind != "architecture-manifest":
+            if entry.kind != "program-graph":
                 continue
-            document = ArchitectureManifestDocument.from_bytes(
-                self._repository_path(entry.source_path, description="source document").read_bytes()
+            _protocol_id, record, _digest, _dependencies = (
+                ConsoleArtifactIndexBuilder.load_supported_artifact(
+                    entry.kind,
+                    self._repository_path(
+                        entry.source_path,
+                        description="source document",
+                    ).read_bytes(),
+                )
             )
-            inspection = ModelInspectionRecord.from_architecture(
-                id=_model_inspection_identifier(document.manifest.id),
-                architecture_manifest=document.manifest,
+            spec = ProgramGraphSpec.from_record(record)
+            inspection = ModelInspectionRecord.from_program_graph(
+                id=_model_inspection_identifier(entry.reference.record_digest),
+                program_graph=record,
+                input_shape=_representative_contract_shape(spec.inputs[0].axes),
+                output_shape=_representative_contract_shape(spec.outputs[0].axes),
             )
             record = inspection.to_record()
             record["source_path"] = entry.source_path.as_posix()
@@ -850,11 +859,23 @@ def _main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _model_inspection_identifier(architecture_id: ProtocolIdentifier) -> ProtocolIdentifier:
+def _model_inspection_identifier(program_digest: ContentDigest | None) -> ProtocolIdentifier:
+    if program_digest is None:
+        raise ConsoleDataValidationError("program graph index entry is missing record digest")
     return ProtocolIdentifier(
-        name=ProtocolName.parse(f"model-inspections.{architecture_id.name}"),
-        version=architecture_id.version,
+        name=ProtocolName.parse(f"model-inspections.programs.sha-{program_digest.hex[:16]}"),
+        version=SemanticVersion.parse("0.1.0"),
     )
+
+
+def _representative_contract_shape(axes: tuple[object, ...]) -> tuple[int, ...]:
+    shape: list[int] = []
+    for axis in axes:
+        if type(axis) is int:
+            shape.append(axis)
+        else:
+            shape.append(1)
+    return tuple(shape)
 
 
 def _benchmark_task_label(manifest: BenchmarkManifest) -> str:
