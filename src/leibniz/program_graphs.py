@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib
 import importlib.util
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -280,21 +279,35 @@ class ProgramConcat:
     """Parameter-free structural channel-axis concatenation."""
 
     def __call__(self, *values: Any) -> Any:
-        if len(values) < 2:
-            raise ProgramGraphError("concat merge requires at least two inputs")
-        backend = _backend_from_tensor(values[0])
-        axis = 1 if len(values[0].shape) > 1 else 0
-        return backend.cat(tuple(values), dim=axis)
+        raise ProgramGraphError("concat merge requires a bound tensor runtime backend")
 
 
 class ProgramResampleLike:
     """Parameter-free structural resampling to another tensor's spatial support."""
 
     def __call__(self, value: Any, reference: Any) -> Any:
+        raise ProgramGraphError("resample-like requires a bound tensor runtime backend")
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundProgramConcat:
+    backend: Any
+
+    def __call__(self, *values: Any) -> Any:
+        if len(values) < 2:
+            raise ProgramGraphError("concat merge requires at least two inputs")
+        axis = 1 if len(values[0].shape) > 1 else 0
+        return self.backend.cat(tuple(values), dim=axis)
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundProgramResampleLike:
+    backend: Any
+
+    def __call__(self, value: Any, reference: Any) -> Any:
         if len(value.shape) < 3 or len(reference.shape) < 3:
             raise ProgramGraphError("resample-like requires batch, channel, and support axes")
-        backend = _backend_from_tensor(value)
-        return backend.nn.functional.interpolate(
+        return self.backend.nn.functional.interpolate(
             value,
             size=tuple(reference.shape[2:]),
             mode="nearest",
@@ -654,12 +667,18 @@ class _ProgramGraphModule:
                 self._incoming = _incoming_edges(graph.edges)
                 self._node_modules = backend.nn.ModuleDict()
                 self._module_keys: dict[str, str] = {}
+                self._bound_operations: dict[str, Any] = {}
                 self._optimizer: Any | None = None
                 for index, node in enumerate(graph.nodes):
                     if isinstance(node.operation, backend.nn.Module):
                         key = f"node_{index}"
                         self._node_modules[key] = node.operation.to(runtime.device)
                         self._module_keys[node.id] = key
+                    else:
+                        self._bound_operations[node.id] = _bind_operation_backend(
+                            operation=node.operation,
+                            backend=backend,
+                        )
 
             def attach_optimizer(self, optimizer: Any) -> None:
                 self._optimizer = optimizer
@@ -703,7 +722,7 @@ class _ProgramGraphModule:
                 key = self._module_keys.get(node.id)
                 if key is not None:
                     return self._node_modules[key]
-                return node.operation
+                return self._bound_operations[node.id]
 
         return Module()
 
@@ -865,11 +884,12 @@ def _validate_differentiable(
     _ = runtime
 
 
-def _backend_from_tensor(value: Any) -> Any:
-    module = type(value).__module__.split(".", maxsplit=1)[0]
-    if module != "torch":
-        raise ProgramGraphError("structural program operation requires backend tensors")
-    return importlib.import_module("torch")
+def _bind_operation_backend(*, operation: Any, backend: Any) -> Any:
+    if isinstance(operation, ProgramConcat):
+        return _BoundProgramConcat(backend)
+    if isinstance(operation, ProgramResampleLike):
+        return _BoundProgramResampleLike(backend)
+    return operation
 
 
 def _runtime_input_value(backend: Any, value: Any, *, device: Any) -> Any:

@@ -116,11 +116,17 @@ class TensorRuntime:
     device: Any
     device_kind: Literal["cpu", "cuda", "mps"]
 
+    @property
+    def backend(self) -> Any:
+        """Tensor backend module admitted for this runtime."""
+
+        return self.torch
+
 
 def tensor_runtime_backend(runtime: TensorRuntime) -> Any:
     """Return the tensor backend module bound to a resolved runtime."""
 
-    return runtime.torch
+    return runtime.backend
 
 
 @dataclass(frozen=True, slots=True)
