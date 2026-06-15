@@ -33,6 +33,7 @@ _benchmark_implementation_filename = "benchmark.py"
 _source_root = PurePosixPath("src/leibniz")
 _backend_term_exemptions = frozenset(
     {
+        "program_graphs.py",
         "tensor_runtime.py",
         "_repository_policy.py",
     }

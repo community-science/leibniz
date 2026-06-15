@@ -50,6 +50,11 @@ from leibniz.documents import (
 from leibniz.evaluation_bundles import (
     BenchmarkEvaluationBundle,
 )
+from leibniz.field_evolution import (
+    FieldEvolutionError,
+    field_stepper_state,
+    validate_field_stepper_nondegenerate,
+)
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment
 from leibniz.measurements import MeasurementDataset, MeasurementRecord
@@ -2202,6 +2207,14 @@ def _train_and_predict_on_device(
     )
     outcome_ids = _target_contract_outcome_ids(target_contract)
     chance_mass = _target_contract_chance_mass(target_contract)
+    if target_contract.kind == "field-valued":
+        _validate_training_field_stepper(
+            runtime=runtime,
+            module=module,
+            batch=initial_evaluation_rung.batch,
+            target_contract=target_contract,
+            outcome_ids=outcome_ids,
+        )
     loss_function = _build_training_loss(
         runtime=runtime,
         target_contract=target_contract,
@@ -2473,6 +2486,7 @@ def _train_and_predict_on_device(
                             module=checked_module,
                             input_shape=architecture.input_shape,
                             batch_size=batch_size,
+                            target_contract=target_contract,
                         ),
                         training_cost=_training_history_latest_training_cost_measurement(
                             history
@@ -2546,6 +2560,7 @@ def _train_and_predict_on_device(
                         module=module,
                         input_shape=architecture.input_shape,
                         batch_size=batch_size,
+                        target_contract=target_contract,
                     )
                 ),
                 training_cost=_training_history_latest_training_cost_measurement(
@@ -2861,6 +2876,39 @@ def _field_valued_ambient_horizons(
     return tuple((horizon * index) / float(step_count) for index in range(1, step_count + 1))
 
 
+def _validate_training_field_stepper(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    batch: GeneratedSampleSet,
+    target_contract: TargetContract,
+    outcome_ids: tuple[str, ...],
+) -> None:
+    fields, labels = _batch_tensors(
+        runtime=runtime,
+        batch=batch,
+        outcome_ids=outcome_ids,
+        device=runtime.device,
+    )
+    horizons = _field_valued_target_horizons(
+        batch=batch,
+        labels=labels,
+        target_contract=target_contract,
+    )
+    dt = _field_valued_cost_horizon(horizons)
+    if horizons:
+        dt = horizons[0]
+    try:
+        validate_field_stepper_nondegenerate(
+            runtime=runtime,
+            module=module,
+            fields=fields,
+            dt=dt,
+        )
+    except FieldEvolutionError as error:
+        raise BenchmarkRunnerError(str(error)) from error
+
+
 def _field_valued_cost_horizon(horizons: tuple[float, ...] | None) -> float:
     if horizons:
         return horizons[-1]
@@ -2893,7 +2941,6 @@ def _field_valued_model_trajectory(
     if label_time_count < 1:
         raise BenchmarkRunnerError("field-valued trajectory target must contain at least one time")
     time_count = 1 + len(horizons) if horizons else label_time_count
-    states = [fields]
     if time_count == 1:
         return fields
     if horizons is None:
@@ -2903,15 +2950,21 @@ def _field_valued_model_trajectory(
             "field-valued target horizon count must match target time steps after "
             "the initial state"
         )
+    state = fields
+    states = [fields]
+    previous_horizon = 0.0
     for horizon in horizons:
-        states.append(
-            _field_valued_model_state_at_horizon(
-                runtime=runtime,
-                module=module,
-                fields=fields,
-                horizon=horizon,
-            )
+        dt = horizon - previous_horizon
+        if dt <= 0.0 or not math.isfinite(dt):
+            raise BenchmarkRunnerError("field-valued target horizons must increase")
+        state = _field_valued_model_state_at_horizon(
+            runtime=runtime,
+            module=module,
+            fields=state,
+            horizon=dt,
         )
+        states.append(state)
+        previous_horizon = horizon
     return tensor_runtime_concat(runtime, states, dim=1)
 
 
@@ -2922,21 +2975,15 @@ def _field_valued_model_state_at_horizon(
     fields: Any,
     horizon: float,
 ) -> Any:
-    _ = runtime
     try:
-        state = module(fields, float(horizon))
-    except TypeError as error:
-        raise BenchmarkRunnerError(
-            "field-valued operator must accept an input state and horizon"
-        ) from error
-    except TensorRuntimeError as error:
-        raise BenchmarkRunnerError(str(error)) from error
-    if tuple(state.shape) != tuple(fields.shape):
-        raise BenchmarkRunnerError(
-            "field-valued operator must return state shape "
-            f"{tuple(fields.shape)}, got {tuple(state.shape)}"
+        return field_stepper_state(
+            runtime=runtime,
+            module=module,
+            fields=fields,
+            dt=horizon,
         )
-    return state
+    except (FieldEvolutionError, TensorRuntimeError) as error:
+        raise BenchmarkRunnerError(str(error)) from error
 
 
 def _module_inference_cost_measurement(
@@ -2980,6 +3027,7 @@ def _module_projected_inference_cost_measurement(
     module: Any,
     input_shape: tuple[int, ...],
     batch_size: int,
+    target_contract: TargetContract,
 ) -> tuple[CostMeasurement, int] | None:
     sample_count = max(1, batch_size)
     was_training = bool(module.training)
@@ -2992,7 +3040,13 @@ def _module_projected_inference_cost_measurement(
             device=runtime.device,
         )
         with no_grad_context(runtime):
-            return module(fields)
+            return _model_inference_for_cost(
+                runtime=runtime,
+                module=module,
+                fields=fields,
+                horizons=None,
+                target_contract=target_contract,
+            )
 
     try:
         return (

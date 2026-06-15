@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 from benchmark_typing import load_digits_benchmark, load_digits_generator
+from ks_oracle import ks_reference_step
 
 import leibniz.benchmark_runner as benchmark_runner
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
@@ -36,6 +37,7 @@ from leibniz.cost_metrology import (
 )
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.evaluation_bundles import BenchmarkEvaluationBundleDocument
+from leibniz.field_evolution import field_stepper_trajectory
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
 from leibniz.materialization import AxisAssignment
@@ -1835,7 +1837,7 @@ def test_ks_benchmark_runner_outputs_feed_benchmark_result_views(
     assert point["predictability_boundary"] == 0.0
     time_points = cast(list[dict[str, object]], point["time_points"])
     assert len(time_points) == 8
-    assert time_points[0]["gate_decision"] == "failed-richardson"
+    assert time_points[0]["gate_decision"] == "failed"
 
 
 def test_ks_benchmark_runner_scores_real_requery_ladder(
@@ -1854,11 +1856,12 @@ def test_ks_benchmark_runner_scores_real_requery_ladder(
             super().__init__()  # pyright: ignore[reportUnknownMemberType]
             self._anchor = torch.nn.Parameter(torch.zeros((), device=runtime.device))
 
-        def forward(self, fields: Any, horizon: float = 1.0) -> Any:
-            scale = torch.exp(
-                fields.new_tensor(-float(horizon)) + (self._anchor * 0.0)
-            )
-            return fields * scale
+        def forward(self, fields: Any, dt: float) -> Any:
+            spatial_points = int(fields.shape[-1])
+            velocity = (fields * 0.0) + 1.0
+            velocity = velocity + (1.0 / float(spatial_points * spatial_points))
+            velocity = velocity + (self._anchor * 0.0)
+            return fields + (fields.new_tensor(float(dt)).reshape(()) * velocity)
 
         def attach_optimizer(self, optimizer: Any) -> None:
             self._optimizer = optimizer
@@ -1920,7 +1923,6 @@ def test_ks_benchmark_runner_scores_real_requery_ladder(
 def test_ks_convergence_competence_rejects_persistence_through_requery_path() -> None:
     runtime = resolve_tensor_runtime("cpu")
     loaded = cast(Any, load_benchmark(_ks_benchmark_root))
-    ks_module = sys.modules[type(loaded.implementation).__module__]
     batch = loaded.generator(seed=101, shape=2, runtime=runtime)
     fields, targets = batch.require_tensors()
 
@@ -1928,7 +1930,7 @@ def test_ks_convergence_competence_rejects_persistence_through_requery_path() ->
         def __call__(self, fields: Any, _horizon: float) -> Any:
             return fields
 
-    predictions = ks_module._query_operator_trajectory(
+    predictions = field_stepper_trajectory(
         runtime=runtime,
         module=PersistenceOperator(),
         fields=fields,
@@ -1958,39 +1960,24 @@ def test_ks_convergence_competence_rejects_persistence_through_requery_path() ->
 def test_ks_convergence_competence_accepts_reference_solver_through_real_residual() -> None:
     runtime = resolve_tensor_runtime("cpu")
     loaded = cast(Any, load_benchmark(_ks_benchmark_root))
-    ks_module = sys.modules[type(loaded.implementation).__module__]
     batch = loaded.generator(seed=101, shape=1, sample_indices=(0,), runtime=runtime)
     fields, targets = batch.require_tensors()
-    sample_indices = tuple(
-        cast(int, sample.latent_coordinates[0]["sample_index"])
-        for sample in batch.samples
-    )
-    window = cast(int, batch.samples[0].latent_coordinates[0]["window"])
     full_horizon = 1.0
     base_step_count = 8
 
     class ReferenceOperator:
-        def __call__(self, fields: Any, horizon: float) -> Any:
-            spatial_points = int(fields.shape[-1])
-            refinement = spatial_points // 32
-            step_count = max(1, round(float(horizon) * base_step_count * refinement))
-            trajectory = ks_module._ks_reference_trajectory(
+        def __call__(self, fields: Any, dt: float) -> Any:
+            return ks_reference_step(
                 runtime=runtime,
-                sample_count=len(sample_indices),
-                seed=batch.seed,
-                sample_indices=sample_indices,
-                window=window,
-                spatial_points=spatial_points,
-                horizon=float(horizon),
-                time_count=step_count + 1,
+                fields=fields,
+                dt=float(dt),
             )
-            return trajectory[:, :, -1, :]
 
     class ReferenceGenerator:
         def __call__(self, **kwargs: Any) -> Any:
             return loaded.generator(**kwargs)
 
-    predictions = ks_module._query_operator_trajectory(
+    predictions = field_stepper_trajectory(
         runtime=runtime,
         module=ReferenceOperator(),
         fields=fields,

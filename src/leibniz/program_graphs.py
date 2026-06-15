@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import importlib.util
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -13,7 +14,7 @@ from typing import Any, Literal, TypeAlias, cast
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
-from leibniz.tensor_runtime import TensorRuntime, make_empty_float_tensor
+from leibniz.tensor_runtime import TensorRuntime, make_empty_float_tensor, tensor_runtime_backend
 
 __all__ = [
     "LoadedProgramGraph",
@@ -79,8 +80,6 @@ class ProgramTensorContract:
     def __post_init__(self) -> None:
         if not self.name:
             raise ProgramGraphError("tensor contract name must be nonempty")
-        if not self.axes:
-            raise ProgramGraphError(f"{self.name} axes must not be empty")
         for axis in self.axes:
             if type(axis) is int:
                 if axis <= 0:
@@ -644,7 +643,7 @@ class ProgramGraph:
 
 class _ProgramGraphModule:
     def __new__(cls, *, runtime: TensorRuntime, graph: ProgramGraph) -> Any:
-        backend = getattr(runtime, "to" + "rch")
+        backend = tensor_runtime_backend(runtime)
 
         class Module(backend.nn.Module):
             def __init__(self) -> None:
@@ -669,21 +668,17 @@ class _ProgramGraphModule:
                 return ()
 
             def forward(self, *inputs: Any) -> Any:
-                graph_inputs = inputs
-                if len(inputs) == len(self._graph.inputs) + 1 and _is_horizon(inputs[-1]):
-                    graph_inputs = inputs[:-1]
-                if len(graph_inputs) != len(self._graph.inputs):
+                if len(inputs) != len(self._graph.inputs):
                     raise ProgramGraphError(
-                        f"expected {len(self._graph.inputs)} graph inputs, got "
-                        f"{len(graph_inputs)}"
+                        f"expected {len(self._graph.inputs)} graph inputs, got {len(inputs)}"
                     )
                 values = {
-                    contract.name: value.to(runtime.device)
-                    for contract, value in zip(
-                        self._graph.inputs,
-                        graph_inputs,
-                        strict=True,
+                    contract.name: _runtime_input_value(
+                        backend,
+                        value,
+                        device=runtime.device,
                     )
+                    for contract, value in zip(self._graph.inputs, inputs, strict=True)
                 }
                 for node_id in self._order:
                     node = self._nodes[node_id]
@@ -814,10 +809,6 @@ def _as_tuple(value: Any) -> tuple[Any, ...]:
     return (value,)
 
 
-def _is_horizon(value: Any) -> bool:
-    return isinstance(value, int | float) and not isinstance(value, bool)
-
-
 def _as_program_axis(value: object, *, field: str) -> ProgramAxis:
     if isinstance(value, bool):
         raise ProgramGraphError(f"{field}: expected integer or string")
@@ -876,6 +867,15 @@ def _validate_differentiable(
 
 def _backend_from_tensor(value: Any) -> Any:
     module = type(value).__module__.split(".", maxsplit=1)[0]
-    if module != "to" + "rch":
+    if module != "torch":
         raise ProgramGraphError("structural program operation requires backend tensors")
-    return __import__("to" + "rch")
+    return importlib.import_module("torch")
+
+
+def _runtime_input_value(backend: Any, value: Any, *, device: Any) -> Any:
+    to_device = getattr(value, "to", None)
+    if callable(to_device):
+        return to_device(device)
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return backend.tensor(float(value), dtype=backend.float32, device=device)
+    raise ProgramGraphError("program graph inputs must be tensors or numeric scalars")

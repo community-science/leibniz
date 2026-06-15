@@ -157,6 +157,61 @@ def test_prediction_program_graph_validates_skip_add_across_scales() -> None:
     assert report.topological_order == ("local", "skip", "merge")
 
 
+def test_prediction_program_graph_consumes_scalar_dt_input() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+
+    class Step:
+        def __call__(self, field: Any, dt: Any) -> Any:
+            if len(tuple(dt.shape)) == 1:
+                dt = dt.reshape((-1, 1, 1))
+            return field + dt
+
+    graph = ProgramGraph(
+        contract_kind="prediction",
+        inputs=(
+            ProgramTensorContract("field", (1, "N")),
+            ProgramTensorContract("dt", ()),
+        ),
+        outputs=(ProgramTensorContract("future_field", (1, "N")),),
+        nodes=(ProgramGraphNode("step", Step(), "submitted-step"),),
+        edges=(
+            ProgramGraphEdge("field", "step", target_input_index=0),
+            ProgramGraphEdge("dt", "step", target_input_index=1),
+            ProgramGraphEdge("step", "future_field"),
+        ),
+    )
+
+    report = graph.validate(
+        runtime,
+        input_shapes=((1, 8), ()),
+        additional_input_shapes=(((1, 13), ()),),
+    )
+    output = graph.build_module(runtime)(torch.zeros(2, 1, 8), 0.25)
+
+    assert report.output_shapes == (((1, 8),), ((1, 13),))
+    assert output.shape == (2, 1, 8)
+    assert torch.allclose(output, torch.full((2, 1, 8), 0.25))
+
+
+def test_prediction_program_graph_rejects_extra_trailing_inputs() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    graph = ProgramGraph(
+        contract_kind="prediction",
+        inputs=(ProgramTensorContract("field", (1, "N")),),
+        outputs=(ProgramTensorContract("future_field", (1, "N")),),
+        nodes=(ProgramGraphNode("identity", ProgramIdentity(), "identity"),),
+        edges=(
+            ProgramGraphEdge("field", "identity"),
+            ProgramGraphEdge("identity", "future_field"),
+        ),
+    )
+
+    with pytest.raises(ProgramGraphError, match="expected 1 graph inputs, got 2"):
+        graph.build_module(runtime)(torch.zeros(2, 1, 8), 0.25)
+
+
 def test_structural_concat_and_resample_like_are_scale_general() -> None:
     runtime = resolve_tensor_runtime("cpu")
     graph = ProgramGraph(
