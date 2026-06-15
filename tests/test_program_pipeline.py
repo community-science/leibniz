@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -138,6 +139,142 @@ def test_ks_oracle_stepper_scores_positive_through_real_residual() -> None:
     assert cast(float, diagnostics[0]["ambient_evolution_entropy_bits"]) > 0.0
     assert diagnostics[0]["predictability_boundary"] > 0.0
     assert float(bits[0]) > 0.0
+
+
+def test_ks_certified_epsilon_bounds_imperfect_stepper_error() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    loaded = cast(Any, load_benchmark(_ks_benchmark_root))
+    module = sys.modules[type(loaded.implementation).__module__]
+    horizon = 0.25
+    drift_scale = 1.0e-3
+    imperfect_ladder: list[Any] = []
+    oracle_ladder: list[Any] = []
+
+    class DriftedReferenceStep:
+        def __call__(self, state: Any, dt: float) -> Any:
+            spatial_points = int(state.shape[-1])
+            phase = (
+                torch.arange(spatial_points, dtype=state.dtype, device=state.device).reshape(
+                    1,
+                    1,
+                    spatial_points,
+                )
+                * (2.0 * math.pi / float(spatial_points))
+            )
+            drift = drift_scale * float(dt) * torch.sin(3.0 * phase)
+            return (
+                ks_reference_step(runtime=runtime, fields=state, dt=float(dt)).to(
+                    dtype=state.dtype
+                )
+                + drift
+            )
+
+    class ReferenceStep:
+        def __call__(self, state: Any, dt: float) -> Any:
+            return ks_reference_step(runtime=runtime, fields=state, dt=float(dt)).to(
+                dtype=state.dtype
+            )
+
+    for factor in (1, 2, 4):
+        batch = loaded.generator(
+            seed=101,
+            shape=1,
+            sample_indices=(0,),
+            runtime=runtime,
+            spatial_points=32 * factor,
+            include_metadata=False,
+        )
+        fields, _targets = batch.require_tensors()
+        time_count = 1 + (2 * factor)
+        imperfect_ladder.append(
+            field_stepper_trajectory(
+                runtime=runtime,
+                module=DriftedReferenceStep(),
+                fields=fields,
+                horizon=horizon,
+                time_count=time_count,
+            ).double()
+        )
+        oracle_ladder.append(
+            field_stepper_trajectory(
+                runtime=runtime,
+                module=ReferenceStep(),
+                fields=fields,
+                horizon=horizon,
+                time_count=time_count,
+            ).double()
+        )
+
+    values, diagnostics = module._ks_ladder_prefix_certified_bits(
+        runtime=runtime,
+        ladder=tuple(imperfect_ladder),
+        horizon=horizon,
+    )
+    error_tensor = imperfect_ladder[-1] - oracle_ladder[-1]
+    actual_error = float(error_tensor.pow(2).mean().sqrt())
+    certified_epsilon = cast(float, diagnostics[0]["certified_epsilon"])
+
+    assert actual_error > 0.0
+    assert certified_epsilon >= actual_error
+    assert certified_epsilon / actual_error < 3.0
+    assert float(values[0]) > 0.0
+
+
+def test_ks_real_path_bits_rise_as_stepper_residual_falls() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    loaded = cast(Any, load_benchmark(_ks_benchmark_root))
+    module = sys.modules[type(loaded.implementation).__module__]
+
+    def score_for_drift(drift_scale: float) -> float:
+        class DriftedReferenceStep:
+            def __call__(self, state: Any, dt: float) -> Any:
+                spatial_points = int(state.shape[-1])
+                phase = (
+                    torch.arange(
+                        spatial_points,
+                        dtype=state.dtype,
+                        device=state.device,
+                    ).reshape(1, 1, spatial_points)
+                    * (2.0 * math.pi / float(spatial_points))
+                )
+                drift = drift_scale * float(dt) * torch.sin(3.0 * phase)
+                return (
+                    ks_reference_step(runtime=runtime, fields=state, dt=float(dt)).to(
+                        dtype=state.dtype
+                    )
+                    + drift
+                )
+
+        ladder: list[Any] = []
+        for factor in (1, 2, 4):
+            batch = loaded.generator(
+                seed=101,
+                shape=1,
+                sample_indices=(0,),
+                runtime=runtime,
+                spatial_points=32 * factor,
+                include_metadata=False,
+            )
+            fields, _targets = batch.require_tensors()
+            ladder.append(
+                field_stepper_trajectory(
+                    runtime=runtime,
+                    module=DriftedReferenceStep(),
+                    fields=fields,
+                    horizon=0.25,
+                    time_count=1 + (2 * factor),
+                ).double()
+            )
+        values, _diagnostics = module._ks_ladder_prefix_certified_bits(
+            runtime=runtime,
+            ladder=tuple(ladder),
+            horizon=0.25,
+        )
+        return float(values[0])
+
+    assert score_for_drift(1.0e-3) > score_for_drift(1.0e-2) > 0.0
 
 
 def test_program_checkpoint_evaluation_materializes_ks_result_view(tmp_path: Path) -> None:

@@ -312,7 +312,7 @@ def test_field_valued_runner_rejects_operator_without_dt_argument() -> None:
         raise AssertionError("expected field operator without dt argument to fail")
 
 
-def test_ks_convergence_bits_rejects_persistence() -> None:
+def test_ks_ambient_certified_bits_rejects_persistence() -> None:
     runtime = resolve_tensor_runtime("cpu")
     loaded = load_benchmark(_ks_benchmark_root)
     batch = cast(Any, loaded.generator)(seed=17, shape=1, runtime=runtime)
@@ -336,9 +336,12 @@ def test_ks_convergence_bits_rejects_persistence() -> None:
     )
 
     assert float(bits[0]) == 0.0
+    diagnostics = bits.leibniz_competence_diagnostics
+    assert diagnostics[0]["certification_status"] == "refused-missing-refinement-ladder"
+    assert diagnostics[0]["predictability_boundary"] == 0.0
 
 
-def test_ks_convergence_bits_reward_planted_convergent_ladder(monkeypatch: Any) -> None:
+def test_ks_ambient_certified_bits_reward_planted_convergent_ladder(monkeypatch: Any) -> None:
     runtime = resolve_tensor_runtime("cpu")
     module = _loaded_ks_module()
     ladder = _planted_field_ladder(runtime, coefficient=0.25)
@@ -354,7 +357,7 @@ def test_ks_convergence_bits_reward_planted_convergent_ladder(monkeypatch: Any) 
 
     monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
 
-    bits = module._ks_ladder_convergence_bits(
+    bits = module._ks_ladder_ambient_certified_bits(
         runtime=runtime,
         ladder=ladder,
         horizon=1.0,
@@ -362,7 +365,7 @@ def test_ks_convergence_bits_reward_planted_convergent_ladder(monkeypatch: Any) 
     diagnostics = bits.leibniz_competence_diagnostics
 
     assert float(bits[0]) > 0.0
-    assert diagnostics[0]["kind"] == "ks-convergence-diagnostics"
+    assert diagnostics[0]["kind"] == "ks-ambient-certified-diagnostics"
     assert diagnostics[0]["predictability_boundary"] > 0.0
     assert cast(float, diagnostics[0]["certified_epsilon"]) < cast(
         float,
@@ -375,7 +378,7 @@ def test_ks_convergence_bits_reward_planted_convergent_ladder(monkeypatch: Any) 
     )
 
 
-def test_ks_convergence_bits_increase_smoothly_as_residual_decreases(
+def test_ks_ambient_certified_bits_increase_smoothly_as_residual_decreases(
     monkeypatch: Any,
 ) -> None:
     runtime = resolve_tensor_runtime("cpu")
@@ -389,13 +392,13 @@ def test_ks_convergence_bits_increase_smoothly_as_residual_decreases(
 
     monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
 
-    high_residual_bits = module._ks_ladder_convergence_bits(
+    high_residual_bits = module._ks_ladder_ambient_certified_bits(
         runtime=runtime,
         ladder=_planted_field_ladder(runtime, coefficient=1.0),
         horizon=1.0,
     )
     residual_scale = 1.0e-5
-    low_residual_bits = module._ks_ladder_convergence_bits(
+    low_residual_bits = module._ks_ladder_ambient_certified_bits(
         runtime=runtime,
         ladder=_planted_field_ladder(runtime, coefficient=1.0),
         horizon=1.0,
@@ -404,7 +407,7 @@ def test_ks_convergence_bits_increase_smoothly_as_residual_decreases(
     assert float(low_residual_bits[0]) > float(high_residual_bits[0]) > 0.0
 
 
-def test_ks_convergence_bits_boundary_emerges_from_certified_error(
+def test_ks_ambient_certified_bits_boundary_emerges_from_certified_error(
     monkeypatch: Any,
 ) -> None:
     runtime = resolve_tensor_runtime("cpu")
@@ -427,7 +430,7 @@ def test_ks_convergence_bits_boundary_emerges_from_certified_error(
 
     monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
 
-    bits = module._ks_ladder_convergence_bits(
+    bits = module._ks_ladder_ambient_certified_bits(
         runtime=runtime,
         ladder=ladder,
         horizon=1.0,
@@ -442,7 +445,7 @@ def test_ks_convergence_bits_boundary_emerges_from_certified_error(
     assert time_points[1]["bits"] == 0.0
 
 
-def test_ks_convergence_bits_require_evolution_beyond_initial_state(
+def test_ks_ambient_certified_bits_require_evolution_beyond_initial_state(
     monkeypatch: Any,
 ) -> None:
     runtime = resolve_tensor_runtime("cpu")
@@ -465,7 +468,7 @@ def test_ks_convergence_bits_require_evolution_beyond_initial_state(
 
     monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
 
-    bits = module._ks_ladder_convergence_bits(
+    bits = module._ks_ladder_ambient_certified_bits(
         runtime=runtime,
         ladder=ladder,
         horizon=1.0,
@@ -477,7 +480,7 @@ def test_ks_convergence_bits_require_evolution_beyond_initial_state(
     assert diagnostics[0]["ambient_evolution_entropy_bits"] == 0.0
 
 
-def test_ks_convergence_bits_do_not_threshold_on_observed_order(monkeypatch: Any) -> None:
+def test_ks_ambient_certified_bits_do_not_threshold_on_observed_order(monkeypatch: Any) -> None:
     runtime = resolve_tensor_runtime("cpu")
     module = _loaded_ks_module()
 
@@ -490,7 +493,7 @@ def test_ks_convergence_bits_do_not_threshold_on_observed_order(monkeypatch: Any
 
     monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
 
-    bits = module._ks_ladder_convergence_bits(
+    bits = module._ks_ladder_ambient_certified_bits(
         runtime=runtime,
         ladder=_planted_field_ladder(runtime, coefficient=0.25),
         horizon=1.0,
@@ -503,7 +506,7 @@ def test_ks_convergence_bits_do_not_threshold_on_observed_order(monkeypatch: Any
     assert "rung_count" not in diagnostics[0]
 
 
-def test_ks_convergence_bits_refuse_growing_amplification(monkeypatch: Any) -> None:
+def test_ks_ambient_certified_bits_refuse_growing_amplification(monkeypatch: Any) -> None:
     runtime = resolve_tensor_runtime("cpu")
     module = _loaded_ks_module()
 
@@ -522,7 +525,7 @@ def test_ks_convergence_bits_refuse_growing_amplification(monkeypatch: Any) -> N
     monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
     monkeypatch.setattr(module, "_per_sample_law_amplification", planted_amplification)
 
-    bits = module._ks_ladder_convergence_bits(
+    bits = module._ks_ladder_ambient_certified_bits(
         runtime=runtime,
         ladder=_planted_field_ladder(runtime, coefficient=0.25),
         horizon=1.0,
@@ -546,6 +549,9 @@ def test_ks_scoring_path_has_no_residual_certificate_constants() -> None:
     assert "_convergence_expected_observed_order" not in source
     assert "_convergence_observed_order_tolerance" not in source
     assert "k_sensitivity" not in source
+    assert "RichardsonEstimate" not in source
+    assert "def richardson" not in source
+    assert "restrict_to_common_grid" not in source
 
 
 def _loaded_ks_module() -> Any:
