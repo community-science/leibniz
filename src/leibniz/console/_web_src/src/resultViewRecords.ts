@@ -79,7 +79,8 @@ export type CompetencePointRecord = {
 export type CompetenceTimePointRecord = {
   time: number;
   bits: number;
-  gate_decision?: string;
+  certified_epsilon?: number;
+  evolution_scale?: number;
 };
 
 export type TrainingEstimateComparisonPointRecord = {
@@ -462,7 +463,8 @@ function parseCompetenceTimePoint(value: unknown, path: string): CompetenceTimeP
   return {
     time: requireNumber(record.time, `${path}.time`, transportError),
     bits: requireNumber(record.bits, `${path}.bits`, transportError),
-    gate_decision: optional(record.gate_decision, `${path}.gate_decision`, (item, itemPath) => requireString(item, itemPath, transportError)),
+    certified_epsilon: optionalNumber(record.certified_epsilon, `${path}.certified_epsilon`, transportError),
+    evolution_scale: optionalNumber(record.evolution_scale, `${path}.evolution_scale`, transportError),
   };
 }
 
