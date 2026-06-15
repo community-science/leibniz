@@ -1,5 +1,5 @@
 ---
-name: pr-review
+name: review-pr
 description: Review a single round of an implementation pull request in the spec → implement → review workflow. Ground the change in the architecture, confirm prior findings are closed, run the standing checks, and post one consolidated review comment. Does not merge.
 ---
 
