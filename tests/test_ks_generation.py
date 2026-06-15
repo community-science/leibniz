@@ -537,6 +537,41 @@ def test_ks_ambient_certified_bits_refuse_growing_amplification(monkeypatch: Any
     assert diagnostics[0]["law_amplification_ladder"] == [1.0, 2.0, 4.0]
 
 
+def test_ks_ambient_certified_bits_refuse_real_underresolved_amplification(
+    monkeypatch: Any,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _loaded_ks_module()
+    ladder = _underresolved_amplification_ladder(runtime)
+
+    def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
+        _ = dx
+        _ = dt
+        return trajectory * 0.0 + 1.0e-8
+
+    monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
+
+    bits = module._ks_ladder_ambient_certified_bits(
+        runtime=runtime,
+        ladder=ladder,
+        horizon=0.25,
+    )
+    diagnostics = bits.leibniz_competence_diagnostics
+    amplification_ladder = cast(list[float], diagnostics[0]["law_amplification_ladder"])
+
+    assert float(bits[0]) == 0.0
+    assert diagnostics[0]["certification_status"] == "refused-amplification-growing"
+    assert amplification_ladder[0] < amplification_ladder[1] < amplification_ladder[2]
+    assert cast(float, diagnostics[0]["law_amplification_stability"]) > cast(
+        float,
+        diagnostics[0]["law_amplification_refusal_ratio"],
+    )
+    assert cast(float, diagnostics[0]["certified_epsilon"]) < cast(
+        float,
+        diagnostics[0]["evolution_scale"],
+    )
+
+
 def test_ks_scoring_path_has_no_residual_certificate_constants() -> None:
     source = (_ks_benchmark_root / "benchmark.py").read_text()
 
@@ -568,4 +603,29 @@ def _planted_field_ladder(runtime: Any, *, coefficient: float) -> tuple[Any, ...
         field = base.repeat_interleave(scale, dim=1).repeat_interleave(scale, dim=2)
         field = field + coefficient / (4.0**rung)
         ladder.append(field)
+    return tuple(ladder)
+
+
+def _underresolved_amplification_ladder(runtime: Any) -> tuple[Any, ...]:
+    torch = runtime.torch
+    ladder: list[Any] = []
+    for factor in (1, 2, 4):
+        spatial_points = 32 * factor
+        time_count = 1 + factor
+        x = torch.arange(
+            spatial_points,
+            dtype=torch.float64,
+            device=runtime.device,
+        ).reshape(1, 1, spatial_points)
+        phase = x * (
+            2.0 * math.pi * float(spatial_points // 4) / float(spatial_points)
+        )
+        time = torch.linspace(
+            0.0,
+            1.0,
+            time_count,
+            dtype=torch.float64,
+            device=runtime.device,
+        ).reshape(1, time_count, 1)
+        ladder.append(time * torch.sin(phase))
     return tuple(ladder)
