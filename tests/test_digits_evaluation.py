@@ -223,6 +223,67 @@ def test_inverse_digits_canonical_template_baseline_does_not_saturate_headroom()
     assert tuple(int(value) for value in template_predictions) != (0, 1, 8)
 
 
+def test_inverse_digits_static_certification_bounds_perturbed_latent_error() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _digits_module()
+    true_latent = module.InverseDigitsLatent(8, 0.0, 0.0, 1.0, 0.02, 1.0)
+    recovered_latent = module.InverseDigitsLatent(8, 0.01, 0.0, 1.0, 0.02, 1.0)
+    observation = module.render_inverse_digits(
+        runtime=runtime,
+        latents=(true_latent,),
+        canvas_side=32,
+    )
+
+    certificate = module.inverse_digits_static_certification(
+        runtime=runtime,
+        recovered_latent=recovered_latent,
+        observation=observation,
+        canvas_side=32,
+        refinement_sides=(32, 64),
+    )
+    actual_error = math.sqrt(
+        sum(
+            (actual - recovered) ** 2
+            for actual, recovered in zip(
+                true_latent.to_nuisance_tuple(),
+                recovered_latent.to_nuisance_tuple(),
+                strict=True,
+            )
+        )
+    )
+
+    assert certificate.certification_status == "certified"
+    assert certificate.certified_epsilon >= actual_error
+    assert certificate.certified_epsilon / actual_error < 20.0
+    assert certificate.residual_norm > 0.0
+    assert certificate.sigma_min > 0.0
+
+
+def test_inverse_digits_static_conditioning_is_stable_for_well_posed_glyph() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _digits_module()
+    latent = module.InverseDigitsLatent(8, 0.0, 0.0, 1.0, 0.02, 1.0)
+    observation = module.render_inverse_digits(
+        runtime=runtime,
+        latents=(latent,),
+        canvas_side=32,
+    )
+
+    certificate = module.inverse_digits_static_certification(
+        runtime=runtime,
+        recovered_latent=latent,
+        observation=observation,
+        canvas_side=32,
+        refinement_sides=(32, 64),
+    )
+    record = certificate.to_record()
+
+    assert certificate.certification_status == "certified"
+    assert certificate.conditioning_stability < 1.1
+    assert record["estimator"] == "renderer-jvp-gram-sigma-min"
+    assert record["sigma_min_ladder"] == list(certificate.sigma_min_ladder)
+
+
 def _measurement_for_sequence(
     *,
     sequence: tuple[int, ...],

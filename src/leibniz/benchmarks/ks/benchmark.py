@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from leibniz.benchmark_implementations import RawBenchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
+from leibniz.certified_precision import residual_certified_epsilon
 from leibniz.field_evolution import field_stepper_trajectory
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.observation_generation import (
@@ -754,8 +755,9 @@ def _ks_ladder_prefix_certified_bits(
     finest = ladder[-1]
     finest_residual = residual_norms[-1]
     finest_amplification = amplifications[-1]
-    certified_epsilon = (finest_residual * finest_amplification * float(horizon)).clamp_min(
-        math.ulp(1.0)
+    certified_epsilon = residual_certified_epsilon(
+        finest_residual,
+        finest_amplification * float(horizon),
     )
     entropy = _ambient_evolution_entropy(
         runtime=runtime,

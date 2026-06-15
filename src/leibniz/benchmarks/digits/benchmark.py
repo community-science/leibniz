@@ -86,9 +86,12 @@ from leibniz.timing import TimingCollector
 __all__ = [
     "InverseDigitsLatent",
     "InverseDigitsObservationBatch",
+    "StaticMapCertification",
     "benchmark",
+    "inverse_digits_static_certification",
     "new_inverse_digits_secret",
     "render_inverse_digits",
+    "render_inverse_digits_tensor",
     "sample_inverse_digits_observations",
 ]
 
@@ -106,6 +109,8 @@ _volume_class_canvas_minimum_side = 16
 _volume_class_canvas_side_step = 4
 _canonical_digits_cardinality = _volume_class_digit_count
 _batch_render_curve_sample_count = 25
+_static_conditioning_refusal_ratio = 2.0
+_static_sigma_floor = 1.0e-8
 
 # --- Domain-growth chart geometry (fixed render resolution, growing canvas) ---
 #
@@ -281,6 +286,31 @@ class InverseDigitsObservationBatch:
             "canvas_side": self.canvas_side,
             "observation_shape": [int(axis) for axis in self.observations.shape],
             "law_id": "benchmarks.digits.inverse-renderer@0.1.0",
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class StaticMapCertification:
+    """A static-map residual-to-latent-precision certificate."""
+
+    certified_epsilon: float
+    residual_norm: float
+    sigma_min: float
+    sigma_min_ladder: tuple[float, ...]
+    conditioning_stability: float
+    certification_status: str
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "kind": "digits-static-map-certification",
+            "estimator": "renderer-jvp-gram-sigma-min",
+            "certified_epsilon": self.certified_epsilon,
+            "residual_norm": self.residual_norm,
+            "sigma_min": self.sigma_min,
+            "sigma_min_ladder": list(self.sigma_min_ladder),
+            "conditioning_stability": self.conditioning_stability,
+            "conditioning_refusal_ratio": _static_conditioning_refusal_ratio,
+            "certification_status": self.certification_status,
         }
 
 
@@ -2449,22 +2479,224 @@ def render_inverse_digits(
         raise ObservationGenerationError("inverse digits rendering requires latents")
     if type(canvas_side) is not int or canvas_side < _render_unit_side:
         raise ObservationGenerationError("canvas_side must be at least the render unit side")
-    identities = tuple(latent.identity for latent in normalized_latents)
-    nuisance_values = tuple(
-        value for latent in normalized_latents for value in latent.to_nuisance_tuple()
+    torch = runtime.torch
+    identities = torch.tensor(
+        tuple(latent.identity for latent in normalized_latents),
+        dtype=torch.long,
+        device=runtime.device,
     )
-    return tensor_runtime_construct_tensor(
+    nuisance = torch.tensor(
+        tuple(latent.to_nuisance_tuple() for latent in normalized_latents),
+        dtype=torch.float32,
+        device=runtime.device,
+    )
+    return render_inverse_digits_tensor(
         runtime,
-        recipe=TensorElementRecipe(
-            shape=(len(normalized_latents), 1, canvas_side, canvas_side),
-            dtype="float32",
-            program=_inverse_digits_tensor_program(
-                identities=identities,
-                nuisance_values=nuisance_values,
-                canvas_side=canvas_side,
-            ),
-        ),
+        identities=identities,
+        nuisance=nuisance,
+        canvas_side=canvas_side,
     )
+
+
+def render_inverse_digits_tensor(
+    runtime: TensorRuntime,
+    *,
+    identities: Any,
+    nuisance: Any,
+    canvas_side: int,
+) -> Any:
+    """Render inverse-Digits latent tensors through the differentiable law."""
+
+    torch = runtime.torch
+    if type(canvas_side) is not int or canvas_side < _render_unit_side:
+        raise ObservationGenerationError("canvas_side must be at least the render unit side")
+    if len(tuple(identities.shape)) != 1:
+        raise ObservationGenerationError("identity tensor must have shape (batch,)")
+    if tuple(nuisance.shape) != (int(identities.shape[0]), 5):
+        raise ObservationGenerationError("nuisance tensor must have shape (batch, 5)")
+    mark_counts, control_points = _inverse_digit_component_tensors(runtime)
+    identities = identities.to(device=runtime.device, dtype=torch.long)
+    nuisance = nuisance.to(device=runtime.device, dtype=torch.float32)
+    batch_size = int(identities.shape[0])
+    x_center = (
+        torch.arange(canvas_side, dtype=nuisance.dtype, device=runtime.device).reshape(
+            1,
+            1,
+            1,
+            canvas_side,
+        )
+        + 0.5
+    ) / float(canvas_side)
+    y_center = (
+        torch.arange(canvas_side, dtype=nuisance.dtype, device=runtime.device).reshape(
+            1,
+            1,
+            canvas_side,
+            1,
+        )
+        + 0.5
+    ) / float(canvas_side)
+    segment_start_t = torch.linspace(
+        0.0,
+        1.0 - (1.0 / float(_batch_render_curve_sample_count - 1)),
+        _batch_render_curve_sample_count - 1,
+        dtype=nuisance.dtype,
+        device=runtime.device,
+    )
+    value = torch.zeros(
+        (batch_size, 1, canvas_side, canvas_side),
+        dtype=nuisance.dtype,
+        device=runtime.device,
+    )
+    max_mark_count = int(control_points.shape[1])
+    selected_mark_counts = mark_counts[identities]
+    x_translation = nuisance[:, 0].reshape((-1, 1))
+    y_translation = nuisance[:, 1].reshape((-1, 1))
+    scale = nuisance[:, 2].reshape((-1, 1))
+    shear = nuisance[:, 3].reshape((-1, 1))
+    stroke_width = nuisance[:, 4].reshape((-1, 1, 1, 1))
+    base_width = (3.0 / float(canvas_side)) * stroke_width
+    for mark_slot in range(max_mark_count):
+        active_mark = mark_slot < selected_mark_counts.reshape((-1, 1, 1, 1))
+        selected_controls = control_points[identities, mark_slot, :, :].to(
+            dtype=nuisance.dtype
+        )
+        raw_start = _tensor_quadratic_points(selected_controls, segment_start_t)
+        segment_end_t = segment_start_t + (1.0 / float(_batch_render_curve_sample_count - 1))
+        raw_end = _tensor_quadratic_points(selected_controls, segment_end_t)
+        raw_sx = raw_start[:, :, 0]
+        raw_sy = raw_start[:, :, 1]
+        raw_ex = raw_end[:, :, 0]
+        raw_ey = raw_end[:, :, 1]
+        sx = 0.5 + scale * (raw_sx - 0.5) + shear * (raw_sy - 0.5) + x_translation
+        sy = 0.5 + scale * (raw_sy - 0.5) + y_translation
+        ex = 0.5 + scale * (raw_ex - 0.5) + shear * (raw_ey - 0.5) + x_translation
+        ey = 0.5 + scale * (raw_ey - 0.5) + y_translation
+        sx = sx.reshape((batch_size, -1, 1, 1))
+        sy = sy.reshape((batch_size, -1, 1, 1))
+        ex = ex.reshape((batch_size, -1, 1, 1))
+        ey = ey.reshape((batch_size, -1, 1, 1))
+        dx = ex - sx
+        dy = ey - sy
+        length_squared = dx * dx + dy * dy
+        safe_length_squared = length_squared.where(
+            length_squared != 0.0,
+            length_squared * 0.0 + 1.0,
+        )
+        segment_t = ((x_center - sx) * dx + (y_center - sy) * dy) / safe_length_squared
+        segment_t = segment_t.clamp(0.0, 1.0)
+        closest_x = sx + segment_t * dx
+        closest_y = sy + segment_t * dy
+        distance_squared = (
+            (x_center - closest_x) * (x_center - closest_x)
+            + (y_center - closest_y) * (y_center - closest_y)
+        )
+        distance_squared = distance_squared.min(dim=1).values.reshape(
+            (batch_size, 1, canvas_side, canvas_side)
+        )
+        contribution = (-distance_squared / (base_width * base_width + 1.0e-8)).exp()
+        value = value.maximum(active_mark * contribution)
+    return value.clamp(0.0, 1.0)
+
+
+def inverse_digits_static_certification(
+    *,
+    runtime: TensorRuntime,
+    recovered_latent: InverseDigitsLatent,
+    observation: Any,
+    canvas_side: int,
+    refinement_sides: Sequence[int] = (_render_unit_side, 2 * _render_unit_side),
+) -> StaticMapCertification:
+    """Certify latent precision for a recovered inverse-Digits latent."""
+
+    torch = runtime.torch
+    identity = torch.tensor([recovered_latent.identity], dtype=torch.long, device=runtime.device)
+    nuisance = torch.tensor(
+        [recovered_latent.to_nuisance_tuple()],
+        dtype=torch.float32,
+        device=runtime.device,
+    )
+    prediction = render_inverse_digits_tensor(
+        runtime,
+        identities=identity,
+        nuisance=nuisance,
+        canvas_side=canvas_side,
+    )
+    residual_norm = float((prediction - observation.reshape(prediction.shape)).pow(2).mean().sqrt())
+    ladder_sides = tuple(int(side) for side in refinement_sides)
+    sigma_ladder = tuple(
+        _inverse_digits_sigma_min(
+            runtime=runtime,
+            identity=recovered_latent.identity,
+            nuisance=recovered_latent.to_nuisance_tuple(),
+            canvas_side=side,
+        )
+        for side in ladder_sides
+    )
+    sigma_min = sigma_ladder[-1]
+    positive_sigmas = tuple(value for value in sigma_ladder if value > _static_sigma_floor)
+    stability = (
+        math.inf if not positive_sigmas else max(positive_sigmas) / min(positive_sigmas)
+    )
+    refused = (
+        sigma_min <= _static_sigma_floor
+        or not math.isfinite(stability)
+        or stability > _static_conditioning_refusal_ratio
+    )
+    certified_epsilon = (
+        math.inf if refused else residual_norm / max(sigma_min, _static_sigma_floor)
+    )
+    return StaticMapCertification(
+        certified_epsilon=certified_epsilon,
+        residual_norm=residual_norm,
+        sigma_min=sigma_min,
+        sigma_min_ladder=sigma_ladder,
+        conditioning_stability=stability,
+        certification_status="refused-conditioning-unstable" if refused else "certified",
+    )
+
+
+def _inverse_digits_sigma_min(
+    *,
+    runtime: TensorRuntime,
+    identity: int,
+    nuisance: tuple[float, float, float, float, float],
+    canvas_side: int,
+) -> float:
+    torch = runtime.torch
+    identity_tensor = torch.tensor([identity], dtype=torch.long, device=runtime.device)
+    nuisance_tensor = torch.tensor(
+        nuisance,
+        dtype=torch.float32,
+        device=runtime.device,
+        requires_grad=True,
+    )
+
+    def render_flat(nuisance_value: Any) -> Any:
+        rendered = render_inverse_digits_tensor(
+            runtime,
+            identities=identity_tensor,
+            nuisance=nuisance_value.reshape(1, 5),
+            canvas_side=canvas_side,
+        )
+        return rendered.reshape(-1) / math.sqrt(float(rendered.numel()))
+
+    basis = torch.eye(5, dtype=nuisance_tensor.dtype, device=runtime.device)
+    columns: list[Any] = []
+    for axis in range(5):
+        _value, jvp = torch.autograd.functional.jvp(
+            render_flat,
+            nuisance_tensor,
+            basis[axis],
+            create_graph=False,
+            strict=True,
+        )
+        columns.append(jvp)
+    jacobian_columns = torch.stack(columns, dim=1)
+    gram = jacobian_columns.transpose(0, 1).matmul(jacobian_columns)
+    eigenvalues = torch.linalg.eigvalsh(gram)
+    sigma_min = eigenvalues.clamp_min(0.0).sqrt().min()
+    return float(sigma_min)
 
 
 def _inverse_digits_latent_from_secret(
@@ -2496,165 +2728,33 @@ def _affine_interval(value: float, lower: float, upper: float) -> float:
     return lower + value * (upper - lower)
 
 
-def _inverse_digits_tensor_program(
-    *,
-    identities: tuple[int, ...],
-    nuisance_values: tuple[float, ...],
-    canvas_side: int,
-) -> TensorBatchProgram:
-    component_count = len(_digit_strokes)
+def _inverse_digit_component_tensors(runtime: TensorRuntime) -> tuple[Any, Any]:
+    torch = runtime.torch
     max_mark_count = max(len(strokes) for strokes in _digit_strokes)
-    component_mark_counts: list[int] = []
+    mark_counts: list[int] = []
     component_control_points: list[list[list[list[float]]]] = []
     for strokes in _digit_strokes:
         control_points: list[list[list[float]]] = []
         for points in strokes:
             controls = _curve_control_points(points)
             control_points.append([[point[0], point[1]] for point in controls])
-        component_mark_counts.append(len(control_points))
+        mark_counts.append(len(control_points))
         while len(control_points) < max_mark_count:
             control_points.append([[0.0, 0.0] for _ in range(3)])
         component_control_points.append(control_points)
+    return (
+        torch.tensor(mark_counts, dtype=torch.long, device=runtime.device),
+        torch.tensor(component_control_points, dtype=torch.float32, device=runtime.device),
+    )
 
-    def element_function(
-        coordinates: tuple[Any, ...],
-        *,
-        ops: Any,
-        identity_values: Any,
-        nuisance_values: Any,
-        component_mark_counts: Any,
-        component_control_points: Any,
-        segment_start_t: Any,
-        image_side: Any,
-    ) -> Any:
-        sample_axis_index, _channel_index, y_index, x_index = coordinates
-        identity = identity_values[sample_axis_index]
-        nuisance = nuisance_values[sample_axis_index]
-        x_center = (x_index.reshape((1, 1, 1, -1)) + 0.5) / image_side
-        y_center = (y_index.reshape((1, 1, -1, 1)) + 0.5) / image_side
-        x_translation = nuisance[:, 0].reshape((-1, 1))
-        y_translation = nuisance[:, 1].reshape((-1, 1))
-        scale = nuisance[:, 2].reshape((-1, 1))
-        shear = nuisance[:, 3].reshape((-1, 1))
-        stroke_width = nuisance[:, 4].reshape((-1, 1, 1, 1))
-        value = ops.broadcast_zeros(coordinates)
-        mark_count = component_mark_counts[identity]
-        base_width = (3.0 / float(canvas_side)) * stroke_width
-        for mark_slot in range(max_mark_count):
-            active_mark = mark_slot < mark_count.reshape((-1, 1, 1, 1))
-            segment_end_t = segment_start_t + (
-                1.0 / float(_batch_render_curve_sample_count - 1)
-            )
-            raw_sx = _quadratic_tensor_point(
-                component_control_points,
-                identity,
-                mark_slot,
-                0,
-                segment_start_t,
-            )
-            raw_sy = _quadratic_tensor_point(
-                component_control_points,
-                identity,
-                mark_slot,
-                1,
-                segment_start_t,
-            )
-            raw_ex = _quadratic_tensor_point(
-                component_control_points,
-                identity,
-                mark_slot,
-                0,
-                segment_end_t,
-            )
-            raw_ey = _quadratic_tensor_point(
-                component_control_points,
-                identity,
-                mark_slot,
-                1,
-                segment_end_t,
-            )
-            sx = 0.5 + scale * (raw_sx - 0.5) + shear * (raw_sy - 0.5) + x_translation
-            sy = 0.5 + scale * (raw_sy - 0.5) + y_translation
-            ex = 0.5 + scale * (raw_ex - 0.5) + shear * (raw_ey - 0.5) + x_translation
-            ey = 0.5 + scale * (raw_ey - 0.5) + y_translation
-            sx = sx.reshape((sx.shape[0], sx.shape[1], 1, 1))
-            sy = sy.reshape((sy.shape[0], sy.shape[1], 1, 1))
-            ex = ex.reshape((ex.shape[0], ex.shape[1], 1, 1))
-            ey = ey.reshape((ey.shape[0], ey.shape[1], 1, 1))
-            dx = ex - sx
-            dy = ey - sy
-            length_squared = dx * dx + dy * dy
-            safe_length_squared = length_squared.where(
-                length_squared != 0.0,
-                length_squared * 0.0 + 1.0,
-            )
-            segment_t = ((x_center - sx) * dx + (y_center - sy) * dy) / safe_length_squared
-            segment_t = segment_t.clamp(0.0, 1.0)
-            closest_x = sx + segment_t * dx
-            closest_y = sy + segment_t * dy
-            distance_squared = (
-                (x_center - closest_x) * (x_center - closest_x)
-                + (y_center - closest_y) * (y_center - closest_y)
-            )
-            distance_squared = distance_squared.min(dim=1).values.reshape(
-                (-1, 1, y_index.shape[0], x_index.shape[0])
-            )
-            width = base_width.reshape((-1, 1, 1, 1))
-            contribution = (-distance_squared / (width * width + 1.0e-8)).exp()
-            value = value.maximum(active_mark * contribution)
-        return value.clamp(0.0, 1.0)
 
-    return TensorBatchProgram(
-        kernel=element_function,
-        parameters={
-            "identity_values": TensorElementParameter(
-                dtype="int64",
-                shape=(len(identities),),
-                values=identities,
-                dynamic_axes=(0,),
-            ),
-            "nuisance_values": TensorElementParameter(
-                dtype="float32",
-                shape=(len(identities), 5),
-                values=nuisance_values,
-                dynamic_axes=(0,),
-            ),
-            "component_mark_counts": TensorElementParameter(
-                dtype="int64",
-                shape=(component_count,),
-                values=tuple(component_mark_counts),
-            ),
-            "component_control_points": TensorElementParameter(
-                dtype="float32",
-                shape=(component_count, max_mark_count, 3, 2),
-                values=tuple(
-                    value
-                    for component in component_control_points
-                    for mark in component
-                    for point in mark
-                    for value in point
-                ),
-            ),
-            "segment_start_t": TensorElementParameter(
-                dtype="float32",
-                shape=(_batch_render_curve_sample_count - 1,),
-                values=tuple(
-                    index / float(_batch_render_curve_sample_count - 1)
-                    for index in range(_batch_render_curve_sample_count - 1)
-                ),
-            ),
-            "image_side": TensorElementParameter(
-                dtype="float32",
-                shape=(),
-                values=(float(canvas_side),),
-            ),
-        },
-        cache_key=(
-            "digits-inverse-renderer",
-            component_count,
-            max_mark_count,
-            _batch_render_curve_sample_count,
-        ),
+def _tensor_quadratic_points(controls: Any, t: Any) -> Any:
+    t_values = t.reshape((1, -1, 1))
+    one_minus_t = 1.0 - t_values
+    return (
+        one_minus_t * one_minus_t * controls[:, 0:1, :]
+        + 2.0 * one_minus_t * t_values * controls[:, 1:2, :]
+        + t_values * t_values * controls[:, 2:3, :]
     )
 
 
