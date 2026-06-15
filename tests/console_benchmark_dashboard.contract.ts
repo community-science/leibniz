@@ -121,8 +121,8 @@ function modelResult({
         score,
         run_ids: runIds,
         time_points: [
-          { bits: score / 2, gate_decision: 'passed', time: 0.25 },
-          { bits: score, gate_decision: 'passed', time: 0.5 },
+          { bits: score / 2, certified_epsilon: 0.02, evolution_scale: 0.2, time: 0.25 },
+          { bits: score, certified_epsilon: 0.03, evolution_scale: 0.3, time: 0.5 },
         ],
       },
     ],
@@ -648,6 +648,8 @@ const parsedPoint = parsedResultViews[0].benchmark_results[0].leaderboard[0].poi
 assertEqual(parsedPoint.competence_value_kind, 'validated-bits', 'competence value kind');
 assertEqual(parsedPoint.predictability_boundary, 0.5, 'predictability boundary');
 assertEqual(parsedPoint.time_points?.[1]?.bits, 0.75, 'time point bits');
+assertEqual(parsedPoint.time_points?.[1]?.certified_epsilon, 0.03, 'time point epsilon');
+assertEqual(parsedPoint.time_points?.[1]?.evolution_scale, 0.3, 'time point scale');
 const parsedBenchmarkResult = parsedResultViews[0];
 if (parsedBenchmarkResult?.format !== 'leibniz.console.benchmark-results') {
   throw new Error('parsed benchmark result view must keep its discriminant');

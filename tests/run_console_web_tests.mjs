@@ -133,8 +133,9 @@ function assertArchitecturePanel() {
     "id: 'D'",
     'architecture-roadmap',
     'Closing the delta',
-    'field benchmark now scores the contiguous time prefix',
-    'field evolution scale beyond the initial condition',
+    'residual-certified distance to a solution of the law',
+    'field evolution above persistence',
+    'Law-induced metric from typed equations',
     'const STEPS',
   ]) {
     if (!panel.includes(marker)) {

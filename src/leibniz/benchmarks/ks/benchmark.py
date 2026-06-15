@@ -44,6 +44,7 @@ from leibniz.tensor_runtime import (
     TensorElementRecipe,
     TensorRuntime,
     resolve_host_tensor_runtime,
+    tensor_runtime_concat,
     tensor_runtime_construct_tensor,
 )
 from leibniz.timing import TimingCollector
@@ -61,35 +62,15 @@ _time_count = 9
 _box_length = 22.0
 _horizon = 1.0
 _state_discriminability_resolution = 0.05
-_convergence_refinement_factor = 2
-_convergence_rung_count = 3
-_convergence_gate_uncertainty_scale = 1.0
-_convergence_expected_observed_order = 2.0
-_convergence_observed_order_tolerance = 0.5
+_certification_refinement_factors = (1, 2, 4)
+_law_amplification_refusal_ratio = 2.0
+_law_amplification_log_cap = 16.0
 _initial_condition_mode_count = 4
 _maximum_window = 8
 _window_axis = StateSpaceAxis(
     id="ks-space-time-log2-window",
     domain=RealIntervalDomain(lower=0.0, upper=float(_maximum_window + 1)),
 )
-
-
-@dataclass(frozen=True, slots=True)
-class RichardsonEstimate:
-    """Scalar Richardson extrapolation estimate from a refinement sequence."""
-
-    observed_order: float
-    limit: float
-    uncertainty: float
-
-
-@dataclass(frozen=True, slots=True)
-class RichardsonFieldEstimate:
-    """Field Richardson extrapolation estimate on the common restricted grid."""
-
-    observed_order: float
-    extrapolated_field: Any
-    error: float
 
 
 def benchmark(root: Path) -> BenchmarkProtocol:
@@ -166,14 +147,14 @@ class Benchmark:
         del runtime
         if (
             target_contract.kind != "field-valued"
-            or target_contract.competence.kind != "convergence-resolved-bits"
+            or target_contract.competence.kind != "ambient-certified-bits"
             or target_contract.competence.parameters.get("residual_operator_id")
             != _residual_operator_id
         ):
-            raise ValueError("KS benchmark only builds its declared convergence competence")
+            raise ValueError("KS benchmark only builds its declared certified competence")
 
         def competence(request: Any) -> Any:
-            return _ks_convergence_resolved_bits(request)
+            return _ks_ambient_certified_bits(request)
 
         return competence
 
@@ -314,7 +295,7 @@ def _target_contract() -> TargetContract:
         outcome_ids=None,
         loss_id="equation-residual",
         competence=CompetenceFunctional(
-            kind="convergence-resolved-bits",
+            kind="ambient-certified-bits",
             parameters={"residual_operator_id": _residual_operator_id},
         ),
         baseline=BaselinePredictor(kind="persistence"),
@@ -572,19 +553,31 @@ def _ks_residual_loss(predictions: Any, targets: Any) -> Any:
     return residual_loss + initial_loss
 
 
-def _ks_convergence_resolved_bits(request: Any) -> Any:
+def _ks_ambient_certified_bits(request: Any) -> Any:
     predictions = request.predictions
     targets = request.targets
     _validate_initial_condition_target(
         predictions=predictions,
         targets=targets,
-        context="KS convergence competence",
+        context="KS ambient certified competence",
     )
     try:
         ladder = _ks_prediction_ladder(request)
-    except ValueError:
-        return _zero_bits(runtime=request.runtime, predictions=predictions)
-    return _ks_ladder_convergence_bits(
+    except ValueError as error:
+        result = _zero_bits(runtime=request.runtime, predictions=predictions)
+        result.leibniz_competence_diagnostics = tuple(
+            {
+                "kind": "ks-ambient-certified-diagnostics",
+                "sample_index": sample_index,
+                "certification_status": "refused-missing-refinement-ladder",
+                "reason": str(error),
+                "bits": 0.0,
+                "predictability_boundary": 0.0,
+            }
+            for sample_index in range(int(predictions.shape[0]))
+        )
+        return result
+    return _ks_ladder_ambient_certified_bits(
         runtime=request.runtime,
         ladder=ladder,
         horizon=_request_horizon(request),
@@ -609,13 +602,12 @@ def _validate_initial_condition_target(
 
 def _ks_prediction_ladder(request: Any) -> tuple[Any, ...]:
     if request.module is None or request.generator is None or request.batch is None:
-        return (request.predictions,)
+        raise ValueError("KS ambient certification requires a refined prediction ladder")
     sample_indices, volume_request = _request_sample_identity(request)
     base_space_count = int(request.predictions.shape[-1])
     base_time_count = int(request.predictions.shape[1])
     ladder: list[Any] = []
-    for rung in range(_convergence_rung_count):
-        factor = _convergence_refinement_factor**rung
+    for factor in _certification_refinement_factors:
         spatial_points = base_space_count * factor
         time_count = 1 + ((base_time_count - 1) * factor)
         generated = request.generator(
@@ -642,25 +634,25 @@ def _ks_prediction_ladder(request: Any) -> tuple[Any, ...]:
 
 def _request_sample_identity(request: Any) -> tuple[tuple[int, ...], StateSpaceVolumeRequest]:
     if request.batch is None:
-        raise ValueError("KS convergence competence requires a generated sample batch")
+        raise ValueError("KS ambient certification requires a generated sample batch")
     sample_indices: list[int] = []
     windows: set[int] = set()
     for sample_key in request.sample_keys:
         latent_coordinates = sample_key.get("latent_coordinates")
         if not isinstance(latent_coordinates, Sequence) or not latent_coordinates:
-            raise ValueError("KS convergence competence requires sample latent coordinates")
+            raise ValueError("KS ambient certification requires sample latent coordinates")
         coordinate_value = cast(Sequence[object], latent_coordinates)[0]
         if not isinstance(coordinate_value, Mapping):
-            raise ValueError("KS convergence competence requires sample coordinate records")
+            raise ValueError("KS ambient certification requires sample coordinate records")
         coordinate = cast(Mapping[str, object], coordinate_value)
         sample_index = coordinate.get("sample_index")
         window = coordinate.get("window")
         if not isinstance(sample_index, int) or not isinstance(window, int):
-            raise ValueError("KS convergence competence requires sample index and window")
+            raise ValueError("KS ambient certification requires sample index and window")
         sample_indices.append(sample_index)
         windows.add(window)
     if len(windows) != 1:
-        raise ValueError("KS convergence competence requires one volume window per batch")
+        raise ValueError("KS ambient certification requires one volume window per batch")
     window = next(iter(windows))
     return (
         tuple(sample_indices),
@@ -671,23 +663,22 @@ def _request_sample_identity(request: Any) -> tuple[tuple[int, ...], StateSpaceV
 def _request_horizon(request: Any) -> float:
     horizon = float(request.horizons[-1]) if request.horizons else _horizon
     if not math.isfinite(horizon) or horizon <= 0.0:
-        raise ValueError("KS convergence horizon must be positive and finite")
+        raise ValueError("KS ambient certification horizon must be positive and finite")
     return horizon
 
 
-def _ks_ladder_convergence_bits(
+def _ks_ladder_ambient_certified_bits(
     *,
     runtime: TensorRuntime,
     ladder: tuple[Any, ...],
     horizon: float,
 ) -> Any:
-    if len(ladder) < _convergence_rung_count:
-        return _zero_bits(runtime=runtime, predictions=ladder[-1])
     measured_ladder = tuple(_float64_tensor(trajectory) for trajectory in ladder)
+    if not measured_ladder:
+        raise ValueError("KS certified bits require at least one trajectory")
     base_time_count = int(measured_ladder[0].shape[1])
     if base_time_count < 2:
         return _zero_bits(runtime=runtime, predictions=measured_ladder[-1])
-    factor = _convergence_refinement_factor
     boundary_bits = [0.0 for _sample in range(int(ladder[-1].shape[0]))]
     prefix_open = [True for _sample in boundary_bits]
     boundaries = [0.0 for _sample in boundary_bits]
@@ -697,10 +688,14 @@ def _ks_ladder_convergence_bits(
     for base_time_index in range(1, base_time_count):
         time_value = horizon * float(base_time_index) / float(base_time_count - 1)
         prefix_ladder = tuple(
-            trajectory[:, : (base_time_index * (factor**rung_index)) + 1, :]
-            for rung_index, trajectory in enumerate(measured_ladder)
+            trajectory[:, : (base_time_index * factor) + 1, :]
+            for factor, trajectory in zip(
+                _certification_refinement_factors,
+                measured_ladder,
+                strict=True,
+            )
         )
-        point_values, point_records = _ks_ladder_prefix_convergence_bits(
+        point_values, point_records = _ks_ladder_prefix_certified_bits(
             runtime=runtime,
             ladder=prefix_ladder,
             horizon=time_value,
@@ -708,17 +703,18 @@ def _ks_ladder_convergence_bits(
         for sample_index, point_record in enumerate(point_records):
             latest_records[sample_index] = point_record
             point_bits = float(point_values[sample_index])
-            gated = point_record.get("gate_decision") == "passed" and point_bits > 0.0
+            certified = point_bits > 0.0
             time_points[sample_index].append(
                 {
                     "time": time_value,
-                    "bits": point_bits if prefix_open[sample_index] and gated else 0.0,
-                    "gate_decision": point_record.get("gate_decision"),
+                    "bits": point_bits if prefix_open[sample_index] and certified else 0.0,
+                    "certified_epsilon": point_record.get("certified_epsilon"),
+                    "evolution_scale": point_record.get("evolution_scale"),
                 }
             )
             if not prefix_open[sample_index]:
                 continue
-            if gated:
+            if certified:
                 boundary_bits[sample_index] = point_bits
                 boundaries[sample_index] = time_value
                 boundary_records[sample_index] = point_record
@@ -727,11 +723,10 @@ def _ks_ladder_convergence_bits(
     diagnostics: list[Mapping[str, object]] = []
     for sample_index, total in enumerate(boundary_bits):
         latest = dict(boundary_records[sample_index] or latest_records[sample_index] or {})
-        latest["kind"] = "ks-convergence-diagnostics"
+        latest["kind"] = "ks-ambient-certified-diagnostics"
         latest["sample_index"] = sample_index
         latest["predictability_boundary"] = boundaries[sample_index]
         latest["time_points"] = [dict(point) for point in time_points[sample_index]]
-        latest["gate_decision"] = "passed" if total > 0.0 else "failed"
         latest["bits"] = total
         diagnostics.append(latest)
     result = measured_ladder[-1].new_tensor(boundary_bits)
@@ -744,138 +739,103 @@ def _float64_tensor(tensor: Any) -> Any:
     return convert() if callable(convert) else tensor
 
 
-def _ks_ladder_prefix_convergence_bits(
+def _ks_ladder_prefix_certified_bits(
     *,
     runtime: TensorRuntime,
     ladder: tuple[Any, ...],
     horizon: float,
 ) -> tuple[Any, tuple[Mapping[str, object], ...]]:
-    factor = _convergence_refinement_factor
     residual_norms = tuple(
         _per_sample_residual_norm(trajectory, horizon=horizon) for trajectory in ladder
     )
-    restricted = tuple(
-        restrict_to_common_grid(trajectory, rung_index=index, factor=factor)
-        for index, trajectory in enumerate(ladder)
-    )
-    field_estimate = _per_sample_richardson_field(
-        runtime=runtime,
-        restricted=restricted,
-        factor=factor,
+    amplifications = tuple(
+        _per_sample_law_amplification(trajectory, horizon=horizon) for trajectory in ladder
     )
     finest = ladder[-1]
-    evolution = finest - finest[:, 0:1, :]
-    signal = evolution.std(dim=(1, 2), unbiased=False)
-    finest_nodes = int(finest.shape[1]) * int(finest.shape[2])
+    finest_residual = residual_norms[-1]
+    finest_amplification = amplifications[-1]
+    certified_epsilon = (finest_residual * finest_amplification * float(horizon)).clamp_min(
+        math.ulp(1.0)
+    )
+    entropy = _ambient_evolution_entropy(
+        runtime=runtime,
+        trajectory=finest,
+        precision=certified_epsilon,
+    )
+    amplification_stability = _amplification_stability_ratio(
+        runtime=runtime,
+        amplifications=amplifications,
+    )
+    amplification_growing = _amplification_grows_under_refinement(
+        runtime=runtime,
+        amplifications=amplifications,
+    )
     values: list[float] = []
     diagnostics: list[Mapping[str, object]] = []
     for sample_index in range(int(finest.shape[0])):
         residual_values = tuple(float(norm[sample_index]) for norm in residual_norms)
-        try:
-            residual_estimate = richardson(
-                residual_values,
-                factor=float(factor),
-            )
-        except ValueError:
-            values.append(0.0)
-            diagnostics.append(
-                {
-                    "kind": "ks-convergence-diagnostics",
-                    "sample_index": sample_index,
-                    "residual_norms": list(residual_values),
-                    "gate_decision": "failed-richardson",
-                    "bits": 0.0,
-                }
-            )
-            continue
-        sigma = float(signal[sample_index])
-        error = float(field_estimate.error[sample_index])
-        sample_bits = _resolved_bits(signal=sigma, error=error, node_count=finest_nodes)
-        converged = _ks_convergence_gate(residual_estimate)
-        if not converged:
-            values.append(0.0)
-        else:
-            values.append(sample_bits)
+        epsilon = float(certified_epsilon[sample_index])
+        signal = float(entropy.signal[sample_index])
+        sample_bits = float(entropy.bits[sample_index])
+        refused = bool(amplification_growing[sample_index])
+        if not math.isfinite(signal) or epsilon >= signal or refused:
+            sample_bits = 0.0
+        values.append(sample_bits)
         diagnostics.append(
-            _ks_convergence_diagnostic_record(
+            _ks_certified_diagnostic_record(
                 sample_index=sample_index,
                 residual_values=residual_values,
-                residual_estimate=residual_estimate,
-                field_error=error,
-                signal=sigma,
-                node_count=finest_nodes,
-                bits=values[-1],
+                amplification_values=tuple(
+                    float(amplification[sample_index]) for amplification in amplifications
+                ),
+                amplification_stability=float(amplification_stability[sample_index]),
+                certification_refused=refused,
+                certified_epsilon=epsilon,
+                signal=signal,
+                resolved_mode_count=int(entropy.resolved_mode_count[sample_index]),
+                ambient_entropy_bits=sample_bits,
+                bits=sample_bits,
             )
         )
     return finest.new_tensor(values), tuple(diagnostics)
 
 
-def _ks_convergence_diagnostic_record(
+def _ks_certified_diagnostic_record(
     *,
     sample_index: int,
     residual_values: tuple[float, ...],
-    residual_estimate: RichardsonEstimate,
-    field_error: float,
+    amplification_values: tuple[float, ...],
+    amplification_stability: float,
+    certification_refused: bool,
+    certified_epsilon: float,
     signal: float,
-    node_count: int,
+    resolved_mode_count: int,
+    ambient_entropy_bits: float,
     bits: float,
 ) -> Mapping[str, object]:
     return {
-        "kind": "ks-convergence-diagnostics",
+        "kind": "ks-ambient-certified-diagnostics",
         "sample_index": sample_index,
         "residual_norms": list(residual_values),
-        "residual_observed_order": residual_estimate.observed_order,
-        "residual_extrapolated_limit": residual_estimate.limit,
-        "residual_extrapolation_uncertainty": residual_estimate.uncertainty,
-        "expected_observed_order": _convergence_expected_observed_order,
-        "observed_order_tolerance": _convergence_observed_order_tolerance,
-        "field_error": field_error,
+        "residual_norm": residual_values[-1],
+        "law_amplification": amplification_values[-1],
+        "law_amplification_ladder": list(amplification_values),
+        "law_amplification_stability": amplification_stability,
+        "law_amplification_estimator": "ks-log-norm-upper-bound",
+        "law_amplification_log_cap": _law_amplification_log_cap,
+        "law_amplification_refusal_ratio": _law_amplification_refusal_ratio,
+        "certification_refinement_factors": list(_certification_refinement_factors),
+        "certification_status": (
+            "refused-amplification-growing"
+            if certification_refused
+            else "certified"
+        ),
+        "certified_epsilon": certified_epsilon,
         "evolution_scale": signal,
-        "node_count": node_count,
-        "rung_count": _convergence_rung_count,
-        "gate_decision": "passed" if bits > 0.0 else "failed",
+        "ambient_evolution_entropy_bits": ambient_entropy_bits,
+        "resolved_mode_count": resolved_mode_count,
         "bits": bits,
-        "k_sensitivity": [
-            _ks_k_sensitivity_record(
-                residual_estimate=residual_estimate,
-                k_value=k_value,
-                signal=signal,
-                field_error=field_error,
-                node_count=node_count,
-            )
-            for k_value in (0.5, 1.0, 2.0)
-        ],
     }
-
-
-def _ks_k_sensitivity_record(
-    *,
-    residual_estimate: RichardsonEstimate,
-    k_value: float,
-    signal: float,
-    field_error: float,
-    node_count: int,
-) -> Mapping[str, object]:
-    gated = _ks_convergence_gate(residual_estimate, k_value=k_value)
-    bits = (
-        _resolved_bits(signal=signal, error=field_error, node_count=node_count)
-        if gated
-        else 0.0
-    )
-    return {"k": k_value, "gated": gated, "bits": bits}
-
-
-def _ks_convergence_gate(
-    residual_estimate: RichardsonEstimate,
-    *,
-    k_value: float = _convergence_gate_uncertainty_scale,
-) -> bool:
-    lower_order = _convergence_expected_observed_order - _convergence_observed_order_tolerance
-    upper_order = _convergence_expected_observed_order + _convergence_observed_order_tolerance
-    return (
-        lower_order <= residual_estimate.observed_order <= upper_order
-        and abs(residual_estimate.limit) <= k_value * residual_estimate.uncertainty
-    )
 
 
 def _zero_bits(*, runtime: TensorRuntime, predictions: Any) -> Any:
@@ -895,43 +855,92 @@ def _per_sample_residual_norm(trajectory: Any, *, horizon: float) -> Any:
 
 
 @dataclass(frozen=True, slots=True)
-class _PerSampleFieldEstimate:
-    observed_order: Any
-    error: Any
+class _AmbientEvolutionEntropy:
+    bits: Any
+    signal: Any
+    resolved_mode_count: Any
 
 
-def _per_sample_richardson_field(
+def _ambient_evolution_entropy(
     *,
     runtime: TensorRuntime,
-    restricted: tuple[Any, ...],
-    factor: int,
-) -> _PerSampleFieldEstimate:
-    previous, current, finest = restricted[-3:]
-    first_gap = (current - previous).pow(2).mean(dim=(1, 2)).sqrt()
-    second_gap = (finest - current).pow(2).mean(dim=(1, 2)).sqrt()
-    _ = runtime
-    numeric_floor = math.ulp(1.0)
-    safe_first = first_gap.clamp_min(numeric_floor)
-    safe_second = second_gap.clamp_min(numeric_floor)
-    observed_order = (safe_first / safe_second).log() / math.log(float(factor))
-    denominator = observed_order.mul(math.log(float(factor))).exp().sub(1.0)
-    fallback = (denominator <= numeric_floor).to(dtype=denominator.dtype)
-    denominator = denominator + (fallback * (1.0 - denominator))
-    correction = (finest - current) / denominator.reshape((-1, 1, 1))
-    error = correction.pow(2).mean(dim=(1, 2)).sqrt()
-    return _PerSampleFieldEstimate(observed_order=observed_order, error=error)
+    trajectory: Any,
+    precision: Any,
+) -> _AmbientEvolutionEntropy:
+    backend = runtime.backend
+    evolution = trajectory - trajectory[:, 0:1, :]
+    signal = evolution.pow(2).mean(dim=(1, 2)).sqrt()
+    spatial_points = float(trajectory.shape[-1])
+    spectrum = backend.fft.rfft(evolution.double(), dim=-1).abs() / spatial_points
+    precision_tensor = precision.reshape((-1, 1, 1)).to(
+        dtype=spectrum.dtype,
+        device=spectrum.device,
+    )
+    precision_tensor = precision_tensor.clamp_min(math.ulp(1.0))
+    resolved = spectrum > precision_tensor
+    ratios = (spectrum / precision_tensor).clamp_min(1.0)
+    bits_by_mode = backend.where(
+        resolved,
+        backend.log2(ratios),
+        backend.zeros_like(ratios),
+    )
+    return _AmbientEvolutionEntropy(
+        bits=bits_by_mode.sum(dim=(1, 2)),
+        signal=signal,
+        resolved_mode_count=resolved.sum(dim=(1, 2)),
+    )
 
 
-def _resolved_bits(*, signal: float, error: float, node_count: int) -> float:
-    if not math.isfinite(signal) or signal <= 0.0:
-        return 0.0
-    if not math.isfinite(error):
-        return 0.0
-    floor = math.ulp(signal) if signal > 0.0 else math.ulp(1.0)
-    effective_error = max(error, floor)
-    if effective_error >= signal:
-        return 0.0
-    return float(node_count) * math.log2(signal / effective_error)
+def _per_sample_law_amplification(trajectory: Any, *, horizon: float) -> Any:
+    spatial_points = int(trajectory.shape[-1])
+    dx = _box_length / float(spatial_points)
+    detached = trajectory.detach().double()
+    u_x = (
+        detached.roll(shifts=-1, dims=-1) - detached.roll(shifts=1, dims=-1)
+    ) / (2.0 * dx)
+    shear = u_x.abs().amax(dim=(1, 2))
+    frequency = trajectory.new_tensor(
+        [2.0 * math.pi * index / _box_length for index in range((spatial_points // 2) + 1)]
+    ).double()
+    linear_growth = (frequency * frequency) - (frequency**4)
+    leading_growth = linear_growth.max().clamp_min(0.0)
+    exponent = (leading_growth + shear).clamp_max(_law_amplification_log_cap) * float(
+        horizon
+    )
+    return exponent.exp()
+
+
+def _amplification_stability_ratio(
+    *,
+    runtime: TensorRuntime,
+    amplifications: tuple[Any, ...],
+) -> Any:
+    values = tensor_runtime_concat(
+        runtime,
+        tuple(value.reshape((1, -1)) for value in amplifications),
+        dim=0,
+    )
+    numerator = values.max(dim=0).values
+    denominator = values.min(dim=0).values.clamp_min(math.ulp(1.0))
+    return numerator / denominator
+
+
+def _amplification_grows_under_refinement(
+    *,
+    runtime: TensorRuntime,
+    amplifications: tuple[Any, ...],
+) -> Any:
+    if not amplifications:
+        raise ValueError("amplification refinement check requires at least one rung")
+    finest = amplifications[len(amplifications) - 1]
+    batch_count = int(finest.shape[0])
+    if len(amplifications) < 3:
+        return finest.new_zeros((batch_count,), dtype=bool)
+    growth = finest.new_ones((batch_count,), dtype=bool)
+    for previous, current in zip(amplifications[:-1], amplifications[1:], strict=True):
+        growth = growth & (current > previous)
+    ratio = _amplification_stability_ratio(runtime=runtime, amplifications=amplifications)
+    return growth & (ratio > _law_amplification_refusal_ratio)
 
 
 def _ks_discrete_residual(predictions: Any) -> Any:
@@ -998,71 +1007,6 @@ def grid_l2_norm(field: Any) -> float:
     return float((field * field).mean().sqrt())
 
 
-def richardson(sequence: tuple[float, ...], *, factor: float) -> RichardsonEstimate:
-    """Extrapolate the final three entries of a scalar refinement sequence."""
-
-    _validate_refinement_factor(factor)
-    if len(sequence) < 3:
-        raise ValueError("Richardson extrapolation requires at least three values")
-    previous, current, finest = (
-        float(sequence[-3]),
-        float(sequence[-2]),
-        float(sequence[-1]),
-    )
-    first_gap = abs(current - previous)
-    second_gap = abs(finest - current)
-    if not math.isfinite(first_gap) or not math.isfinite(second_gap):
-        raise ValueError("Richardson sequence values must be finite")
-    if first_gap <= 0.0 or second_gap <= 0.0:
-        raise ValueError("Richardson extrapolation requires two nonzero final gaps")
-    observed_order = math.log(first_gap / second_gap, factor)
-    denominator = (factor**observed_order) - 1.0
-    if denominator <= 0.0 or not math.isfinite(denominator):
-        raise ValueError("Richardson extrapolation observed order must be positive")
-    correction = (finest - current) / denominator
-    return RichardsonEstimate(
-        observed_order=observed_order,
-        limit=finest + correction,
-        uncertainty=abs(correction),
-    )
-
-
-def richardson_field(
-    ladder: tuple[Any, ...],
-    *,
-    factor: int,
-) -> RichardsonFieldEstimate:
-    """Extrapolate a nested space-time field ladder onto its common coarse grid."""
-
-    _validate_refinement_factor(float(factor))
-    if factor < 2:
-        raise ValueError("field Richardson factor must be at least 2")
-    if len(ladder) < 3:
-        raise ValueError("field Richardson extrapolation requires at least three rungs")
-    restricted = tuple(
-        restrict_to_common_grid(field, rung_index=index, factor=factor)
-        for index, field in enumerate(ladder)
-    )
-    common_shape = tuple(restricted[0].shape)
-    if any(tuple(field.shape) != common_shape for field in restricted):
-        raise ValueError("field Richardson ladder rungs do not share a nested grid")
-    previous, current, finest = restricted[-3:]
-    first_gap = grid_l2_norm(current - previous)
-    second_gap = grid_l2_norm(finest - current)
-    if first_gap <= 0.0 or second_gap <= 0.0:
-        raise ValueError("field Richardson extrapolation requires nonzero final gaps")
-    observed_order = math.log(first_gap / second_gap, float(factor))
-    denominator = (float(factor) ** observed_order) - 1.0
-    if denominator <= 0.0 or not math.isfinite(denominator):
-        raise ValueError("field Richardson observed order must be positive")
-    correction = (finest - current) / denominator
-    return RichardsonFieldEstimate(
-        observed_order=observed_order,
-        extrapolated_field=finest + correction,
-        error=grid_l2_norm(correction),
-    )
-
-
 def central_time_derivative(trajectory: Any, *, dt: float) -> Any:
     derivative = trajectory.clone()
     derivative[:, 0, :] = (trajectory[:, 1, :] - trajectory[:, 0, :]) / dt
@@ -1074,19 +1018,10 @@ def central_time_derivative(trajectory: Any, *, dt: float) -> Any:
     return derivative
 
 
-def restrict_to_common_grid(field: Any, *, rung_index: int, factor: int) -> Any:
-    stride = factor**rung_index
-    return field[..., ::stride, ::stride]
-
-
 def _validate_positive_spacing(value: float, *, field: str) -> None:
     if not math.isfinite(value) or value <= 0.0:
         raise ValueError(f"{field} must be positive and finite")
 
-
-def _validate_refinement_factor(value: float) -> None:
-    if not math.isfinite(value) or value <= 1.0:
-        raise ValueError("Richardson refinement factor must be greater than one")
 
 def _ks_samples(
     *,

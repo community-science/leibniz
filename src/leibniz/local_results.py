@@ -1124,6 +1124,7 @@ def _run_console_view_model(
                 ),
             )
         )
+        sections.extend(_competence_diagnostic_sections(run.sampled_competence))
     if run.training_summary is not None:
         diagnostics = _training_diagnostics_record(run)
         protocol = _extract.mapping(diagnostics.get("protocol"), "training_diagnostics.protocol")
@@ -1252,6 +1253,164 @@ def _console_detail_entries_section(
     }
 
 
+def _competence_diagnostic_sections(
+    sampled_competence: Mapping[str, object],
+) -> tuple[Mapping[str, object], ...]:
+    diagnostics = _competence_diagnostic_records(sampled_competence)
+    if not diagnostics:
+        return ()
+    diagnostic = diagnostics[0]
+    sections: list[Mapping[str, object]] = [
+        _console_detail_entries_section(
+            title="Competence Diagnostics",
+            entries=(
+                (
+                    "Status",
+                    _console_string_value(diagnostic.get("certification_status")),
+                ),
+                (
+                    "Certified Epsilon",
+                    _console_metric_value(diagnostic.get("certified_epsilon")),
+                ),
+                (
+                    "Evolution Scale",
+                    _console_metric_value(diagnostic.get("evolution_scale")),
+                ),
+                (
+                    "Ambient Entropy",
+                    _console_metric_value(diagnostic.get("ambient_evolution_entropy_bits")),
+                ),
+                (
+                    "Resolved Modes",
+                    _console_number_value(diagnostic.get("resolved_mode_count")),
+                ),
+                (
+                    "Residual",
+                    _console_metric_value(diagnostic.get("residual_norm")),
+                ),
+                (
+                    "Law Amplification",
+                    _console_metric_value(diagnostic.get("law_amplification")),
+                ),
+                (
+                    "Amplification Stability",
+                    _console_metric_value(diagnostic.get("law_amplification_stability")),
+                ),
+                (
+                    "Amplification Estimator",
+                    _console_string_value(diagnostic.get("law_amplification_estimator")),
+                ),
+                (
+                    "Refinement Factors",
+                    _console_sequence_value(diagnostic.get("certification_refinement_factors")),
+                ),
+                (
+                    "Diagnostic Records",
+                    _console_number_value(len(diagnostics)),
+                ),
+            ),
+        )
+    ]
+    time_points = diagnostic.get("time_points")
+    if isinstance(time_points, Sequence) and not isinstance(time_points, str | bytes):
+        rows = tuple(
+            _console_competence_time_point_row(cast(Mapping[str, object], point))
+            for point in cast(Sequence[object], time_points)
+            if isinstance(point, Mapping)
+        )
+        if rows:
+            sections.append(
+                {
+                    "title": "Competence Time Points",
+                    "table": {
+                        "aria_label": "Competence time points",
+                        "columns": [
+                            "Time",
+                            "Bits",
+                            "Certified Epsilon",
+                            "Evolution Scale",
+                        ],
+                        "rows": rows,
+                    },
+                }
+            )
+    if len(diagnostics) > 1:
+        sample_rows = [
+            _console_competence_sample_row(diagnostic)
+            for diagnostic in diagnostics[:12]
+        ]
+        sections.append(
+            {
+                "title": "Competence Samples",
+                "table": {
+                    "aria_label": "Competence sample diagnostics",
+                    "columns": [
+                        "Sample",
+                        "Status",
+                        "Bits",
+                        "Boundary",
+                        "Residual",
+                        "Law Amplification",
+                    ],
+                    "rows": sample_rows,
+                },
+            }
+        )
+    return tuple(sections)
+
+
+def _competence_diagnostic_records(
+    sampled_competence: Mapping[str, object],
+) -> tuple[Mapping[str, object], ...]:
+    diagnostics = _diagnostic_records_from_value(
+        sampled_competence.get("competence_diagnostics")
+    )
+    if diagnostics:
+        return diagnostics
+    points = sampled_competence.get("points")
+    if not isinstance(points, Sequence) or isinstance(points, str | bytes):
+        return ()
+    records: list[Mapping[str, object]] = []
+    for point in cast(Sequence[object], points):
+        if not isinstance(point, Mapping):
+            continue
+        point_record = cast(Mapping[str, object], point)
+        records.extend(
+            _diagnostic_records_from_value(point_record.get("competence_diagnostics"))
+        )
+    return tuple(records)
+
+
+def _diagnostic_records_from_value(value: object) -> tuple[Mapping[str, object], ...]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        return ()
+    return tuple(
+        cast(Mapping[str, object], diagnostic)
+        for diagnostic in cast(Sequence[object], value)
+        if isinstance(diagnostic, Mapping)
+    )
+
+
+def _console_competence_time_point_row(point: Mapping[str, object]) -> list[str]:
+    return [
+        _console_metric_value(point.get("time")),
+        _console_metric_value(point.get("bits")),
+        _console_metric_value(point.get("certified_epsilon")),
+        _console_metric_value(point.get("evolution_scale")),
+    ]
+
+
+def _console_competence_sample_row(diagnostic: Mapping[str, object]) -> list[str]:
+    return [
+        _console_number_value(diagnostic.get("sample_index")),
+        _console_string_value(diagnostic.get("certification_status")),
+        _console_metric_value(diagnostic.get("bits")),
+        _console_metric_value(diagnostic.get("predictability_boundary")),
+        _console_metric_value(diagnostic.get("residual_norm")),
+        _console_metric_value(diagnostic.get("law_amplification")),
+    ]
+
+
 def _console_string_value(value: object) -> str:
     return value if isinstance(value, str) and value else "unknown"
 
@@ -1262,6 +1421,19 @@ def _console_number_value(value: object, *, precision: int = 0) -> str:
     if precision == 0:
         return f"{value:,}" if isinstance(value, int) else f"{value:,.0f}"
     return f"{value:.{precision}f}"
+
+
+def _console_metric_value(value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        return "unknown"
+    return f"{float(value):.4g}"
+
+
+def _console_sequence_value(value: object) -> str:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        return "unknown"
+    parts = tuple(_console_metric_value(item) for item in cast(Sequence[object], value))
+    return ", ".join(parts) if parts else "unknown"
 
 
 def _console_samples_per_second(record: Mapping[str, object]) -> str:

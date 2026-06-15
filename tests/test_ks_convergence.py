@@ -16,90 +16,93 @@ def _ks_module() -> Any:
     return sys.modules[type(loaded.implementation).__module__]
 
 
-def test_richardson_recovers_planted_order_and_bounds_true_error() -> None:
-    module = _ks_module()
-    true_limit = 3.0
-    planted_order = 2.0
-    factor = 2.0
-    coefficient = 8.0
-    sequence = tuple(
-        true_limit + coefficient / (factor ** (planted_order * index))
-        for index in range(4)
-    )
-
-    estimate = module.richardson(sequence, factor=factor)
-
-    assert math.isclose(estimate.observed_order, planted_order)
-    assert math.isclose(estimate.limit, true_limit)
-    assert estimate.uncertainty >= abs(sequence[-1] - true_limit)
-
-
-def test_richardson_rejects_degenerate_sequences() -> None:
-    module = _ks_module()
-    with pytest.raises(ValueError, match="at least three"):
-        module.richardson((1.0, 0.5), factor=2.0)
-    with pytest.raises(ValueError, match="nonzero"):
-        module.richardson((1.0, 1.0, 1.0), factor=2.0)
-    with pytest.raises(ValueError, match="greater than one"):
-        module.richardson((1.0, 0.5, 0.25), factor=1.0)
-
-
-def test_richardson_field_decimates_nested_ladder_and_bounds_error() -> None:
+def test_ambient_evolution_entropy_is_resolution_independent_for_bandlimited_field() -> None:
     module = _ks_module()
     runtime = resolve_tensor_runtime("cpu")
     torch = runtime.torch
-    true_field = torch.arange(12, dtype=torch.float64, device=runtime.device).reshape(
-        1,
-        3,
-        4,
-    )
-    planted_order = 2.0
-    factor = 2
-    coefficient = 8.0
-    ladder: list[Any] = []
-    for index in range(3):
-        scale = factor**index
-        field = true_field.repeat_interleave(scale, dim=-2).repeat_interleave(
-            scale,
-            dim=-1,
+    precision = 1.0e-3
+    values: list[float] = []
+    resolved_modes: list[int] = []
+    for spatial_points in (32, 64, 128):
+        x = (
+            torch.arange(spatial_points, dtype=torch.float64, device=runtime.device)
+            * (2.0 * math.pi / float(spatial_points))
         )
-        field = field + coefficient / (factor ** (planted_order * index))
-        ladder.append(field)
+        initial = torch.sin(x).reshape(1, 1, spatial_points)
+        delta = (
+            0.125
+            * torch.sin(2.0 * x).reshape(1, 1, spatial_points)
+            * torch.arange(3, dtype=torch.float64, device=runtime.device).reshape(1, 3, 1)
+        )
+        trajectory = initial + delta
 
-    estimate = module.richardson_field(tuple(ladder), factor=factor)
+        entropy = module._ambient_evolution_entropy(
+            runtime=runtime,
+            trajectory=trajectory,
+            precision=torch.full((1,), precision, dtype=torch.float64),
+        )
+        values.append(float(entropy.bits[0]))
+        resolved_modes.append(int(entropy.resolved_mode_count[0]))
 
-    assert math.isclose(estimate.observed_order, planted_order)
-    assert estimate.error >= module.grid_l2_norm(ladder[-1][..., ::4, ::4] - true_field)
-    assert estimate.extrapolated_field.allclose(true_field)
+    assert max(values) - min(values) < 1.0e-9
+    assert resolved_modes == [2, 2, 2]
 
 
-def test_per_sample_richardson_field_preserves_nondegenerate_denominator() -> None:
+def test_certified_ambient_bits_decrease_continuously_with_precision() -> None:
     module = _ks_module()
     runtime = resolve_tensor_runtime("cpu")
     torch = runtime.torch
-    true_field = torch.arange(12, dtype=torch.float64, device=runtime.device).reshape(
-        1,
-        3,
-        4,
-    )
-    planted_order = 2.0
-    factor = 2
-    coefficient = 8.0
-    restricted = tuple(
-        true_field + coefficient / (factor ** (planted_order * index))
-        for index in range(3)
+    x = torch.arange(32, dtype=torch.float64, device=runtime.device) * (2.0 * math.pi / 32.0)
+    trajectory = (
+        torch.sin(x).reshape(1, 1, 32)
+        + torch.arange(3, dtype=torch.float64, device=runtime.device).reshape(1, 3, 1)
+        * 0.2
+        * torch.cos(3.0 * x).reshape(1, 1, 32)
     )
 
-    estimate = module._per_sample_richardson_field(
+    fine = module._ambient_evolution_entropy(
         runtime=runtime,
-        restricted=restricted,
-        factor=factor,
+        trajectory=trajectory,
+        precision=torch.full((1,), 1.0e-4, dtype=torch.float64),
+    )
+    coarse = module._ambient_evolution_entropy(
+        runtime=runtime,
+        trajectory=trajectory,
+        precision=torch.full((1,), 1.0e-2, dtype=torch.float64),
     )
 
-    denominator = (float(factor) ** planted_order) - 1.0
-    expected_error = module.grid_l2_norm((restricted[-1] - restricted[-2]) / denominator)
-    assert math.isclose(float(estimate.observed_order[0]), planted_order)
-    assert math.isclose(float(estimate.error[0]), float(expected_error))
+    assert float(fine.bits[0]) > float(coarse.bits[0]) > 0.0
+
+
+def test_law_amplification_is_stable_for_smooth_field_and_grows_when_underresolved() -> None:
+    module = _ks_module()
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    smooth_values: list[float] = []
+    underresolved_values: list[float] = []
+    for spatial_points in (32, 64, 128):
+        x = torch.arange(
+            spatial_points,
+            dtype=torch.float64,
+            device=runtime.device,
+        ).reshape(1, 1, spatial_points)
+        smooth_phase = x * (2.0 * math.pi / float(spatial_points))
+        smooth = torch.sin(2.0 * smooth_phase).repeat(1, 3, 1)
+        underresolved_phase = x * (
+            2.0 * math.pi * float(spatial_points // 4) / float(spatial_points)
+        )
+        underresolved = torch.sin(underresolved_phase).repeat(1, 3, 1)
+
+        smooth_values.append(
+            float(module._per_sample_law_amplification(smooth, horizon=0.25)[0])
+        )
+        underresolved_values.append(
+            float(module._per_sample_law_amplification(underresolved, horizon=0.25)[0])
+        )
+
+    assert max(smooth_values) / min(smooth_values) < 1.01
+    assert underresolved_values[0] < underresolved_values[1] < underresolved_values[2]
+    assert underresolved_values[-1] / underresolved_values[0] > 2.0
 
 
 def test_ks_space_time_residual_uses_central_time_derivative() -> None:

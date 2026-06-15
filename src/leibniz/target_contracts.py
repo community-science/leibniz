@@ -70,7 +70,11 @@ class CompetenceFunctional:
                 raise TargetContractError(
                     "above-chance-accepted-mass competence does not accept parameters"
                 )
-        elif self.kind in {"convergence-resolved-bits", "mass-within-resolution"}:
+        elif self.kind in {
+            "ambient-certified-bits",
+            "convergence-resolved-bits",
+            "mass-within-resolution",
+        }:
             residual_operator_id = parameters.get("residual_operator_id")
             if not isinstance(residual_operator_id, str) or not residual_operator_id:
                 raise TargetContractError(
@@ -181,12 +185,13 @@ class TargetContract:
             if self.loss_id not in {"mse", "relative-l2", "equation-residual"}:
                 raise TargetContractError(f"unsupported field-valued loss_id: {self.loss_id}")
             if self.competence.kind not in {
+                "ambient-certified-bits",
                 "convergence-resolved-bits",
                 "mass-within-resolution",
             }:
                 raise TargetContractError(
-                    "field-valued contract requires convergence-resolved-bits "
-                    "or mass-within-resolution"
+                    "field-valued contract requires ambient-certified-bits, "
+                    "convergence-resolved-bits, or mass-within-resolution"
                 )
             if self.baseline.kind not in {"zero-field", "persistence"}:
                 raise TargetContractError(

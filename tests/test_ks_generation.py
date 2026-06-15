@@ -312,7 +312,7 @@ def test_field_valued_runner_rejects_operator_without_dt_argument() -> None:
         raise AssertionError("expected field operator without dt argument to fail")
 
 
-def test_ks_convergence_bits_rejects_persistence() -> None:
+def test_ks_ambient_certified_bits_rejects_persistence() -> None:
     runtime = resolve_tensor_runtime("cpu")
     loaded = load_benchmark(_ks_benchmark_root)
     batch = cast(Any, loaded.generator)(seed=17, shape=1, runtime=runtime)
@@ -336,15 +336,18 @@ def test_ks_convergence_bits_rejects_persistence() -> None:
     )
 
     assert float(bits[0]) == 0.0
+    diagnostics = bits.leibniz_competence_diagnostics
+    assert diagnostics[0]["certification_status"] == "refused-missing-refinement-ladder"
+    assert diagnostics[0]["predictability_boundary"] == 0.0
 
 
-def test_ks_convergence_bits_reward_planted_convergent_ladder(monkeypatch: Any) -> None:
+def test_ks_ambient_certified_bits_reward_planted_convergent_ladder(monkeypatch: Any) -> None:
     runtime = resolve_tensor_runtime("cpu")
     module = _loaded_ks_module()
     ladder = _planted_field_ladder(runtime, coefficient=0.25)
     residual_by_space = {
         int(trajectory.shape[-1]): value
-        for trajectory, value in zip(ladder, (4.0, 1.0, 0.25), strict=True)
+        for trajectory, value in zip(ladder, (4.0e-8, 2.0e-8, 1.0e-8), strict=True)
     }
 
     def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
@@ -354,7 +357,7 @@ def test_ks_convergence_bits_reward_planted_convergent_ladder(monkeypatch: Any) 
 
     monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
 
-    bits = module._ks_ladder_convergence_bits(
+    bits = module._ks_ladder_ambient_certified_bits(
         runtime=runtime,
         ladder=ladder,
         horizon=1.0,
@@ -362,53 +365,61 @@ def test_ks_convergence_bits_reward_planted_convergent_ladder(monkeypatch: Any) 
     diagnostics = bits.leibniz_competence_diagnostics
 
     assert float(bits[0]) > 0.0
-    assert diagnostics[0]["kind"] == "ks-convergence-diagnostics"
-    assert diagnostics[0]["gate_decision"] == "passed"
-    assert len(diagnostics[0]["k_sensitivity"]) >= 2
-    assert diagnostics[0]["predictability_boundary"] == 1.0
-    expected_bits = cast(int, diagnostics[0]["node_count"]) * math.log2(
-        cast(float, diagnostics[0]["evolution_scale"])
-        / cast(float, diagnostics[0]["field_error"])
+    assert diagnostics[0]["kind"] == "ks-ambient-certified-diagnostics"
+    assert diagnostics[0]["predictability_boundary"] > 0.0
+    assert cast(float, diagnostics[0]["certified_epsilon"]) < cast(
+        float,
+        diagnostics[0]["evolution_scale"],
     )
-    assert math.isclose(float(bits[0]), expected_bits)
+    assert diagnostics[0]["resolved_mode_count"] > 0
+    assert math.isclose(
+        float(bits[0]),
+        cast(float, diagnostics[0]["ambient_evolution_entropy_bits"]),
+    )
 
 
-def test_ks_convergence_bits_reward_finer_field_resolution(monkeypatch: Any) -> None:
+def test_ks_ambient_certified_bits_increase_smoothly_as_residual_decreases(
+    monkeypatch: Any,
+) -> None:
     runtime = resolve_tensor_runtime("cpu")
     module = _loaded_ks_module()
+    residual_scale = 1.0e-3
 
     def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
         _ = dx
         _ = dt
-        return trajectory * 0.0 + {4: 4.0, 8: 1.0, 16: 0.25}[int(trajectory.shape[-1])]
+        return trajectory * 0.0 + residual_scale
 
     monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
 
-    coarse_bits = module._ks_ladder_convergence_bits(
+    high_residual_bits = module._ks_ladder_ambient_certified_bits(
         runtime=runtime,
         ladder=_planted_field_ladder(runtime, coefficient=1.0),
         horizon=1.0,
     )
-    fine_bits = module._ks_ladder_convergence_bits(
+    residual_scale = 1.0e-5
+    low_residual_bits = module._ks_ladder_ambient_certified_bits(
         runtime=runtime,
-        ladder=_planted_field_ladder(runtime, coefficient=0.125),
+        ladder=_planted_field_ladder(runtime, coefficient=1.0),
         horizon=1.0,
     )
 
-    assert float(fine_bits[0]) > float(coarse_bits[0])
+    assert float(low_residual_bits[0]) > float(high_residual_bits[0]) > 0.0
 
 
-def test_ks_convergence_bits_stop_at_first_time_gate_failure(monkeypatch: Any) -> None:
+def test_ks_ambient_certified_bits_boundary_emerges_from_certified_error(
+    monkeypatch: Any,
+) -> None:
     runtime = resolve_tensor_runtime("cpu")
     module = _loaded_ks_module()
     ladder = _planted_field_ladder(runtime, coefficient=0.25)
     residual_by_time_and_space = {
-        (2, 4): 4.0,
-        (3, 8): 1.0,
-        (5, 16): 0.25,
-        (3, 4): 4.0,
-        (5, 8): 2.0,
-        (9, 16): 1.0,
+        (2, 4): 1.0e-4,
+        (3, 8): 1.0e-4,
+        (5, 16): 1.0e-4,
+        (3, 4): 1.0e6,
+        (5, 8): 1.0e6,
+        (9, 16): 1.0e6,
     }
 
     def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
@@ -419,7 +430,7 @@ def test_ks_convergence_bits_stop_at_first_time_gate_failure(monkeypatch: Any) -
 
     monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
 
-    bits = module._ks_ladder_convergence_bits(
+    bits = module._ks_ladder_ambient_certified_bits(
         runtime=runtime,
         ladder=ladder,
         horizon=1.0,
@@ -429,12 +440,12 @@ def test_ks_convergence_bits_stop_at_first_time_gate_failure(monkeypatch: Any) -
 
     assert float(bits[0]) > 0.0
     assert diagnostics[0]["predictability_boundary"] == 0.5
-    assert time_points[0]["gate_decision"] == "passed"
-    assert time_points[1]["gate_decision"] == "failed"
+    assert time_points[0]["certified_epsilon"] < time_points[0]["evolution_scale"]
+    assert time_points[1]["certified_epsilon"] > time_points[1]["evolution_scale"]
     assert time_points[1]["bits"] == 0.0
 
 
-def test_ks_convergence_bits_require_evolution_beyond_initial_state(
+def test_ks_ambient_certified_bits_require_evolution_beyond_initial_state(
     monkeypatch: Any,
 ) -> None:
     runtime = resolve_tensor_runtime("cpu")
@@ -457,7 +468,7 @@ def test_ks_convergence_bits_require_evolution_beyond_initial_state(
 
     monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
 
-    bits = module._ks_ladder_convergence_bits(
+    bits = module._ks_ladder_ambient_certified_bits(
         runtime=runtime,
         ladder=ladder,
         horizon=1.0,
@@ -465,22 +476,56 @@ def test_ks_convergence_bits_require_evolution_beyond_initial_state(
     diagnostics = bits.leibniz_competence_diagnostics
 
     assert float(bits[0]) == 0.0
-    assert diagnostics[0]["gate_decision"] == "failed"
     assert diagnostics[0]["evolution_scale"] == 0.0
+    assert diagnostics[0]["ambient_evolution_entropy_bits"] == 0.0
 
 
-def test_ks_convergence_bits_rejects_wrong_observed_order(monkeypatch: Any) -> None:
+def test_ks_ambient_certified_bits_do_not_threshold_on_observed_order(monkeypatch: Any) -> None:
     runtime = resolve_tensor_runtime("cpu")
     module = _loaded_ks_module()
 
     def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
         _ = dx
         _ = dt
-        return trajectory * 0.0 + {4: 4.0, 8: 2.0, 16: 1.0}[int(trajectory.shape[-1])]
+        return trajectory * 0.0 + {4: 4.0e-4, 8: 2.0e-4, 16: 1.0e-4}[
+            int(trajectory.shape[-1])
+        ]
 
     monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
 
-    bits = module._ks_ladder_convergence_bits(
+    bits = module._ks_ladder_ambient_certified_bits(
+        runtime=runtime,
+        ladder=_planted_field_ladder(runtime, coefficient=0.25),
+        horizon=1.0,
+    )
+    diagnostics = bits.leibniz_competence_diagnostics
+
+    assert float(bits[0]) > 0.0
+    assert "gate_decision" not in diagnostics[0]
+    assert "expected_observed_order" not in diagnostics[0]
+    assert "rung_count" not in diagnostics[0]
+
+
+def test_ks_ambient_certified_bits_refuse_growing_amplification(monkeypatch: Any) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _loaded_ks_module()
+
+    def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
+        _ = dx
+        _ = dt
+        return trajectory * 0.0 + 1.0e-5
+
+    def planted_amplification(trajectory: Any, *, horizon: float) -> Any:
+        _ = horizon
+        return trajectory.new_full(
+            (int(trajectory.shape[0]),),
+            {4: 1.0, 8: 2.0, 16: 4.0}[int(trajectory.shape[-1])],
+        )
+
+    monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
+    monkeypatch.setattr(module, "_per_sample_law_amplification", planted_amplification)
+
+    bits = module._ks_ladder_ambient_certified_bits(
         runtime=runtime,
         ladder=_planted_field_ladder(runtime, coefficient=0.25),
         horizon=1.0,
@@ -488,9 +533,43 @@ def test_ks_convergence_bits_rejects_wrong_observed_order(monkeypatch: Any) -> N
     diagnostics = bits.leibniz_competence_diagnostics
 
     assert float(bits[0]) == 0.0
-    assert diagnostics[0]["gate_decision"] == "failed"
-    assert diagnostics[0]["expected_observed_order"] == 2.0
-    assert diagnostics[0]["rung_count"] == 3
+    assert diagnostics[0]["certification_status"] == "refused-amplification-growing"
+    assert diagnostics[0]["law_amplification_ladder"] == [1.0, 2.0, 4.0]
+
+
+def test_ks_ambient_certified_bits_refuse_real_underresolved_amplification(
+    monkeypatch: Any,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _loaded_ks_module()
+    ladder = _underresolved_amplification_ladder(runtime)
+
+    def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
+        _ = dx
+        _ = dt
+        return trajectory * 0.0 + 1.0e-8
+
+    monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
+
+    bits = module._ks_ladder_ambient_certified_bits(
+        runtime=runtime,
+        ladder=ladder,
+        horizon=0.25,
+    )
+    diagnostics = bits.leibniz_competence_diagnostics
+    amplification_ladder = cast(list[float], diagnostics[0]["law_amplification_ladder"])
+
+    assert float(bits[0]) == 0.0
+    assert diagnostics[0]["certification_status"] == "refused-amplification-growing"
+    assert amplification_ladder[0] < amplification_ladder[1] < amplification_ladder[2]
+    assert cast(float, diagnostics[0]["law_amplification_stability"]) > cast(
+        float,
+        diagnostics[0]["law_amplification_refusal_ratio"],
+    )
+    assert cast(float, diagnostics[0]["certified_epsilon"]) < cast(
+        float,
+        diagnostics[0]["evolution_scale"],
+    )
 
 
 def test_ks_scoring_path_has_no_residual_certificate_constants() -> None:
@@ -500,6 +579,14 @@ def test_ks_scoring_path_has_no_residual_certificate_constants() -> None:
     assert "_ks_epsilon_residual_image_bound" not in source
     assert "_ks_residual_acceptance_level" not in source
     assert "_ks_residual_certificate_mass" not in source
+    assert "_ks_convergence_gate" not in source
+    assert "_convergence_gate_uncertainty_scale" not in source
+    assert "_convergence_expected_observed_order" not in source
+    assert "_convergence_observed_order_tolerance" not in source
+    assert "k_sensitivity" not in source
+    assert "RichardsonEstimate" not in source
+    assert "def richardson" not in source
+    assert "restrict_to_common_grid" not in source
 
 
 def _loaded_ks_module() -> Any:
@@ -516,4 +603,29 @@ def _planted_field_ladder(runtime: Any, *, coefficient: float) -> tuple[Any, ...
         field = base.repeat_interleave(scale, dim=1).repeat_interleave(scale, dim=2)
         field = field + coefficient / (4.0**rung)
         ladder.append(field)
+    return tuple(ladder)
+
+
+def _underresolved_amplification_ladder(runtime: Any) -> tuple[Any, ...]:
+    torch = runtime.torch
+    ladder: list[Any] = []
+    for factor in (1, 2, 4):
+        spatial_points = 32 * factor
+        time_count = 1 + factor
+        x = torch.arange(
+            spatial_points,
+            dtype=torch.float64,
+            device=runtime.device,
+        ).reshape(1, 1, spatial_points)
+        phase = x * (
+            2.0 * math.pi * float(spatial_points // 4) / float(spatial_points)
+        )
+        time = torch.linspace(
+            0.0,
+            1.0,
+            time_count,
+            dtype=torch.float64,
+            device=runtime.device,
+        ).reshape(1, time_count, 1)
+        ladder.append(time * torch.sin(phase))
     return tuple(ladder)

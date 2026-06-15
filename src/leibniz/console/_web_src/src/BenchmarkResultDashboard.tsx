@@ -516,7 +516,7 @@ function PredictabilityBoundaryTable({
             role="row"
           >
             <span role="cell">{shortDigest(model.program_digest)}</span>
-            <span role="cell">{boundary === undefined ? 'gate not reached' : boundary.toFixed(3)}</span>
+            <span role="cell">{boundary === undefined ? 'not certified' : boundary.toFixed(3)}</span>
             <span role="cell">{scoreLabel(point.score)}</span>
           </div>
         ))}
