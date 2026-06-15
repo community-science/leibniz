@@ -16,6 +16,10 @@ protocol with clear artifacts and rigorous design boundaries.
 - Avoid compatibility layers for interfaces that are intentionally being
   removed or redesigned.
 - Redesign is allowed and expected when it creates a cleaner protocol boundary.
+- When a difficulty keeps recurring — a parameter that always needs tuning, a
+  wall that keeps getting patched — prefer reformulating it at the level of its
+  framing over accumulating compatibility patches around it. Design from the
+  boundary that should exist, not the one the current code happens to have.
 
 ## Contribution Terms
 
@@ -57,6 +61,15 @@ changes scoped to the requested boundary, and preserve unrelated worktree
 changes. Agents should run the narrowest meaningful checks while iterating,
 report any skipped validation, and avoid committing local runtime state such as
 `results/`, caches, checkpoints, registries, or queues.
+
+The Architecture tab of the console is the living design specification. Ground
+a change in it before writing the code: name the root, edge, or roadmap step it
+advances, the gap it must add, or the contradiction it must resolve — and fold
+the change back into the architecture in the same pull request. The
+`.claude/skills/` scaffolds (`spec-pr`, `review-pr`) encode the
+author-then-review loop this repository uses; findings from review are actions
+to complete, not advisories, and superseded code is deleted or relocated rather
+than left orphaned.
 
 ## Required Pull Request Explanation
 
@@ -131,6 +144,15 @@ Implementation pull requests should make clear:
 Tests should check semantic laws, artifact contracts, and workflows. They
 should not be a parallel implementation of the feature.
 
+Scored correctness must be measured or derived, not declared. A benchmark
+grades convergence to a law — a residual that extrapolates to zero under
+refinement, a certified distance, a validated information count — rather than
+agreement with an answer the harness already holds. The scoring path must not
+contain a privileged oracle, closed form, or analytic solution; such solutions
+are admitted only as ordinary submissions, evaluated against the same contract
+and cost meter as any other. The repository supplies the instruments that
+measure a submission, not the model that scores well on them.
+
 Benchmark proposals should state why their score-cost frontier is open. A
 benchmark is a good fit when improving the frontier is a real research object,
 not when a closed form, integrable transform, lookup table, or other structural
@@ -184,10 +206,12 @@ Use validation tiers deliberately:
 ## Dependency Discipline
 
 Core protocol modules should keep dependencies minimal. Tensor and neural
-network concepts should be Leibniz definitions first. Backend frameworks such
-as PyTorch may be used later behind thin optional adapter layers, but they
-should not define the protocol's tensor, model, parameter, or probability
-measure concepts.
+network concepts should be Leibniz definitions first. The protocol owns the
+runtime abstraction and admits a backend through it; a framework such as
+PyTorch is one admitted runtime behind a thin adapter, not the foundation the
+protocol is built on. A backend should not define the protocol's tensor, model,
+parameter, or probability measure concepts, and protocol code should depend on
+declared properties of the runtime rather than naming a specific backend.
 
 ## Hot Path Discipline
 

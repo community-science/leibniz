@@ -24,6 +24,17 @@ below to run it.
    not the underlying state.
 5. **Field-agnostic core.** No core primitive should privilege one scientific
    domain when a generic typed artifact can express the same idea.
+6. **Correctness is convergence.** A prediction is correct to the degree it
+   converges to a law under refinement. The protocol scores quantities it
+   measures or derives — a convergence gap, a certified distance, a validated
+   bit count — never a verdict it is told to accept. Analytic or reference
+   solutions enter only as submitted programs, never as a privileged oracle
+   inside the scoring path.
+7. **Models are submitted, not supplied.** A model is a submitted computation
+   graph, evaluated against the same contract and cost meter as any other
+   submission. The repository owns the instruments that measure submissions —
+   contracts, structural composition, refinement ladders, cost metrology — and
+   ships no blessed model or network vocabulary of its own.
 
 ## Contribution Model
 

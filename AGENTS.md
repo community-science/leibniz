@@ -8,6 +8,12 @@ Before editing this repository, read:
   environment, agent guidance, public surface, tests and CI, and generated file
   policy.
 
+The Architecture tab of the console is the living design specification for how
+the protocol measures scientific work. Ground each change in it before writing
+code, and fold the change back into it. The `.claude/skills/` scaffolds
+(`spec-pr`, `review-pr`) encode the author-then-review loop this repository
+uses.
+
 If you think a GPU may be available and you need to run benchmark training,
 request escalation for the training command so device discovery can use the
 host environment. Do not silently accept a CPU fallback when the task depends
