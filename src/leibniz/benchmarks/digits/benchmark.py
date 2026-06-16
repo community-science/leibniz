@@ -69,6 +69,7 @@ from leibniz.state_space import (
     StateSpaceAxis,
     StateSpaceRegion,
 )
+from leibniz.target_contracts import TargetContract
 from leibniz.tensor_runtime import (
     TensorBatchProgram,
     TensorElementParameter,
@@ -90,6 +91,7 @@ __all__ = [
     "StaticMapCertification",
     "benchmark",
     "inverse_digits_static_certification",
+    "inverse_digits_latent_vector_reconstruction_loss",
     "inverse_digits_reconstruction",
     "inverse_digits_reconstruction_loss",
     "inverse_digits_validated_bits",
@@ -115,6 +117,7 @@ _canonical_digits_cardinality = _volume_class_digit_count
 _batch_render_curve_sample_count = 25
 _static_conditioning_refusal_ratio = 2.0
 _static_sigma_floor = 1.0e-8
+_inverse_residual_operator_id = "benchmarks.digits.inverse-renderer@0.1.0"
 _inverse_nuisance_axis_ranges = {
     "x_translation": 0.32,
     "y_translation": 0.32,
@@ -573,6 +576,11 @@ class Benchmark:
         self._materialization = _materialization()
         self._formation = _formation()
         self._showcase = _showcase()
+        self._target_contract = TargetContract.inverse_latent(
+            identity_count=10,
+            nuisance_dimension=5,
+            residual_operator_id=_inverse_residual_operator_id,
+        )
         self._generator = Generator(
             manifest=self._manifest,
             latent_factors=self._latent_factors,
@@ -603,6 +611,61 @@ class Benchmark:
     @property
     def showcase(self) -> ObservationShowcaseManifest:
         return self._showcase
+
+    @property
+    def target_contract(self) -> TargetContract:
+        return self._target_contract
+
+    def build_training_loss(
+        self,
+        runtime: TensorRuntime,
+        target_contract: TargetContract,
+    ) -> Any:
+        if (
+            target_contract.kind != "inverse"
+            or target_contract.loss_id != "reconstruction"
+            or target_contract.competence.parameters.get("residual_operator_id")
+            != _inverse_residual_operator_id
+        ):
+            raise ValueError("Digits benchmark only builds its declared inverse loss")
+
+        def loss(predictions: Any, targets: Any) -> Any:
+            if len(tuple(targets.shape)) != 4 or int(targets.shape[1]) != 1:
+                raise ValueError(
+                    "inverse Digits targets must have shape (batch, 1, side, side)"
+                )
+            side = int(targets.shape[-1])
+            if int(targets.shape[-2]) != side:
+                raise ValueError("inverse Digits targets must be square images")
+            return inverse_digits_latent_vector_reconstruction_loss(
+                runtime=runtime,
+                latent_vector=predictions,
+                observations=targets,
+                canvas_side=side,
+            )
+
+        return loss
+
+    def build_training_competence(
+        self,
+        runtime: TensorRuntime,
+        target_contract: TargetContract,
+    ) -> Any:
+        del runtime
+        if (
+            target_contract.kind != "inverse"
+            or target_contract.competence.kind != "ambient-certified-bits"
+            or target_contract.competence.parameters.get("residual_operator_id")
+            != _inverse_residual_operator_id
+        ):
+            raise ValueError(
+                "Digits benchmark only builds its declared inverse certified competence"
+            )
+
+        def competence(request: Any) -> Any:
+            return _inverse_digits_ambient_certified_bits(request)
+
+        return competence
 
     @property
     def generator(self) -> Generator:
@@ -1004,8 +1067,6 @@ class Generator:
     ) -> tuple[Any, Any]:
         """Generate tensor fields and targets directly from the Digits volume shell."""
 
-        if not outcome_ids:
-            raise ObservationGenerationError("tensor generation requires outcome_ids")
         sample_count = _sample_count(sample_shape)
         fields = self._generate_tensor_fields(
             sample_shape=sample_shape,
@@ -1018,6 +1079,8 @@ class Generator:
             timing=timing,
             timing_prefix=timing_prefix,
         )
+        if not outcome_ids:
+            return fields, fields
         with _timing_span(timing, f"{timing_prefix}target_tensor", samples=sample_count):
             component_outcome_ids = tuple(
                 outcome.id for outcome in self.manifest.outcome_space.outcomes
@@ -1576,8 +1639,6 @@ class Generator:
                 width_axis=self.formation.width_axis,
                 height_axis=self.formation.height_axis,
             )
-        if runtime is not None and outcome_ids is None:
-            raise ObservationGenerationError("tensor generation requires outcome_ids")
         resolved_resolution_assignment = self._generation_resolution_assignment(
             sample_count=sample_count,
             seed=seed,
@@ -1590,7 +1651,7 @@ class Generator:
         )
         fields = None
         targets = None
-        if runtime is not None and outcome_ids is not None:
+        if runtime is not None:
             fields, targets = self._generate_tensors(
                 sample_shape=sample_shape,
                 seed=seed,
@@ -1599,7 +1660,7 @@ class Generator:
                 resolution_assignment=resolved_resolution_assignment,
                 volume_class=volume_class,
                 runtime=runtime,
-                outcome_ids=outcome_ids,
+                outcome_ids=tuple(outcome_ids or ()),
                 timing=timing,
                 timing_prefix=timing_prefix,
             )
@@ -2773,6 +2834,104 @@ def inverse_digits_reconstruction_loss(
         canvas_side=canvas_side,
     )
     return (reconstruction - observations).pow(2).mean()
+
+
+def inverse_digits_latent_vector_reconstruction_loss(
+    *,
+    runtime: TensorRuntime,
+    latent_vector: Any,
+    observations: Any,
+    canvas_side: int,
+) -> Any:
+    """Return reconstruction loss for a submitted inverse latent-vector output."""
+
+    if len(tuple(latent_vector.shape)) != 2 or int(latent_vector.shape[1]) != 15:
+        raise ObservationGenerationError("inverse latent vector must have shape (batch, 15)")
+    return inverse_digits_reconstruction_loss(
+        runtime=runtime,
+        identity_logits=latent_vector[:, :10],
+        nuisance=latent_vector[:, 10:],
+        observations=observations,
+        canvas_side=canvas_side,
+    )
+
+
+def _inverse_digits_ambient_certified_bits(request: Any) -> Any:
+    runtime = request.runtime
+    predictions = request.predictions
+    targets = request.targets
+    if len(tuple(predictions.shape)) != 2 or int(predictions.shape[1]) != 15:
+        raise ValueError("inverse Digits predictions must have shape (batch, 15)")
+    if len(tuple(targets.shape)) != 4 or int(targets.shape[1]) != 1:
+        raise ValueError("inverse Digits targets must have shape (batch, 1, side, side)")
+    side = int(targets.shape[-1])
+    if int(targets.shape[-2]) != side:
+        raise ValueError("inverse Digits targets must be square images")
+
+    values: list[float] = []
+    diagnostics: list[Mapping[str, object]] = []
+    detached_predictions = predictions.detach()
+    for sample_index in range(int(predictions.shape[0])):
+        row = detached_predictions[sample_index]
+        identity = int(row[:10].argmax().item())
+        nuisance_values = tuple(float(value) for value in row[10:].tolist())
+        try:
+            recovered_latent = InverseDigitsLatent(identity, *nuisance_values)
+            certification = inverse_digits_static_certification(
+                runtime=runtime,
+                recovered_latent=recovered_latent,
+                observation=targets[sample_index : sample_index + 1],
+                canvas_side=side,
+                refinement_sides=(side, max(side + 1, side * 2)),
+            )
+            if certification.certification_status != "certified":
+                values.append(0.0)
+                diagnostics.append(
+                    {
+                        "kind": "digits-inverse-certified-diagnostics",
+                        "sample_index": sample_index,
+                        "certification_status": certification.certification_status,
+                        "bits": 0.0,
+                        "residual_norm": certification.residual_norm,
+                        "sigma_min": certification.sigma_min,
+                    }
+                )
+                continue
+            bits = inverse_digits_validated_bits(
+                runtime=runtime,
+                recovered_latent=recovered_latent,
+                certified_epsilon=certification.certified_epsilon,
+                canvas_side=side,
+            )
+            values.append(bits.bits)
+            diagnostics.append(
+                {
+                    "kind": "digits-inverse-certified-diagnostics",
+                    "sample_index": sample_index,
+                    "certification_status": certification.certification_status,
+                    "bits": bits.bits,
+                    "identity_bits": bits.identity_bits,
+                    "nuisance_bits": bits.nuisance_bits,
+                    "distinguishable_identity_count": bits.distinguishable_identity_count,
+                    "certified_epsilon": certification.certified_epsilon,
+                    "residual_norm": certification.residual_norm,
+                    "sigma_min": certification.sigma_min,
+                    "conditioning_stability": certification.conditioning_stability,
+                }
+            )
+        except (ObservationGenerationError, ValueError):
+            values.append(0.0)
+            diagnostics.append(
+                {
+                    "kind": "digits-inverse-certified-diagnostics",
+                    "sample_index": sample_index,
+                    "certification_status": "refused-invalid-latent",
+                    "bits": 0.0,
+                }
+            )
+    result = predictions.new_tensor(values)
+    result.leibniz_competence_diagnostics = tuple(diagnostics)
+    return result
 
 
 def _distinguishable_identity_count(

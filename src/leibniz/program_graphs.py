@@ -36,7 +36,7 @@ __all__ = [
 ]
 
 ProgramAxis: TypeAlias = int | str
-_ContractKind: TypeAlias = Literal["classification", "prediction"]
+_ContractKind: TypeAlias = Literal["classification", "prediction", "inverse"]
 
 
 class ProgramGraphError(ValueError):
@@ -782,8 +782,10 @@ def _validate_graph_shape(
     outputs: tuple[ProgramTensorContract, ...],
     contract_kind: _ContractKind,
 ) -> None:
-    if contract_kind not in {"classification", "prediction"}:
-        raise ProgramGraphError("contract_kind must be classification or prediction")
+    if contract_kind not in {"classification", "prediction", "inverse"}:
+        raise ProgramGraphError(
+            "contract_kind must be classification, prediction, or inverse"
+        )
     if not nodes:
         raise ProgramGraphError("program graph nodes must not be empty")
     if not inputs:
@@ -837,9 +839,9 @@ def _as_program_axis(value: object, *, field: str) -> ProgramAxis:
 
 
 def _as_contract_kind(value: object) -> _ContractKind:
-    if value == "classification" or value == "prediction":
+    if value in {"classification", "prediction", "inverse"}:
         return cast(_ContractKind, value)
-    raise ProgramGraphError("contract_kind must be classification or prediction")
+    raise ProgramGraphError("contract_kind must be classification, prediction, or inverse")
 
 
 def _unparsed_sequence(value: object, field: str) -> tuple[object, ...]:
