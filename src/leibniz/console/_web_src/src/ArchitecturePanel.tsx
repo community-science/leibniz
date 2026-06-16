@@ -203,7 +203,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'relation to the law',
-            text: 'The law decides which bindings are even possible. KS exercises evolution; inverse Digits now exercises inverse binding by asking a submission to infer a latent cause from an observed renderer output.',
+            text: 'The law decides which bindings are even possible. The field-evolution benchmark exercises evolution; the inverse-renderer benchmark exercises inverse binding by asking a submission to infer a latent cause from an observed renderer output.',
           },
         ],
         verdict: { tone: 'partial', text: 'Evolution and inverse are live benchmark bindings; equilibrium remains a design direction.' },
@@ -277,7 +277,7 @@ const ROOTS: RootTree[] = [
             text: 'Open rungs remain: the IC distribution is provisional; the certified $\\varepsilon$ uses the leading-amplification estimator, the smooth and chaotic-dynamics instance of a general law-induced one (entropy stability for shock-forming conservation laws is the harder case); and a submitted program that climbs a deep boundary is still wanted. The retired-gate observed-order tolerance and rung-count parameters are gone.',
           },
         ],
-        verdict: { tone: 'partial', text: 'Continuous certified bits now have two worked structural types: dynamical amplification for KS and static-map conditioning for inverse Digits; general entropy-stability certification and a boundary-climbing program remain open.' },
+        verdict: { tone: 'partial', text: 'Continuous certified bits now have two worked structural types: dynamical amplification for field evolution and static-map conditioning for inverse rendering; general entropy-stability certification and a boundary-climbing program remain open.' },
       },
       {
         id: 'R-territory',
@@ -368,7 +368,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'locates it, justifies invariance',
-            text: 'It is an $\\varepsilon$-covering count under the metric the law itself induces — the geometry of its entropy, energy/Lyapunov functional, or static renderer Jacobian — taken in the ambient space rather than the chart, so it does not change if you reparameterize. In that metric a smooth field and a shock are both finite information (a Fourier chart only made the shock look complex), the KS count is of field evolution above persistence, and the inverse-Digits count is the product answer space of identity bits plus continuous nuisance bits. Independent axes multiply, which is why their bits add.',
+            text: 'It is an $\\varepsilon$-covering count under the metric the law itself induces — the geometry of its entropy, energy/Lyapunov functional, or static renderer Jacobian — taken in the ambient space rather than the chart, so it does not change if you reparameterize. In that metric a smooth field and a shock are both finite information (a Fourier chart only made the shock look complex), a field law can count evolution above persistence, and an inverse renderer can count the product answer space of identity bits plus continuous nuisance bits. Independent axes multiply, which is why their bits add.',
           },
           {
             level: 2,

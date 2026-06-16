@@ -12,6 +12,7 @@ import zlib
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
+from operator import attrgetter
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
@@ -118,6 +119,7 @@ _batch_render_curve_sample_count = 25
 _static_conditioning_refusal_ratio = 2.0
 _static_sigma_floor = 1.0e-8
 _inverse_residual_operator_id = "benchmarks.digits.inverse-renderer@0.1.0"
+_runtime_device = attrgetter("device")
 _inverse_nuisance_axis_ranges = {
     "x_translation": 0.32,
     "y_translation": 0.32,
@@ -2572,16 +2574,17 @@ def render_inverse_digits(
         raise ObservationGenerationError("inverse digits rendering requires latents")
     if type(canvas_side) is not int or canvas_side < _render_unit_side:
         raise ObservationGenerationError("canvas_side must be at least the render unit side")
-    torch = runtime.torch
-    identities = torch.tensor(
+    backend = runtime.backend
+    device = _runtime_device(runtime)
+    identities = backend.tensor(
         tuple(latent.identity for latent in normalized_latents),
-        dtype=torch.long,
-        device=runtime.device,
+        dtype=backend.long,
+        device=device,
     )
-    nuisance = torch.tensor(
+    nuisance = backend.tensor(
         tuple(latent.to_nuisance_tuple() for latent in normalized_latents),
-        dtype=torch.float32,
-        device=runtime.device,
+        dtype=backend.float32,
+        device=device,
     )
     return render_inverse_digits_tensor(
         runtime,
@@ -2600,7 +2603,8 @@ def render_inverse_digits_tensor(
 ) -> Any:
     """Render inverse-Digits latent tensors through the differentiable law."""
 
-    torch = runtime.torch
+    backend = runtime.backend
+    device = _runtime_device(runtime)
     if type(canvas_side) is not int or canvas_side < _render_unit_side:
         raise ObservationGenerationError("canvas_side must be at least the render unit side")
     if len(tuple(identities.shape)) != 1:
@@ -2608,11 +2612,11 @@ def render_inverse_digits_tensor(
     if tuple(nuisance.shape) != (int(identities.shape[0]), 5):
         raise ObservationGenerationError("nuisance tensor must have shape (batch, 5)")
     mark_counts, control_points = _inverse_digit_component_tensors(runtime)
-    identities = identities.to(device=runtime.device, dtype=torch.long)
-    nuisance = nuisance.to(device=runtime.device, dtype=torch.float32)
+    identities = identities.to(device=device, dtype=backend.long)
+    nuisance = nuisance.to(device=device, dtype=backend.float32)
     batch_size = int(identities.shape[0])
     x_center = (
-        torch.arange(canvas_side, dtype=nuisance.dtype, device=runtime.device).reshape(
+        backend.arange(canvas_side, dtype=nuisance.dtype, device=device).reshape(
             1,
             1,
             1,
@@ -2621,7 +2625,7 @@ def render_inverse_digits_tensor(
         + 0.5
     ) / float(canvas_side)
     y_center = (
-        torch.arange(canvas_side, dtype=nuisance.dtype, device=runtime.device).reshape(
+        backend.arange(canvas_side, dtype=nuisance.dtype, device=device).reshape(
             1,
             1,
             canvas_side,
@@ -2629,17 +2633,17 @@ def render_inverse_digits_tensor(
         )
         + 0.5
     ) / float(canvas_side)
-    segment_start_t = torch.linspace(
+    segment_start_t = backend.linspace(
         0.0,
         1.0 - (1.0 / float(_batch_render_curve_sample_count - 1)),
         _batch_render_curve_sample_count - 1,
         dtype=nuisance.dtype,
-        device=runtime.device,
+        device=device,
     )
-    value = torch.zeros(
+    value = backend.zeros(
         (batch_size, 1, canvas_side, canvas_side),
         dtype=nuisance.dtype,
-        device=runtime.device,
+        device=device,
     )
     max_mark_count = int(control_points.shape[1])
     selected_mark_counts = mark_counts[identities]
@@ -2702,12 +2706,13 @@ def inverse_digits_static_certification(
 ) -> StaticMapCertification:
     """Certify latent precision for a recovered inverse-Digits latent."""
 
-    torch = runtime.torch
-    identity = torch.tensor([recovered_latent.identity], dtype=torch.long, device=runtime.device)
-    nuisance = torch.tensor(
+    backend = runtime.backend
+    device = _runtime_device(runtime)
+    identity = backend.tensor([recovered_latent.identity], dtype=backend.long, device=device)
+    nuisance = backend.tensor(
         [recovered_latent.to_nuisance_tuple()],
-        dtype=torch.float32,
-        device=runtime.device,
+        dtype=backend.float32,
+        device=device,
     )
     prediction = render_inverse_digits_tensor(
         runtime,
@@ -2715,7 +2720,11 @@ def inverse_digits_static_certification(
         nuisance=nuisance,
         canvas_side=canvas_side,
     )
-    residual_norm = float((prediction - observation.reshape(prediction.shape)).pow(2).mean().sqrt())
+    residual_norm = float(
+        tensor_value_to_host_values(
+            (prediction - observation.reshape(prediction.shape)).pow(2).mean().sqrt()
+        )[0]
+    )
     ladder_sides = tuple(int(side) for side in refinement_sides)
     sigma_ladder = tuple(
         _inverse_digits_sigma_min(
@@ -2796,13 +2805,14 @@ def inverse_digits_reconstruction(
 ) -> Any:
     """Render a differentiable identity-mixture reconstruction from inverse outputs."""
 
-    torch = runtime.torch
+    backend = runtime.backend
+    device = _runtime_device(runtime)
     if len(tuple(identity_logits.shape)) != 2 or int(identity_logits.shape[1]) != 10:
         raise ObservationGenerationError("identity logits must have shape (batch, 10)")
     if tuple(nuisance.shape) != (int(identity_logits.shape[0]), 5):
         raise ObservationGenerationError("nuisance tensor must have shape (batch, 5)")
     batch_size = int(identity_logits.shape[0])
-    identities = torch.arange(10, dtype=torch.long, device=runtime.device).repeat(batch_size)
+    identities = backend.arange(10, dtype=backend.long, device=device).repeat(batch_size)
     repeated_nuisance = nuisance.reshape(batch_size, 1, 5).repeat(1, 10, 1).reshape(
         batch_size * 10,
         5,
@@ -2813,7 +2823,7 @@ def inverse_digits_reconstruction(
         nuisance=repeated_nuisance,
         canvas_side=canvas_side,
     ).reshape(batch_size, 10, 1, canvas_side, canvas_side)
-    weights = torch.softmax(identity_logits, dim=1).reshape(batch_size, 10, 1, 1, 1)
+    weights = backend.softmax(identity_logits, dim=1).reshape(batch_size, 10, 1, 1, 1)
     return (weights * renders).sum(dim=1)
 
 
@@ -2873,8 +2883,8 @@ def _inverse_digits_ambient_certified_bits(request: Any) -> Any:
     detached_predictions = predictions.detach()
     for sample_index in range(int(predictions.shape[0])):
         row = detached_predictions[sample_index]
-        identity = int(row[:10].argmax().item())
-        nuisance_values = tuple(float(value) for value in row[10:].tolist())
+        identity = int(tensor_value_to_host_values(row[:10].argmax())[0])
+        nuisance_values = tuple(float(value) for value in tensor_value_to_host_values(row[10:]))
         try:
             recovered_latent = InverseDigitsLatent(identity, *nuisance_values)
             certification = inverse_digits_static_certification(
@@ -2941,12 +2951,13 @@ def _distinguishable_identity_count(
     certified_epsilon: float,
     canvas_side: int,
 ) -> int:
-    torch = runtime.torch
-    identities = torch.arange(_volume_class_digit_count, dtype=torch.long, device=runtime.device)
-    nuisance = torch.tensor(
+    backend = runtime.backend
+    device = _runtime_device(runtime)
+    identities = backend.arange(_volume_class_digit_count, dtype=backend.long, device=device)
+    nuisance = backend.tensor(
         [recovered_latent.to_nuisance_tuple()] * _volume_class_digit_count,
-        dtype=torch.float32,
-        device=runtime.device,
+        dtype=backend.float32,
+        device=device,
     )
     renders = render_inverse_digits_tensor(
         runtime,
@@ -2958,7 +2969,7 @@ def _distinguishable_identity_count(
     distances = (renders.reshape(_volume_class_digit_count, -1) - recovered).pow(2).mean(
         dim=1
     ).sqrt()
-    separated = int((distances > float(certified_epsilon)).sum())
+    separated = int(tensor_value_to_host_values((distances > float(certified_epsilon)).sum())[0])
     return max(1, separated + 1)
 
 
@@ -2969,12 +2980,13 @@ def _inverse_digits_sigma_min(
     nuisance: tuple[float, float, float, float, float],
     canvas_side: int,
 ) -> float:
-    torch = runtime.torch
-    identity_tensor = torch.tensor([identity], dtype=torch.long, device=runtime.device)
-    nuisance_tensor = torch.tensor(
+    backend = runtime.backend
+    device = _runtime_device(runtime)
+    identity_tensor = backend.tensor([identity], dtype=backend.long, device=device)
+    nuisance_tensor = backend.tensor(
         nuisance,
-        dtype=torch.float32,
-        device=runtime.device,
+        dtype=backend.float32,
+        device=device,
         requires_grad=True,
     )
 
@@ -2987,10 +2999,10 @@ def _inverse_digits_sigma_min(
         )
         return rendered.reshape(-1) / math.sqrt(float(rendered.numel()))
 
-    basis = torch.eye(5, dtype=nuisance_tensor.dtype, device=runtime.device)
+    basis = backend.eye(5, dtype=nuisance_tensor.dtype, device=device)
     columns: list[Any] = []
     for axis in range(5):
-        _value, jvp = torch.autograd.functional.jvp(
+        _value, jvp = backend.autograd.functional.jvp(
             render_flat,
             nuisance_tensor,
             basis[axis],
@@ -2998,11 +3010,11 @@ def _inverse_digits_sigma_min(
             strict=True,
         )
         columns.append(jvp)
-    jacobian_columns = torch.stack(columns, dim=1)
+    jacobian_columns = backend.stack(columns, dim=1)
     gram = jacobian_columns.transpose(0, 1).matmul(jacobian_columns)
-    eigenvalues = torch.linalg.eigvalsh(gram)
+    eigenvalues = backend.linalg.eigvalsh(gram)
     sigma_min = eigenvalues.clamp_min(0.0).sqrt().min()
-    return float(sigma_min)
+    return float(tensor_value_to_host_values(sigma_min)[0])
 
 
 def _inverse_digits_latent_from_secret(
@@ -3035,7 +3047,8 @@ def _affine_interval(value: float, lower: float, upper: float) -> float:
 
 
 def _inverse_digit_component_tensors(runtime: TensorRuntime) -> tuple[Any, Any]:
-    torch = runtime.torch
+    backend = runtime.backend
+    device = _runtime_device(runtime)
     max_mark_count = max(len(strokes) for strokes in _digit_strokes)
     mark_counts: list[int] = []
     component_control_points: list[list[list[list[float]]]] = []
@@ -3049,8 +3062,8 @@ def _inverse_digit_component_tensors(runtime: TensorRuntime) -> tuple[Any, Any]:
             control_points.append([[0.0, 0.0] for _ in range(3)])
         component_control_points.append(control_points)
     return (
-        torch.tensor(mark_counts, dtype=torch.long, device=runtime.device),
-        torch.tensor(component_control_points, dtype=torch.float32, device=runtime.device),
+        backend.tensor(mark_counts, dtype=backend.long, device=device),
+        backend.tensor(component_control_points, dtype=backend.float32, device=device),
     )
 
 
