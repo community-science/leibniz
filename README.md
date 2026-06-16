@@ -211,23 +211,23 @@ generic component discriminability analysis rather than a fixed pixel extent per
 digit; the benchmark manifest declares the scalar discriminability margin used
 by that live analysis. Spatial variation is sampled as affine matrix
 coordinates inside the benchmark-owned identity-preserving envelope. Submitted
-classification programs must therefore accept the observation tensor shape
-declared by their program graph. Prediction programs can declare symbolic
-support axes, allowing one program family to run against variable-size
-field-valued tasks such as KS without a benchmark-specific model name.
+Digits inverse programs must therefore accept the observation tensor shape and
+emit the latent-vector output declared by their program graph. Prediction
+programs can declare symbolic support axes, allowing one program family to run
+against variable-size field-valued tasks such as KS without a benchmark-specific
+model name.
 
-Digits is a single-label finite-outcome benchmark. The task contract is to
-predict which one of the ten digit identities is visible in the observation.
-The benchmark does not use an explicit sequence-length or complexity coordinate
-for scoring; observation difficulty is derived from the number of possible
-distinguishable states under the active scoring contract. In the current
-single-digit task this includes the ten digit identities and a finite grid over
-the identity-preserving affine nuisance envelope as perceived on the sampled
-canvas. Larger canvases can therefore expose more distinguishable affine states;
-sampled canvas shape is not counted as extra score-bearing difficulty by itself
-unless it changes what nuisance states can be distinguished. This keeps the
-model output fixed at a 10-way probability measure while allowing score to grow
-as formation rules add real distinguishable observation states.
+Digits is an oracle-free inverse benchmark. The task contract is to recover a
+latent vector from an observed image under the benchmark-owned differentiable
+renderer: identity logits plus continuous nuisance coordinates. Training uses
+only reconstruction residual against that renderer; labels are not part of the
+training or scoring path. Certified score is the ambient epsilon-entropy of the
+product latent space, with image residual converted to latent precision by the
+static renderer geometry. Identity contributes only where classes remain
+distinguishable at the certified precision, and nuisance bits come from the
+continuous affine chart. Larger canvases can expose more distinguishable
+nuisance states, but sampled canvas shape is not score-bearing by itself unless
+it changes what latent states can be certified.
 
 While a benchmark run is training, gate-check progress may be written under
 `results/training/` as the current training-run record. The console may
