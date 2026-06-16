@@ -1,8 +1,11 @@
 import math
+import os
+import struct
 import sys
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from benchmark_typing import load_digits_benchmark
 
 from leibniz.artifacts import ArtifactReference
@@ -408,6 +411,48 @@ def test_inverse_digits_label_free_probe_trains_by_reconstruction_only() -> None
     assert int(identity_logits.detach().argmax(dim=1)[0]) == true_latent.identity
 
 
+def test_inverse_digits_mnist_held_out_check_if_local_idx_available() -> None:
+    image_path = os.environ.get("LEIBNIZ_MNIST_IMAGES_IDX")
+    label_path = os.environ.get("LEIBNIZ_MNIST_LABELS_IDX")
+    if image_path is None or label_path is None:
+        pytest.skip("set LEIBNIZ_MNIST_IMAGES_IDX and LEIBNIZ_MNIST_LABELS_IDX")
+    images = _load_mnist_idx_images(Path(image_path), limit=32)
+    labels = _load_mnist_idx_labels(Path(label_path), limit=32)
+    if len(images) != len(labels) or len(images) < 16:
+        pytest.skip("local MNIST IDX sample must contain at least 16 paired examples")
+
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    module = _digits_module()
+    observations = torch.tensor(images, dtype=torch.float32).reshape((len(labels), 1, 28, 28))
+    identity_logits = torch.zeros((len(labels), 10), requires_grad=True)
+    nuisance = torch.tensor(
+        [[0.0, 0.0, 1.0, 0.0, 1.0] for _label in labels],
+        dtype=torch.float32,
+        requires_grad=True,
+    )
+    optimizer = torch.optim.Adam([identity_logits, nuisance], lr=0.08)
+    for _step in range(120):
+        optimizer.zero_grad()
+        loss = module.inverse_digits_reconstruction_loss(
+            runtime=runtime,
+            identity_logits=identity_logits,
+            nuisance=nuisance,
+            observations=observations,
+            canvas_side=28,
+        )
+        loss.backward()
+        optimizer.step()
+
+    recovered = tuple(int(value) for value in identity_logits.detach().argmax(dim=1).tolist())
+    matches = sum(
+        1
+        for recovered_digit, label in zip(recovered, labels, strict=True)
+        if recovered_digit == label
+    )
+    assert _binomial_upper_tail(matches, len(labels), 0.1) < 0.05
+
+
 def _measurement_for_sequence(
     *,
     sequence: tuple[int, ...],
@@ -501,3 +546,40 @@ def _digits_manifest() -> BenchmarkManifest:
 def _digits_module() -> Any:
     loaded = cast(Any, load_digits_benchmark(_digits_benchmark_root))
     return sys.modules[type(loaded.implementation).__module__]
+
+
+def _load_mnist_idx_images(path: Path, *, limit: int) -> list[float]:
+    data = path.read_bytes()
+    if len(data) < 16:
+        raise ValueError("MNIST image IDX file is truncated")
+    magic, count, rows, columns = struct.unpack(">IIII", data[:16])
+    if magic != 2051 or rows != 28 or columns != 28:
+        raise ValueError("expected MNIST image IDX with 28x28 images")
+    image_count = min(count, limit)
+    expected = 16 + image_count * rows * columns
+    if len(data) < expected:
+        raise ValueError("MNIST image IDX file is truncated")
+    return [value / 255.0 for value in data[16:expected]]
+
+
+def _load_mnist_idx_labels(path: Path, *, limit: int) -> list[int]:
+    data = path.read_bytes()
+    if len(data) < 8:
+        raise ValueError("MNIST label IDX file is truncated")
+    magic, count = struct.unpack(">II", data[:8])
+    if magic != 2049:
+        raise ValueError("expected MNIST label IDX")
+    label_count = min(count, limit)
+    expected = 8 + label_count
+    if len(data) < expected:
+        raise ValueError("MNIST label IDX file is truncated")
+    return [int(value) for value in data[8:expected]]
+
+
+def _binomial_upper_tail(successes: int, trials: int, probability: float) -> float:
+    return math.fsum(
+        math.comb(trials, count)
+        * probability**count
+        * (1.0 - probability) ** (trials - count)
+        for count in range(successes, trials + 1)
+    )
