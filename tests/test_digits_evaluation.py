@@ -358,6 +358,56 @@ def test_inverse_digits_bits_rise_as_reconstruction_residual_falls() -> None:
     assert bits_for_offset(0.005) > bits_for_offset(0.02) > 0.0
 
 
+def test_inverse_digits_label_free_probe_trains_by_reconstruction_only() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    module = _digits_module()
+    true_latent = module.InverseDigitsLatent(8, 0.02, -0.01, 1.0, 0.02, 1.0)
+    observations = module.render_inverse_digits(
+        runtime=runtime,
+        latents=(true_latent,),
+        canvas_side=28,
+    )
+
+    identity_logits = torch.zeros((1, 10), requires_grad=True)
+    nuisance = torch.tensor([[0.0, 0.0, 1.0, 0.0, 1.0]], requires_grad=True)
+    optimizer = torch.optim.Adam([identity_logits, nuisance], lr=0.1)
+
+    initial_loss = float(
+        module.inverse_digits_reconstruction_loss(
+            runtime=runtime,
+            identity_logits=identity_logits,
+            nuisance=nuisance,
+            observations=observations,
+            canvas_side=28,
+        ).detach()
+    )
+    for _step in range(80):
+        optimizer.zero_grad()
+        loss = module.inverse_digits_reconstruction_loss(
+            runtime=runtime,
+            identity_logits=identity_logits,
+            nuisance=nuisance,
+            observations=observations,
+            canvas_side=28,
+        )
+        loss.backward()
+        optimizer.step()
+
+    final_loss = float(
+        module.inverse_digits_reconstruction_loss(
+            runtime=runtime,
+            identity_logits=identity_logits,
+            nuisance=nuisance,
+            observations=observations,
+            canvas_side=28,
+        ).detach()
+    )
+
+    assert final_loss < initial_loss * 0.01
+    assert int(identity_logits.detach().argmax(dim=1)[0]) == true_latent.identity
+
+
 def _measurement_for_sequence(
     *,
     sequence: tuple[int, ...],

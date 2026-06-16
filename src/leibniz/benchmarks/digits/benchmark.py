@@ -90,6 +90,8 @@ __all__ = [
     "StaticMapCertification",
     "benchmark",
     "inverse_digits_static_certification",
+    "inverse_digits_reconstruction",
+    "inverse_digits_reconstruction_loss",
     "inverse_digits_validated_bits",
     "new_inverse_digits_secret",
     "render_inverse_digits",
@@ -2722,6 +2724,55 @@ def inverse_digits_validated_bits(
         distinguishable_identity_count=identity_count,
         certified_epsilon=certified_epsilon,
     )
+
+
+def inverse_digits_reconstruction(
+    *,
+    runtime: TensorRuntime,
+    identity_logits: Any,
+    nuisance: Any,
+    canvas_side: int,
+) -> Any:
+    """Render a differentiable identity-mixture reconstruction from inverse outputs."""
+
+    torch = runtime.torch
+    if len(tuple(identity_logits.shape)) != 2 or int(identity_logits.shape[1]) != 10:
+        raise ObservationGenerationError("identity logits must have shape (batch, 10)")
+    if tuple(nuisance.shape) != (int(identity_logits.shape[0]), 5):
+        raise ObservationGenerationError("nuisance tensor must have shape (batch, 5)")
+    batch_size = int(identity_logits.shape[0])
+    identities = torch.arange(10, dtype=torch.long, device=runtime.device).repeat(batch_size)
+    repeated_nuisance = nuisance.reshape(batch_size, 1, 5).repeat(1, 10, 1).reshape(
+        batch_size * 10,
+        5,
+    )
+    renders = render_inverse_digits_tensor(
+        runtime,
+        identities=identities,
+        nuisance=repeated_nuisance,
+        canvas_side=canvas_side,
+    ).reshape(batch_size, 10, 1, canvas_side, canvas_side)
+    weights = torch.softmax(identity_logits, dim=1).reshape(batch_size, 10, 1, 1, 1)
+    return (weights * renders).sum(dim=1)
+
+
+def inverse_digits_reconstruction_loss(
+    *,
+    runtime: TensorRuntime,
+    identity_logits: Any,
+    nuisance: Any,
+    observations: Any,
+    canvas_side: int,
+) -> Any:
+    """Return the label-free inverse-Digits reconstruction residual."""
+
+    reconstruction = inverse_digits_reconstruction(
+        runtime=runtime,
+        identity_logits=identity_logits,
+        nuisance=nuisance,
+        canvas_side=canvas_side,
+    )
+    return (reconstruction - observations).pow(2).mean()
 
 
 def _distinguishable_identity_count(
