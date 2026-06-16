@@ -5,18 +5,21 @@ from __future__ import annotations
 import base64
 import hashlib
 import math
+import os
 import random
 import struct
 import zlib
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
+from operator import attrgetter
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
 from leibniz.artifacts import ArtifactReference
 from leibniz.benchmark_implementations import RawBenchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
+from leibniz.certified_precision import residual_certified_epsilon
 from leibniz.cost_metrology import (
     CostMeasurement,
     OperationCostRecord,
@@ -55,7 +58,6 @@ from leibniz.observation_showcases import (
     ObservationShowcaseManifest,
     ObservationShowcaseSample,
 )
-from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.state_space import (
     AccessibleSubspace,
     ContinuousAxisRegion,
@@ -68,28 +70,39 @@ from leibniz.state_space import (
     StateSpaceAxis,
     StateSpaceRegion,
 )
+from leibniz.target_contracts import TargetContract
 from leibniz.tensor_runtime import (
-    TensorBatchProgram,
-    TensorElementParameter,
-    TensorElementRecipe,
     TensorRuntime,
     TensorRuntimeError,
     resolve_host_tensor_runtime,
-    tensor_runtime_construct_tensor,
     tensor_runtime_shape_element_count,
     tensor_value_to_host,
     tensor_value_to_host_values,
 )
 from leibniz.timing import TimingCollector
 
-__all__ = ["benchmark"]
+__all__ = [
+    "InverseDigitsLatent",
+    "InverseDigitsObservationBatch",
+    "InverseDigitsValidatedBits",
+    "StaticMapCertification",
+    "benchmark",
+    "inverse_digits_static_certification",
+    "inverse_digits_latent_vector_reconstruction_loss",
+    "inverse_digits_reconstruction",
+    "inverse_digits_reconstruction_loss",
+    "inverse_digits_validated_bits",
+    "new_inverse_digits_secret",
+    "render_inverse_digits",
+    "render_inverse_digits_tensor",
+    "sample_inverse_digits_observations",
+]
 
 _benchmark_id = ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
 _latent_factor_id = ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.2.0")
 _materialization_id = ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0")
 _formation_id = ProtocolIdentifier.parse("benchmarks.digits.observation-formation@0.1.0")
 _generator_id = ProtocolIdentifier.parse("benchmarks.digits.generator@0.1.0")
-_outcome_space_id = ProtocolIdentifier.parse("benchmarks.digits.outcomes@0.1.0")
 _field_scalar_construction_bytes = 64
 _default_memory_budget_fraction = 0.10
 _default_generation_memory_limit_bytes = 32_768_000
@@ -98,6 +111,40 @@ _volume_class_canvas_minimum_side = 16
 _volume_class_canvas_side_step = 4
 _canonical_digits_cardinality = _volume_class_digit_count
 _batch_render_curve_sample_count = 25
+_static_conditioning_refusal_ratio = 8.0
+_static_sigma_floor = 1.0e-8
+_inverse_residual_operator_id = "benchmarks.digits.inverse-renderer@0.1.0"
+_runtime_device = attrgetter("device")
+_inverse_affine_nuisance_dimension = 5
+_inverse_deformation_frequency = 5
+_inverse_deformation_modes = tuple(
+    (x_frequency, y_frequency)
+    for x_frequency in range(_inverse_deformation_frequency + 1)
+    for y_frequency in range(_inverse_deformation_frequency + 1)
+    if x_frequency != 0 or y_frequency != 0
+)
+_inverse_deformation_mode_count = len(_inverse_deformation_modes)
+_inverse_deformation_dimension = 2 * _inverse_deformation_mode_count
+_inverse_nuisance_dimension = (
+    _inverse_affine_nuisance_dimension + _inverse_deformation_dimension
+)
+_inverse_latent_dimension = _volume_class_digit_count + _inverse_nuisance_dimension
+_inverse_deformation_amplitude = 0.06
+_inverse_affine_axis_ranges = {
+    "x_translation": 0.32,
+    "y_translation": 0.32,
+    "scale": 0.46,
+    "shear": 0.36,
+    "stroke_width": 0.60,
+}
+_inverse_deformation_axis_ranges = tuple(
+    2.0 * _inverse_deformation_amplitude / float(1 + x_frequency + y_frequency)
+    for x_frequency, y_frequency in _inverse_deformation_modes
+    for _component in range(2)
+)
+_inverse_nuisance_axis_ranges = (
+    tuple(_inverse_affine_axis_ranges.values()) + _inverse_deformation_axis_ranges
+)
 
 # --- Domain-growth chart geometry (fixed render resolution, growing canvas) ---
 #
@@ -211,6 +258,140 @@ def _transform_cell_for_ordinal(ordinal: int) -> tuple[int, int, int]:
 _shell_cells_cache: dict[int, tuple[tuple[int, int, int], ...]] = {}
 _chart_cell_prefix: list[tuple[int, int, int]] = []
 _chart_prefix_radius: list[int] = [0]
+
+
+@dataclass(frozen=True, slots=True)
+class InverseDigitsLatent:
+    """A label-free inverse Digits latent sampled from the renderer prior."""
+
+    identity: int
+    x_translation: float
+    y_translation: float
+    scale: float
+    shear: float
+    stroke_width: float
+    deformation: tuple[float, ...] = ()
+
+    def __post_init__(self) -> None:
+        if type(self.identity) is not int or not 0 <= self.identity < _volume_class_digit_count:
+            raise ObservationGenerationError("inverse digit identity is outside the prior")
+        if not self.deformation:
+            object.__setattr__(
+                self,
+                "deformation",
+                (0.0,) * _inverse_deformation_dimension,
+            )
+        elif len(self.deformation) != _inverse_deformation_dimension:
+            raise ObservationGenerationError(
+                "inverse digit deformation must have the declared dimension"
+            )
+        for name, value in self.to_nuisance_record().items():
+            if not isinstance(value, float) or not math.isfinite(value):
+                raise ObservationGenerationError(f"inverse digit {name} must be finite")
+
+    def to_nuisance_tuple(self) -> tuple[float, ...]:
+        return (
+            self.x_translation,
+            self.y_translation,
+            self.scale,
+            self.shear,
+            self.stroke_width,
+            *self.deformation,
+        )
+
+    def to_nuisance_record(self) -> dict[str, float]:
+        record = {
+            "x_translation": self.x_translation,
+            "y_translation": self.y_translation,
+            "scale": self.scale,
+            "shear": self.shear,
+            "stroke_width": self.stroke_width,
+        }
+        record.update(
+            {
+                f"deformation_{index:02d}": coefficient
+                for index, coefficient in enumerate(self.deformation)
+            }
+        )
+        return record
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "kind": "digits-inverse-latent",
+            "identity": self.identity,
+            "nuisance": self.to_nuisance_record(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InverseDigitsObservationBatch:
+    """Private inverse-Digits evaluation batch plus its public submission view."""
+
+    observations: Any
+    latents: tuple[InverseDigitsLatent, ...]
+    canvas_side: int
+    secret_digest: str
+
+    def submission_view(self) -> Mapping[str, object]:
+        return {
+            "kind": "digits-inverse-submission-view",
+            "observation_count": len(self.latents),
+            "canvas_side": self.canvas_side,
+            "observation_shape": [int(axis) for axis in self.observations.shape],
+            "law_id": "benchmarks.digits.inverse-renderer@0.1.0",
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class StaticMapCertification:
+    """A static-map residual-to-latent-precision certificate."""
+
+    certified_epsilon: float
+    residual_norm: float
+    sigma_min: float
+    sigma_min_ladder: tuple[float, ...]
+    conditioning_stability: float
+    certification_status: str
+    nuisance_bits: float
+    observable_mode_count: int
+    sigma_spectrum: tuple[float, ...]
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "kind": "digits-static-map-certification",
+            "estimator": "renderer-jvp-gram-per-mode-spectrum",
+            "certified_epsilon": self.certified_epsilon,
+            "residual_norm": self.residual_norm,
+            "sigma_min": self.sigma_min,
+            "sigma_min_ladder": list(self.sigma_min_ladder),
+            "conditioning_stability": self.conditioning_stability,
+            "conditioning_refusal_ratio": _static_conditioning_refusal_ratio,
+            "certification_status": self.certification_status,
+            "nuisance_bits": self.nuisance_bits,
+            "observable_mode_count": self.observable_mode_count,
+            "sigma_floor": _static_sigma_floor,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InverseDigitsValidatedBits:
+    """Product-latent ambient entropy resolved to certified precision."""
+
+    bits: float
+    identity_bits: float
+    nuisance_bits: float
+    distinguishable_identity_count: int
+    certified_epsilon: float
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "kind": "digits-inverse-product-entropy",
+            "bits": self.bits,
+            "identity_bits": self.identity_bits,
+            "nuisance_bits": self.nuisance_bits,
+            "distinguishable_identity_count": self.distinguishable_identity_count,
+            "certified_epsilon": self.certified_epsilon,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,6 +621,11 @@ class Benchmark:
         self._materialization = _materialization()
         self._formation = _formation()
         self._showcase = _showcase()
+        self._target_contract = TargetContract.inverse_latent(
+            identity_count=10,
+            nuisance_dimension=_inverse_nuisance_dimension,
+            residual_operator_id=_inverse_residual_operator_id,
+        )
         self._generator = Generator(
             manifest=self._manifest,
             latent_factors=self._latent_factors,
@@ -470,6 +656,61 @@ class Benchmark:
     @property
     def showcase(self) -> ObservationShowcaseManifest:
         return self._showcase
+
+    @property
+    def target_contract(self) -> TargetContract:
+        return self._target_contract
+
+    def build_training_loss(
+        self,
+        runtime: TensorRuntime,
+        target_contract: TargetContract,
+    ) -> Any:
+        if (
+            target_contract.kind != "inverse"
+            or target_contract.loss_id != "reconstruction"
+            or target_contract.competence.parameters.get("residual_operator_id")
+            != _inverse_residual_operator_id
+        ):
+            raise ValueError("Digits benchmark only builds its declared inverse loss")
+
+        def loss(predictions: Any, targets: Any) -> Any:
+            if len(tuple(targets.shape)) != 4 or int(targets.shape[1]) != 1:
+                raise ValueError(
+                    "inverse Digits targets must have shape (batch, 1, side, side)"
+                )
+            side = int(targets.shape[-1])
+            if int(targets.shape[-2]) != side:
+                raise ValueError("inverse Digits targets must be square images")
+            return inverse_digits_latent_vector_reconstruction_loss(
+                runtime=runtime,
+                latent_vector=predictions,
+                observations=targets,
+                canvas_side=side,
+            )
+
+        return loss
+
+    def build_training_competence(
+        self,
+        runtime: TensorRuntime,
+        target_contract: TargetContract,
+    ) -> Any:
+        del runtime
+        if (
+            target_contract.kind != "inverse"
+            or target_contract.competence.kind != "ambient-certified-bits"
+            or target_contract.competence.parameters.get("residual_operator_id")
+            != _inverse_residual_operator_id
+        ):
+            raise ValueError(
+                "Digits benchmark only builds its declared inverse certified competence"
+            )
+
+        def competence(request: Any) -> Any:
+            return _inverse_digits_ambient_certified_bits(request)
+
+        return competence
 
     @property
     def generator(self) -> Generator:
@@ -871,9 +1112,6 @@ class Generator:
     ) -> tuple[Any, Any]:
         """Generate tensor fields and targets directly from the Digits volume shell."""
 
-        if not outcome_ids:
-            raise ObservationGenerationError("tensor generation requires outcome_ids")
-        sample_count = _sample_count(sample_shape)
         fields = self._generate_tensor_fields(
             sample_shape=sample_shape,
             seed=seed,
@@ -885,39 +1123,9 @@ class Generator:
             timing=timing,
             timing_prefix=timing_prefix,
         )
-        with _timing_span(timing, f"{timing_prefix}target_tensor", samples=sample_count):
-            component_outcome_ids = tuple(
-                outcome.id for outcome in self.manifest.outcome_space.outcomes
-            )
-            unknown = tuple(
-                outcome_id
-                for outcome_id in component_outcome_ids[: volume_class.digit_count]
-                if outcome_id not in outcome_ids
-            )
-            if unknown:
-                raise TensorRuntimeError(f"unknown target outcome id: {unknown[0]}")
-            component_to_outcome = tuple(
-                outcome_ids.index(outcome_id)
-                for outcome_id in component_outcome_ids[: volume_class.digit_count]
-            )
-            labels = tensor_runtime_construct_tensor(
-                runtime,
-                recipe=TensorElementRecipe(
-                    shape=(*sample_shape, len(outcome_ids))
-                    if sample_shape
-                    else (len(outcome_ids),),
-                    dtype="float32",
-                    program=_target_tensor_program(
-                        seed=seed,
-                        sample_indices=sample_indices,
-                        cardinality=volume_class.cardinality,
-                        minimum_address=volume_class.minimum_address,
-                        component_to_outcome=component_to_outcome,
-                        outcome_count=len(outcome_ids),
-                    ),
-                ),
-            )
-        return fields, labels
+        if outcome_ids:
+            raise ObservationGenerationError("inverse Digits does not expose finite labels")
+        return fields, fields
 
     def _generate_tensor_fields(
         self,
@@ -1004,81 +1212,31 @@ class Generator:
     ) -> Any:
         _require_positive_integer(width, "width")
         _require_positive_integer(height, "height")
+        if width != height:
+            raise TensorRuntimeError("inverse Digits tensor renderer requires square fields")
         _require_positive_integer(digit_count, "digit_count")
         if digit_count > len(self.formation.components):
             raise TensorRuntimeError("digit_count exceeds component vocabulary")
         if self.formation.channel_count != 1:
             raise TensorRuntimeError("Digits tensor renderer requires one channel")
-        max_mark_count = max(
-            len(self.formation.components[component_index].marks)
-            for component_index in range(digit_count)
+        sample_addresses = _digits_sample_addresses(
+            seed=seed,
+            sample_indices=sample_indices,
+            cardinality=cardinality,
+            minimum_address=minimum_address,
         )
-        component_mark_counts: list[int] = []
-        component_mark_parameters: list[list[list[float]]] = []
-        component_control_points: list[list[list[list[float]]]] = []
-        for component_index in range(digit_count):
-            mark_parameters: list[list[float]] = []
-            control_points: list[list[list[float]]] = []
-            for mark in self.formation.components[component_index].marks:
-                if mark.channel != 0:
-                    raise TensorRuntimeError("Digits tensor renderer requires single-channel marks")
-                controls = _quadratic_control_points(mark)
-                mark_parameters.append([float(mark.value), float(mark.width)])
-                control_points.append([[point[0], point[1]] for point in controls])
-            component_mark_counts.append(len(mark_parameters))
-            while len(mark_parameters) < max_mark_count:
-                mark_parameters.append([0.0, 0.0])
-                control_points.append([[0.0, 0.0] for _ in range(3)])
-            component_mark_parameters.append(mark_parameters)
-            component_control_points.append(control_points)
-        if not max_mark_count:
-            return tensor_runtime_construct_tensor(
-                runtime,
-                recipe=TensorElementRecipe(
-                    shape=(sample_count, 1, height, width),
-                    dtype="float32",
-                    program=_constant_tensor_program(0.0),
-                ),
+        latents = tuple(
+            _inverse_digits_latent_from_address(
+                seed=seed,
+                sample_index=sample_indices[index],
+                sample_address=sample_address,
             )
-        return tensor_runtime_construct_tensor(
-            runtime,
-            recipe=TensorElementRecipe(
-                shape=(sample_count, 1, height, width),
-                dtype="float32",
-                program=_digits_tensor_program(
-                    seed=seed,
-                    sample_indices=sample_indices,
-                    cardinality=cardinality,
-                    minimum_address=minimum_address,
-                    digit_count=digit_count,
-                    transform_values=_digits_sample_transform_values(
-                        seed=seed,
-                        canvas_side=width,
-                        sample_indices=sample_indices,
-                        sample_addresses=_digits_sample_addresses(
-                            seed=seed,
-                            sample_indices=sample_indices,
-                            cardinality=cardinality,
-                            minimum_address=minimum_address,
-                        ),
-                        digit_count=digit_count,
-                        canonical_transform=(
-                            minimum_address == 0 and cardinality == digit_count
-                        ),
-                    ),
-                    component_mark_counts=tuple(component_mark_counts),
-                    component_mark_parameters=tuple(
-                        tuple(tuple(parameters) for parameters in component)
-                        for component in component_mark_parameters
-                    ),
-                    component_control_points=tuple(
-                        tuple(tuple(tuple(point) for point in mark) for mark in component)
-                        for component in component_control_points
-                    ),
-                    height=height,
-                    width=width,
-                ),
-            ),
+            for index, sample_address in enumerate(sample_addresses)
+        )
+        return render_inverse_digits(
+            runtime=runtime,
+            latents=latents,
+            canvas_side=width,
         )
 
     def distinguishable_state_log2_volume(
@@ -1312,9 +1470,8 @@ class Generator:
         return AxisAssignment(values=values)
 
     def _outcome_id(self, component_index: int) -> str:
-        if component_index >= len(self.manifest.outcome_space.outcomes):
-            raise ObservationGenerationError("component index is outside outcome space")
-        return self.manifest.outcome_space.outcomes[component_index].id
+        del component_index
+        return "inverse-observation"
 
     def _latent_coordinates(
         self,
@@ -1443,8 +1600,6 @@ class Generator:
                 width_axis=self.formation.width_axis,
                 height_axis=self.formation.height_axis,
             )
-        if runtime is not None and outcome_ids is None:
-            raise ObservationGenerationError("tensor generation requires outcome_ids")
         resolved_resolution_assignment = self._generation_resolution_assignment(
             sample_count=sample_count,
             seed=seed,
@@ -1457,7 +1612,7 @@ class Generator:
         )
         fields = None
         targets = None
-        if runtime is not None and outcome_ids is not None:
+        if runtime is not None:
             fields, targets = self._generate_tensors(
                 sample_shape=sample_shape,
                 seed=seed,
@@ -1466,7 +1621,7 @@ class Generator:
                 resolution_assignment=resolved_resolution_assignment,
                 volume_class=volume_class,
                 runtime=runtime,
-                outcome_ids=outcome_ids,
+                outcome_ids=tuple(outcome_ids or ()),
                 timing=timing,
                 timing_prefix=timing_prefix,
             )
@@ -1983,34 +2138,794 @@ def _constructed_variation_coordinate_record(
         },
     }
 
+def new_inverse_digits_secret(*, byte_count: int = 32) -> bytes:
+    """Return a physical-entropy secret for inverse-Digits evaluation batches."""
 
-def _digits_sample_transform_values(
+    if type(byte_count) is not int or byte_count < 16:
+        raise ObservationGenerationError("inverse digits secret must have at least 128 bits")
+    return os.urandom(byte_count)
+
+
+def sample_inverse_digits_observations(
     *,
-    seed: int,
-    canvas_side: int,
-    sample_indices: tuple[int, ...],
-    sample_addresses: tuple[int, ...],
-    digit_count: int,
-    canonical_transform: bool = False,
-) -> tuple[float, ...]:
-    return tuple(
-        coordinate / canvas_side
-        for sample_index, sample_address in zip(sample_indices, sample_addresses, strict=True)
-        for ordinal in (sample_address // digit_count,)
-        for coordinate in _digits_sample_transform_coordinates(
-            seed=seed,
-            sample_index=sample_index,
-            transform_ordinal=ordinal,
-            canvas_side=canvas_side,
-            canonical_transform=canonical_transform,
-        )
+    runtime: TensorRuntime,
+    secret: bytes,
+    sample_count: int,
+    canvas_side: int = _render_unit_side,
+    sample_indices: Sequence[int] | None = None,
+) -> InverseDigitsObservationBatch:
+    """Sample secret-seeded inverse-Digits observations without exposing latents."""
+
+    if len(secret) < 16:
+        raise ObservationGenerationError("inverse digits secret must have at least 128 bits")
+    if type(sample_count) is not int or sample_count < 1:
+        raise ObservationGenerationError("sample_count must be a positive integer")
+    if type(canvas_side) is not int or canvas_side < _render_unit_side:
+        raise ObservationGenerationError("canvas_side must be at least the render unit side")
+    indices = _sample_indices(sample_count=sample_count, sample_indices=sample_indices)
+    latents = tuple(
+        _inverse_digits_latent_from_secret(secret, sample_index=index)
+        for index in indices
+    )
+    observations = render_inverse_digits(
+        runtime=runtime,
+        latents=latents,
+        canvas_side=canvas_side,
+    )
+    return InverseDigitsObservationBatch(
+        observations=observations,
+        latents=latents,
+        canvas_side=canvas_side,
+        secret_digest=hashlib.sha256(secret).hexdigest(),
     )
 
 
-def _quadratic_control_points(
-    mark: ComponentMark,
+def render_inverse_digits(
+    *,
+    runtime: TensorRuntime,
+    latents: Sequence[InverseDigitsLatent],
+    canvas_side: int = _render_unit_side,
+) -> Any:
+    """Render inverse-Digits latents through the differentiable forward law."""
+
+    normalized_latents = tuple(latents)
+    if not normalized_latents:
+        raise ObservationGenerationError("inverse digits rendering requires latents")
+    if type(canvas_side) is not int or canvas_side < _render_unit_side:
+        raise ObservationGenerationError("canvas_side must be at least the render unit side")
+    backend = runtime.backend
+    device = _runtime_device(runtime)
+    identities = backend.tensor(
+        tuple(latent.identity for latent in normalized_latents),
+        dtype=backend.long,
+        device=device,
+    )
+    nuisance = backend.tensor(
+        tuple(latent.to_nuisance_tuple() for latent in normalized_latents),
+        dtype=backend.float32,
+        device=device,
+    )
+    return render_inverse_digits_tensor(
+        runtime,
+        identities=identities,
+        nuisance=nuisance,
+        canvas_side=canvas_side,
+    )
+
+
+def render_inverse_digits_tensor(
+    runtime: TensorRuntime,
+    *,
+    identities: Any,
+    nuisance: Any,
+    canvas_side: int,
+) -> Any:
+    """Render inverse-Digits latent tensors through the differentiable law."""
+
+    backend = runtime.backend
+    device = _runtime_device(runtime)
+    if type(canvas_side) is not int or canvas_side < _render_unit_side:
+        raise ObservationGenerationError("canvas_side must be at least the render unit side")
+    if len(tuple(identities.shape)) != 1:
+        raise ObservationGenerationError("identity tensor must have shape (batch,)")
+    if tuple(nuisance.shape) != (int(identities.shape[0]), _inverse_nuisance_dimension):
+        raise ObservationGenerationError(
+            "nuisance tensor must have shape "
+            f"(batch, {_inverse_nuisance_dimension})"
+        )
+    mark_counts, control_points = _inverse_digit_component_tensors(runtime)
+    identities = identities.to(device=device, dtype=backend.long)
+    nuisance = nuisance.to(device=device, dtype=backend.float32)
+    batch_size = int(identities.shape[0])
+    x_center = (
+        backend.arange(canvas_side, dtype=nuisance.dtype, device=device).reshape(
+            1,
+            1,
+            1,
+            canvas_side,
+        )
+        + 0.5
+    ) / float(canvas_side)
+    y_center = (
+        backend.arange(canvas_side, dtype=nuisance.dtype, device=device).reshape(
+            1,
+            1,
+            canvas_side,
+            1,
+        )
+        + 0.5
+    ) / float(canvas_side)
+    segment_start_t = backend.linspace(
+        0.0,
+        1.0 - (1.0 / float(_batch_render_curve_sample_count - 1)),
+        _batch_render_curve_sample_count - 1,
+        dtype=nuisance.dtype,
+        device=device,
+    )
+    value = backend.zeros(
+        (batch_size, 1, canvas_side, canvas_side),
+        dtype=nuisance.dtype,
+        device=device,
+    )
+    max_mark_count = int(control_points.shape[1])
+    selected_mark_counts = mark_counts[identities]
+    x_translation = nuisance[:, 0].reshape((-1, 1))
+    y_translation = nuisance[:, 1].reshape((-1, 1))
+    scale = nuisance[:, 2].reshape((-1, 1))
+    shear = nuisance[:, 3].reshape((-1, 1))
+    stroke_width = nuisance[:, 4].reshape((-1, 1, 1, 1))
+    deformation = nuisance[:, _inverse_affine_nuisance_dimension:]
+    base_width = (3.0 / float(canvas_side)) * stroke_width
+    for mark_slot in range(max_mark_count):
+        active_mark = mark_slot < selected_mark_counts.reshape((-1, 1, 1, 1))
+        selected_controls = control_points[identities, mark_slot, :, :].to(
+            dtype=nuisance.dtype
+        )
+        raw_start = _tensor_quadratic_points(selected_controls, segment_start_t)
+        segment_end_t = segment_start_t + (1.0 / float(_batch_render_curve_sample_count - 1))
+        raw_end = _tensor_quadratic_points(selected_controls, segment_end_t)
+        raw_start = _inverse_digits_deformed_points(
+            runtime=runtime,
+            points=raw_start,
+            deformation=deformation,
+        )
+        raw_end = _inverse_digits_deformed_points(
+            runtime=runtime,
+            points=raw_end,
+            deformation=deformation,
+        )
+        raw_sx = raw_start[:, :, 0]
+        raw_sy = raw_start[:, :, 1]
+        raw_ex = raw_end[:, :, 0]
+        raw_ey = raw_end[:, :, 1]
+        sx = 0.5 + scale * (raw_sx - 0.5) + shear * (raw_sy - 0.5) + x_translation
+        sy = 0.5 + scale * (raw_sy - 0.5) + y_translation
+        ex = 0.5 + scale * (raw_ex - 0.5) + shear * (raw_ey - 0.5) + x_translation
+        ey = 0.5 + scale * (raw_ey - 0.5) + y_translation
+        sx = sx.reshape((batch_size, -1, 1, 1))
+        sy = sy.reshape((batch_size, -1, 1, 1))
+        ex = ex.reshape((batch_size, -1, 1, 1))
+        ey = ey.reshape((batch_size, -1, 1, 1))
+        dx = ex - sx
+        dy = ey - sy
+        length_squared = dx * dx + dy * dy
+        safe_length_squared = length_squared.where(
+            length_squared != 0.0,
+            length_squared * 0.0 + 1.0,
+        )
+        segment_t = ((x_center - sx) * dx + (y_center - sy) * dy) / safe_length_squared
+        segment_t = segment_t.clamp(0.0, 1.0)
+        closest_x = sx + segment_t * dx
+        closest_y = sy + segment_t * dy
+        distance_squared = (
+            (x_center - closest_x) * (x_center - closest_x)
+            + (y_center - closest_y) * (y_center - closest_y)
+        )
+        distance_squared = distance_squared.min(dim=1).values.reshape(
+            (batch_size, 1, canvas_side, canvas_side)
+        )
+        contribution = (-distance_squared / (base_width * base_width + 1.0e-8)).exp()
+        value = value.maximum(active_mark * contribution)
+    return value.clamp(0.0, 1.0)
+
+
+def inverse_digits_static_certification(
+    *,
+    runtime: TensorRuntime,
+    recovered_latent: InverseDigitsLatent,
+    observation: Any,
+    canvas_side: int,
+    refinement_sides: Sequence[int] = (_render_unit_side, 2 * _render_unit_side),
+) -> StaticMapCertification:
+    """Certify latent precision for a recovered inverse-Digits latent."""
+
+    backend = runtime.backend
+    device = _runtime_device(runtime)
+    identity = backend.tensor([recovered_latent.identity], dtype=backend.long, device=device)
+    nuisance = backend.tensor(
+        [recovered_latent.to_nuisance_tuple()],
+        dtype=backend.float32,
+        device=device,
+    )
+    prediction = render_inverse_digits_tensor(
+        runtime,
+        identities=identity,
+        nuisance=nuisance,
+        canvas_side=canvas_side,
+    )
+    residual_norm = float(
+        tensor_value_to_host_values(
+            (prediction - observation.reshape(prediction.shape)).pow(2).mean().sqrt()
+        )[0]
+    )
+    ladder_sides = tuple(int(side) for side in refinement_sides)
+    spectra = tuple(
+        _inverse_digits_nuisance_spectrum(
+            runtime=runtime,
+            identity=recovered_latent.identity,
+            nuisance=recovered_latent.to_nuisance_tuple(),
+            canvas_side=side,
+        )
+        for side in ladder_sides
+    )
+    sigma_min_ladder = tuple(
+        _inverse_digits_observable_sigma_min(sigmas) for sigmas, _extents in spectra
+    )
+    sigma_max_ladder = tuple(
+        (max(sigmas) if sigmas else 0.0) for sigmas, _extents in spectra
+    )
+    finest_sigmas, finest_extents = spectra[-1]
+    sigma_min = sigma_min_ladder[-1]
+    sigma_max = sigma_max_ladder[-1]
+    # Conditioning stability tracks the DOMINANT observable direction across refinement
+    # (sigma_max). The least-observable near-floor deformation modes are refused per-mode
+    # in the bit count, not treated as a degeneracy of the whole map -- a degenerate latent
+    # (e.g. zero scale) instead collapses sigma_max itself.
+    conditioning_stability = (
+        math.inf
+        if any(value <= _static_sigma_floor for value in sigma_max_ladder)
+        else max(sigma_max_ladder) / min(sigma_max_ladder)
+    )
+    refused = (
+        sigma_max <= _static_sigma_floor
+        or not math.isfinite(conditioning_stability)
+        or conditioning_stability > _static_conditioning_refusal_ratio
+    )
+    certified_epsilon = (
+        math.inf
+        if refused
+        else residual_certified_epsilon(
+            residual_norm,
+            1.0 / max(sigma_min, _static_sigma_floor),
+        )
+    )
+    observable_mode_count = sum(1 for value in finest_sigmas if value > _static_sigma_floor)
+    nuisance_bits = (
+        0.0
+        if refused
+        else _inverse_digits_nuisance_bits(
+            sigma_values=finest_sigmas,
+            extent_values=finest_extents,
+            residual_norm=residual_norm,
+        )
+    )
+    return StaticMapCertification(
+        certified_epsilon=certified_epsilon,
+        residual_norm=residual_norm,
+        sigma_min=sigma_min,
+        sigma_min_ladder=sigma_min_ladder,
+        conditioning_stability=conditioning_stability,
+        certification_status="refused-conditioning-unstable" if refused else "certified",
+        nuisance_bits=nuisance_bits,
+        observable_mode_count=observable_mode_count,
+        sigma_spectrum=finest_sigmas,
+    )
+
+
+def inverse_digits_validated_bits(
+    *,
+    runtime: TensorRuntime,
+    recovered_latent: InverseDigitsLatent,
+    certification: StaticMapCertification,
+    canvas_side: int,
+) -> InverseDigitsValidatedBits:
+    """Validated bits = image-space identity bits + per-mode certified nuisance bits.
+
+    Identity distinguishability is measured in image space at the reconstruction
+    residual; the nuisance bits are the per-direction count from the certification
+    (unobservable modes already refused). A non-certified (degenerate) certificate
+    earns zero.
+    """
+
+    if certification.certification_status != "certified":
+        return InverseDigitsValidatedBits(
+            bits=0.0,
+            identity_bits=0.0,
+            nuisance_bits=0.0,
+            distinguishable_identity_count=1,
+            certified_epsilon=certification.certified_epsilon,
+        )
+    image_epsilon = max(certification.residual_norm, math.ulp(1.0))
+    identity_count = _distinguishable_identity_count(
+        runtime=runtime,
+        recovered_latent=recovered_latent,
+        image_epsilon=image_epsilon,
+        canvas_side=canvas_side,
+    )
+    identity_bits = math.log2(identity_count)
+    nuisance_bits = certification.nuisance_bits
+    return InverseDigitsValidatedBits(
+        bits=identity_bits + nuisance_bits,
+        identity_bits=identity_bits,
+        nuisance_bits=nuisance_bits,
+        distinguishable_identity_count=identity_count,
+        certified_epsilon=certification.certified_epsilon,
+    )
+
+
+def inverse_digits_reconstruction(
+    *,
+    runtime: TensorRuntime,
+    identity_logits: Any,
+    nuisance: Any,
+    canvas_side: int,
+) -> Any:
+    """Render a differentiable identity-mixture reconstruction from inverse outputs."""
+
+    backend = runtime.backend
+    device = _runtime_device(runtime)
+    if len(tuple(identity_logits.shape)) != 2 or int(identity_logits.shape[1]) != 10:
+        raise ObservationGenerationError("identity logits must have shape (batch, 10)")
+    if tuple(nuisance.shape) != (
+        int(identity_logits.shape[0]),
+        _inverse_nuisance_dimension,
+    ):
+        raise ObservationGenerationError(
+            "nuisance tensor must have shape "
+            f"(batch, {_inverse_nuisance_dimension})"
+        )
+    batch_size = int(identity_logits.shape[0])
+    identities = backend.arange(10, dtype=backend.long, device=device).repeat(batch_size)
+    repeated_nuisance = nuisance.reshape(
+        batch_size,
+        1,
+        _inverse_nuisance_dimension,
+    ).repeat(1, 10, 1).reshape(
+        batch_size * 10,
+        _inverse_nuisance_dimension,
+    )
+    renders = render_inverse_digits_tensor(
+        runtime,
+        identities=identities,
+        nuisance=repeated_nuisance,
+        canvas_side=canvas_side,
+    ).reshape(batch_size, 10, 1, canvas_side, canvas_side)
+    weights = backend.softmax(identity_logits, dim=1).reshape(batch_size, 10, 1, 1, 1)
+    return (weights * renders).sum(dim=1)
+
+
+def inverse_digits_reconstruction_loss(
+    *,
+    runtime: TensorRuntime,
+    identity_logits: Any,
+    nuisance: Any,
+    observations: Any,
+    canvas_side: int,
+) -> Any:
+    """Return the label-free inverse-Digits reconstruction residual."""
+
+    reconstruction = inverse_digits_reconstruction(
+        runtime=runtime,
+        identity_logits=identity_logits,
+        nuisance=nuisance,
+        canvas_side=canvas_side,
+    )
+    return (reconstruction - observations).pow(2).mean()
+
+
+def inverse_digits_latent_vector_reconstruction_loss(
+    *,
+    runtime: TensorRuntime,
+    latent_vector: Any,
+    observations: Any,
+    canvas_side: int,
+) -> Any:
+    """Return reconstruction loss for a submitted inverse latent-vector output."""
+
+    if (
+        len(tuple(latent_vector.shape)) != 2
+        or int(latent_vector.shape[1]) != _inverse_latent_dimension
+    ):
+        raise ObservationGenerationError(
+            "inverse latent vector must have shape "
+            f"(batch, {_inverse_latent_dimension})"
+        )
+    return inverse_digits_reconstruction_loss(
+        runtime=runtime,
+        identity_logits=latent_vector[:, :10],
+        nuisance=latent_vector[:, _volume_class_digit_count:],
+        observations=observations,
+        canvas_side=canvas_side,
+    )
+
+
+def _inverse_digits_ambient_certified_bits(request: Any) -> Any:
+    runtime = request.runtime
+    predictions = request.predictions
+    targets = request.targets
+    if (
+        len(tuple(predictions.shape)) != 2
+        or int(predictions.shape[1]) != _inverse_latent_dimension
+    ):
+        raise ValueError(
+            "inverse Digits predictions must have shape "
+            f"(batch, {_inverse_latent_dimension})"
+        )
+    if len(tuple(targets.shape)) != 4 or int(targets.shape[1]) != 1:
+        raise ValueError("inverse Digits targets must have shape (batch, 1, side, side)")
+    side = int(targets.shape[-1])
+    if int(targets.shape[-2]) != side:
+        raise ValueError("inverse Digits targets must be square images")
+
+    values: list[float] = []
+    diagnostics: list[Mapping[str, object]] = []
+    detached_predictions = predictions.detach()
+    for sample_index in range(int(predictions.shape[0])):
+        row = detached_predictions[sample_index]
+        identity = int(tensor_value_to_host_values(row[:10].argmax())[0])
+        nuisance_values = tuple(
+            float(value)
+            for value in tensor_value_to_host_values(row[_volume_class_digit_count:])
+        )
+        try:
+            recovered_latent = _inverse_digits_latent_from_nuisance_vector(
+                identity,
+                nuisance_values,
+            )
+            certification = inverse_digits_static_certification(
+                runtime=runtime,
+                recovered_latent=recovered_latent,
+                observation=targets[sample_index : sample_index + 1],
+                canvas_side=side,
+                refinement_sides=(side, max(side + 1, side * 2)),
+            )
+            if certification.certification_status != "certified":
+                values.append(0.0)
+                diagnostics.append(
+                    {
+                        "kind": "digits-inverse-certified-diagnostics",
+                        "sample_index": sample_index,
+                        "certification_status": certification.certification_status,
+                        "bits": 0.0,
+                        "residual_norm": certification.residual_norm,
+                        "sigma_min": certification.sigma_min,
+                    }
+                )
+                continue
+            bits = inverse_digits_validated_bits(
+                runtime=runtime,
+                recovered_latent=recovered_latent,
+                certification=certification,
+                canvas_side=side,
+            )
+            values.append(bits.bits)
+            diagnostics.append(
+                {
+                    "kind": "digits-inverse-certified-diagnostics",
+                    "sample_index": sample_index,
+                    "certification_status": certification.certification_status,
+                    "bits": bits.bits,
+                    "identity_bits": bits.identity_bits,
+                    "nuisance_bits": bits.nuisance_bits,
+                    "distinguishable_identity_count": bits.distinguishable_identity_count,
+                    "certified_epsilon": certification.certified_epsilon,
+                    "residual_norm": certification.residual_norm,
+                    "sigma_min": certification.sigma_min,
+                    "observable_mode_count": certification.observable_mode_count,
+                    "conditioning_stability": certification.conditioning_stability,
+                }
+            )
+        except (ObservationGenerationError, ValueError):
+            values.append(0.0)
+            diagnostics.append(
+                {
+                    "kind": "digits-inverse-certified-diagnostics",
+                    "sample_index": sample_index,
+                    "certification_status": "refused-invalid-latent",
+                    "bits": 0.0,
+                }
+            )
+    result = predictions.new_tensor(values)
+    result.leibniz_competence_diagnostics = tuple(diagnostics)
+    return result
+
+
+def _distinguishable_identity_count(
+    *,
+    runtime: TensorRuntime,
+    recovered_latent: InverseDigitsLatent,
+    image_epsilon: float,
+    canvas_side: int,
+) -> int:
+    backend = runtime.backend
+    device = _runtime_device(runtime)
+    identities = backend.arange(_volume_class_digit_count, dtype=backend.long, device=device)
+    nuisance = backend.tensor(
+        [recovered_latent.to_nuisance_tuple()] * _volume_class_digit_count,
+        dtype=backend.float32,
+        device=device,
+    )
+    renders = render_inverse_digits_tensor(
+        runtime,
+        identities=identities,
+        nuisance=nuisance,
+        canvas_side=canvas_side,
+    )
+    recovered = renders[recovered_latent.identity].reshape(1, -1)
+    distances = (renders.reshape(_volume_class_digit_count, -1) - recovered).pow(2).mean(
+        dim=1
+    ).sqrt()
+    separated = int(tensor_value_to_host_values((distances > float(image_epsilon)).sum())[0])
+    return max(1, separated + 1)
+
+
+def _inverse_digits_nuisance_spectrum(
+    *,
+    runtime: TensorRuntime,
+    identity: int,
+    nuisance: tuple[float, ...],
+    canvas_side: int,
+) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    """Return per-direction (singular value, prior extent) of the renderer Jacobian.
+
+    The singular values measure how observable each nuisance direction is in the
+    per-pixel-normalized image; the prior extent is the prior box projected onto that
+    direction. Together they give a per-mode certified precision and bit count, so the
+    unobservable high-frequency deformation modes are refused rather than counted.
+    """
+
+    backend = runtime.backend
+    device = _runtime_device(runtime)
+    identity_tensor = backend.tensor([identity], dtype=backend.long, device=device)
+    nuisance_tensor = backend.tensor(
+        nuisance,
+        dtype=backend.float32,
+        device=device,
+        requires_grad=True,
+    )
+
+    def render_flat(nuisance_value: Any) -> Any:
+        rendered = render_inverse_digits_tensor(
+            runtime,
+            identities=identity_tensor,
+            nuisance=nuisance_value.reshape(1, _inverse_nuisance_dimension),
+            canvas_side=canvas_side,
+        )
+        return rendered.reshape(-1) / math.sqrt(float(rendered.numel()))
+
+    basis = backend.eye(_inverse_nuisance_dimension, dtype=nuisance_tensor.dtype, device=device)
+    columns: list[Any] = []
+    for axis in range(_inverse_nuisance_dimension):
+        _value, jvp = backend.autograd.functional.jvp(
+            render_flat,
+            nuisance_tensor,
+            basis[axis],
+            create_graph=False,
+            strict=True,
+        )
+        columns.append(jvp)
+    jacobian_columns = backend.stack(columns, dim=1)
+    gram = jacobian_columns.transpose(0, 1).matmul(jacobian_columns)
+    eigenvalues, eigenvectors = backend.linalg.eigh(gram)
+    singular_values = eigenvalues.clamp_min(0.0).sqrt()
+    ranges = backend.tensor(
+        _inverse_nuisance_axis_ranges,
+        dtype=eigenvectors.dtype,
+        device=device,
+    ).reshape((-1, 1))
+    # prior extent along singular direction i: sqrt(sum_a V[a,i]^2 * range_a^2)
+    extents = ((eigenvectors * eigenvectors) * (ranges * ranges)).sum(dim=0).sqrt()
+    sigma_values = tuple(float(v) for v in tensor_value_to_host_values(singular_values))
+    extent_values = tuple(float(v) for v in tensor_value_to_host_values(extents))
+    return sigma_values, extent_values
+
+
+def _inverse_digits_nuisance_bits(
+    *,
+    sigma_values: tuple[float, ...],
+    extent_values: tuple[float, ...],
+    residual_norm: float,
+) -> float:
+    """Per-direction validated bits: only directions observable above the floor count."""
+
+    safe_residual = max(residual_norm, math.ulp(1.0))
+    total = 0.0
+    for sigma, extent in zip(sigma_values, extent_values, strict=True):
+        if sigma <= _static_sigma_floor:
+            continue
+        total += max(0.0, math.log2(extent * sigma / safe_residual))
+    return total
+
+
+def _inverse_digits_observable_sigma_min(sigma_values: tuple[float, ...]) -> float:
+    observable = tuple(value for value in sigma_values if value > _static_sigma_floor)
+    return min(observable) if observable else 0.0
+
+
+def _inverse_digits_latent_from_secret(
+    secret: bytes,
+    *,
+    sample_index: int,
+) -> InverseDigitsLatent:
+    digest = hashlib.sha256(
+        b"leibniz-digits-inverse-latent-v1:" + secret + sample_index.to_bytes(8, "big")
+    ).digest()
+    identity = digest[0] % _volume_class_digit_count
+    uniforms = tuple(
+        _unit_interval_from_bytes(digest[1 + offset * 4 : 5 + offset * 4])
+        for offset in range(5)
+    )
+    deformation = _inverse_digits_deformation_from_key(
+        b"secret:" + secret + sample_index.to_bytes(8, "big")
+    )
+    return InverseDigitsLatent(
+        identity=identity,
+        x_translation=_affine_interval(uniforms[0], -0.16, 0.16),
+        y_translation=_affine_interval(uniforms[1], -0.16, 0.16),
+        scale=_affine_interval(uniforms[2], 0.72, 1.18),
+        shear=_affine_interval(uniforms[3], -0.18, 0.18),
+        stroke_width=_affine_interval(uniforms[4], 0.75, 1.35),
+        deformation=deformation,
+    )
+
+
+def _inverse_digits_latent_from_nuisance_vector(
+    identity: int,
+    nuisance: Sequence[float],
+) -> InverseDigitsLatent:
+    values = tuple(float(value) for value in nuisance)
+    if len(values) != _inverse_nuisance_dimension:
+        raise ObservationGenerationError(
+            "inverse digit nuisance vector has the wrong dimension"
+        )
+    return InverseDigitsLatent(
+        identity=identity,
+        x_translation=values[0],
+        y_translation=values[1],
+        scale=values[2],
+        shear=values[3],
+        stroke_width=values[4],
+        deformation=values[_inverse_affine_nuisance_dimension:],
+    )
+
+
+def _inverse_digits_latent_from_address(
+    *,
+    seed: int,
+    sample_index: int,
+    sample_address: int,
+) -> InverseDigitsLatent:
+    component_index, transform_ordinal = _digits_state_coordinate(
+        sample_address=sample_address,
+    )
+    tx, ty, scale_level = _transform_cell_for_ordinal(transform_ordinal)
+    key = (
+        b"leibniz-digits-inverse-address-v1:"
+        + seed.to_bytes(8, "big", signed=False)
+        + sample_index.to_bytes(8, "big", signed=False)
+        + sample_address.to_bytes(8, "big", signed=False)
+    )
+    digest = hashlib.sha256(key).digest()
+    shear_unit = _unit_interval_from_bytes(digest[0:4])
+    stroke_unit = _unit_interval_from_bytes(digest[4:8])
+    return InverseDigitsLatent(
+        identity=component_index,
+        x_translation=float(tx) * _translation_step_pixels / float(_render_unit_side),
+        y_translation=float(ty) * _translation_step_pixels / float(_render_unit_side),
+        scale=1.0 + float(scale_level) * _scale_ratio_per_level,
+        shear=_affine_interval(shear_unit, -0.18, 0.18),
+        stroke_width=_affine_interval(stroke_unit, 0.75, 1.35),
+        deformation=_inverse_digits_deformation_from_key(key),
+    )
+
+
+def _inverse_digits_deformation_from_key(key: bytes) -> tuple[float, ...]:
+    raw = hashlib.shake_256(key + b":deformation").digest(
+        4 * _inverse_deformation_dimension
+    )
+    coefficients: list[float] = []
+    for component_offset in range(2):
+        for mode_index, (x_frequency, y_frequency) in enumerate(_inverse_deformation_modes):
+            offset = 4 * (
+                component_offset * _inverse_deformation_mode_count + mode_index
+            )
+            unit = _unit_interval_from_bytes(raw[offset : offset + 4])
+            amplitude = _inverse_deformation_amplitude / float(
+                1 + x_frequency + y_frequency
+            )
+            coefficients.append(_affine_interval(unit, -amplitude, amplitude))
+    return tuple(coefficients)
+
+
+def _unit_interval_from_bytes(raw: bytes) -> float:
+    return int.from_bytes(raw, "big") / float(2 ** (8 * len(raw)))
+
+
+def _affine_interval(value: float, lower: float, upper: float) -> float:
+    return lower + value * (upper - lower)
+
+
+def _inverse_digit_component_tensors(runtime: TensorRuntime) -> tuple[Any, Any]:
+    backend = runtime.backend
+    device = _runtime_device(runtime)
+    max_mark_count = max(len(strokes) for strokes in _digit_strokes)
+    mark_counts: list[int] = []
+    component_control_points: list[list[list[list[float]]]] = []
+    for strokes in _digit_strokes:
+        control_points: list[list[list[float]]] = []
+        for points in strokes:
+            controls = _curve_control_points(points)
+            control_points.append([[point[0], point[1]] for point in controls])
+        mark_counts.append(len(control_points))
+        while len(control_points) < max_mark_count:
+            control_points.append([[0.0, 0.0] for _ in range(3)])
+        component_control_points.append(control_points)
+    return (
+        backend.tensor(mark_counts, dtype=backend.long, device=device),
+        backend.tensor(component_control_points, dtype=backend.float32, device=device),
+    )
+
+
+def _tensor_quadratic_points(controls: Any, t: Any) -> Any:
+    t_values = t.reshape((1, -1, 1))
+    one_minus_t = 1.0 - t_values
+    return (
+        one_minus_t * one_minus_t * controls[:, 0:1, :]
+        + 2.0 * one_minus_t * t_values * controls[:, 1:2, :]
+        + t_values * t_values * controls[:, 2:3, :]
+    )
+
+
+def _inverse_digits_deformed_points(
+    *,
+    runtime: TensorRuntime,
+    points: Any,
+    deformation: Any,
+) -> Any:
+    backend = runtime.backend
+    device = _runtime_device(runtime)
+    if int(deformation.shape[1]) != _inverse_deformation_dimension:
+        raise ObservationGenerationError(
+            "deformation tensor must have the declared inverse deformation dimension"
+        )
+    if _inverse_deformation_dimension == 0:
+        return points
+    modes = backend.tensor(
+        _inverse_deformation_modes,
+        dtype=points.dtype,
+        device=device,
+    )
+    x_frequency = modes[:, 0].reshape((1, 1, -1))
+    y_frequency = modes[:, 1].reshape((1, 1, -1))
+    x = points[:, :, 0].unsqueeze(-1)
+    y = points[:, :, 1].unsqueeze(-1)
+    basis = backend.cos(math.pi * x_frequency * x) * backend.cos(
+        math.pi * y_frequency * y
+    )
+    x_coefficients = deformation[:, :_inverse_deformation_mode_count].reshape(
+        (-1, 1, _inverse_deformation_mode_count)
+    )
+    y_coefficients = deformation[:, _inverse_deformation_mode_count:].reshape(
+        (-1, 1, _inverse_deformation_mode_count)
+    )
+    displaced_x = points[:, :, 0] + (basis * x_coefficients).sum(dim=2)
+    displaced_y = points[:, :, 1] + (basis * y_coefficients).sum(dim=2)
+    return backend.stack((displaced_x, displaced_y), dim=2)
+
+
+def _curve_control_points(
+    points: _CurvePoints,
 ) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
-    points = mark.control_points
     if len(points) == 3:
         return (points[0], points[1], points[2])
     if len(points) == 2:
@@ -2019,308 +2934,7 @@ def _quadratic_control_points(
             (points[0][1] + points[1][1]) / 2.0,
         )
         return (points[0], midpoint, points[1])
-    raise TensorRuntimeError("Digits marks must be linear or quadratic curves")
-
-
-def _quadratic_tensor_point(
-    controls: Any,
-    component_index: Any,
-    mark_slot: int,
-    coordinate_index: int,
-    t: Any,
-) -> Any:
-    t_by_segment = t.reshape((1, -1))
-    one_minus_t = 1.0 - t_by_segment
-    start = controls[component_index, mark_slot, 0, coordinate_index].reshape((-1, 1))
-    control = controls[component_index, mark_slot, 1, coordinate_index].reshape((-1, 1))
-    end = controls[component_index, mark_slot, 2, coordinate_index].reshape((-1, 1))
-    return (
-        one_minus_t * one_minus_t * start
-        + 2.0 * one_minus_t * t_by_segment * control
-        + t_by_segment * t_by_segment * end
-    )
-
-
-def _constant_tensor_program(value: float) -> TensorBatchProgram:
-    def element_function(coordinates: tuple[Any, ...], *, ops: Any) -> Any:
-        return ops.broadcast_zeros(coordinates) + value
-
-    return TensorBatchProgram(
-        kernel=element_function,
-        parameters={},
-        cache_key=("constant", value),
-    )
-
-
-def _target_tensor_program(
-    *,
-    seed: int,
-    sample_indices: tuple[int, ...],
-    cardinality: int,
-    minimum_address: int,
-    component_to_outcome: tuple[int, ...],
-    outcome_count: int,
-) -> TensorBatchProgram:
-    sample_addresses = _digits_sample_addresses(
-        seed=seed,
-        sample_indices=sample_indices,
-        cardinality=cardinality,
-        minimum_address=minimum_address,
-    )
-
-    def element_function(
-        coordinates: tuple[Any, ...],
-        *,
-        sample_address_values: Any,
-        component_to_outcome: Any,
-    ) -> Any:
-        if len(coordinates) == 1:
-            outcome_index = coordinates[0]
-            sample_axis_index = outcome_index[0] * 0
-        else:
-            sample_axis_index, outcome_index = coordinates
-        sample_address = sample_address_values[sample_axis_index]
-        component_index = sample_address.remainder(len(component_to_outcome))
-        target_index = component_to_outcome[component_index]
-        return (target_index.reshape((-1, 1)) == outcome_index.reshape((1, -1))).to(
-            dtype=target_index.dtype
-        )
-
-    return TensorBatchProgram(
-        kernel=element_function,
-        parameters={
-            "sample_address_values": TensorElementParameter(
-                dtype="int64",
-                shape=(len(sample_addresses),),
-                values=sample_addresses,
-                dynamic_axes=(0,),
-            ),
-            "component_to_outcome": TensorElementParameter(
-                dtype="int64",
-                shape=(len(component_to_outcome),),
-                values=component_to_outcome,
-            ),
-        },
-        cache_key=("target", outcome_count),
-    )
-
-
-def _digits_tensor_program(
-    *,
-    seed: int,
-    sample_indices: tuple[int, ...],
-    cardinality: int,
-    minimum_address: int,
-    digit_count: int,
-    transform_values: tuple[float, ...],
-    component_mark_counts: tuple[int, ...],
-    component_mark_parameters: tuple[tuple[tuple[float, ...], ...], ...],
-    component_control_points: tuple[tuple[tuple[tuple[float, ...], ...], ...], ...],
-    height: int,
-    width: int,
-) -> TensorBatchProgram:
-    component_count = len(component_mark_counts)
-    max_mark_count = len(component_mark_parameters[0]) if component_count else 0
-    mark_parameter_count = 2
-    control_point_count = 3
-    control_coordinate_count = 2
-    sample_addresses = _digits_sample_addresses(
-        seed=seed,
-        sample_indices=sample_indices,
-        cardinality=cardinality,
-        minimum_address=minimum_address,
-    )
-
-    def element_function(
-        coordinates: tuple[Any, ...],
-        *,
-        ops: Any,
-        sample_address_values: Any,
-        transform_values: Any,
-        component_mark_counts: Any,
-        component_mark_parameters: Any,
-        component_control_points: Any,
-        segment_start_t: Any,
-        image_height: Any,
-        image_width: Any,
-    ) -> Any:
-        sample_axis_index, channel_index, y_index, x_index = coordinates
-        sample_address = sample_address_values[sample_axis_index]
-        component_index = sample_address.remainder(digit_count)
-        x_center = x_index.reshape((1, 1, 1, -1)) + 0.5
-        y_center = y_index.reshape((1, 1, -1, 1)) + 0.5
-        # Diagonal affine: a digit placed at a centre-relative offset and scale.
-        # Rotation and shear are removed, so the off-diagonal terms are zero.
-        scale = transform_values[sample_axis_index, 2].reshape((-1, 1))
-        x_translation = transform_values[sample_axis_index, 0].reshape((-1, 1))
-        y_translation = transform_values[sample_axis_index, 1].reshape((-1, 1))
-        m00 = scale
-        m02 = x_translation
-        m11 = scale
-        m12 = y_translation
-        # Stroke width tracks the physical digit footprint (canvas-independent),
-        # not the canvas-normalized scale, so a digit renders with identical
-        # strokes whatever size canvas frames it.
-        width_scale = scale * image_width / _render_unit_side
-        value = ops.broadcast_zeros(coordinates)
-        active_channel = channel_index.reshape((1, -1, 1, 1)) == 0
-        mark_count = component_mark_counts[component_index]
-        for mark_slot in range(max_mark_count):
-            active_mark = active_channel & (
-                mark_slot < mark_count.reshape((-1, 1, 1, 1))
-            )
-            segment_end_t = segment_start_t + (
-                1.0 / float(_batch_render_curve_sample_count - 1)
-            )
-            raw_sx = _quadratic_tensor_point(
-                component_control_points,
-                component_index,
-                mark_slot,
-                0,
-                segment_start_t,
-            )
-            raw_sy = _quadratic_tensor_point(
-                component_control_points,
-                component_index,
-                mark_slot,
-                1,
-                segment_start_t,
-            )
-            raw_ex = _quadratic_tensor_point(
-                component_control_points,
-                component_index,
-                mark_slot,
-                0,
-                segment_end_t,
-            )
-            raw_ey = _quadratic_tensor_point(
-                component_control_points,
-                component_index,
-                mark_slot,
-                1,
-                segment_end_t,
-            )
-            sx = (0.5 + m00 * (raw_sx - 0.5) + m02) * image_width
-            sy = (0.5 + m11 * (raw_sy - 0.5) + m12) * image_height
-            ex = (0.5 + m00 * (raw_ex - 0.5) + m02) * image_width
-            ey = (0.5 + m11 * (raw_ey - 0.5) + m12) * image_height
-            sx = sx.reshape((sx.shape[0], sx.shape[1], 1, 1))
-            sy = sy.reshape((sy.shape[0], sy.shape[1], 1, 1))
-            ex = ex.reshape((ex.shape[0], ex.shape[1], 1, 1))
-            ey = ey.reshape((ey.shape[0], ey.shape[1], 1, 1))
-            dx = ex - sx
-            dy = ey - sy
-            length_squared = dx * dx + dy * dy
-            safe_length_squared = length_squared.where(
-                length_squared != 0.0,
-                length_squared * 0.0 + 1.0,
-            )
-            segment_t = ((x_center - sx) * dx + (y_center - sy) * dy) / safe_length_squared
-            segment_t = segment_t.clamp(0.0, 1.0)
-            closest_x = sx + segment_t * dx
-            closest_y = sy + segment_t * dy
-            segment_distance_squared = (
-                (x_center - closest_x) * (x_center - closest_x)
-                + (y_center - closest_y) * (y_center - closest_y)
-            )
-            point_distance_squared = (
-                (x_center - sx) * (x_center - sx)
-                + (y_center - sy) * (y_center - sy)
-            )
-            segment_distance_squared = segment_distance_squared.where(
-                length_squared != 0.0,
-                point_distance_squared,
-            )
-            distance_squared = segment_distance_squared.min(dim=1).values.reshape(
-                (-1, 1, y_index.shape[0], x_index.shape[0])
-            )
-            mark_width = component_mark_parameters[component_index, mark_slot, 1].reshape(
-                (-1, 1, 1, 1)
-            )
-            width_scale_field = width_scale.reshape((-1, 1, 1, 1))
-            threshold = (width_scale_field * mark_width / 2.0) * (
-                width_scale_field * mark_width / 2.0
-            )
-            contribution = (
-                active_mark & (distance_squared <= threshold)
-            ) * component_mark_parameters[component_index, mark_slot, 0].reshape(
-                (-1, 1, 1, 1)
-            )
-            value = value.maximum(contribution)
-        return value
-
-    return TensorBatchProgram(
-        kernel=element_function,
-        parameters={
-            "sample_address_values": TensorElementParameter(
-                dtype="int64",
-                shape=(len(sample_addresses),),
-                values=sample_addresses,
-                dynamic_axes=(0,),
-            ),
-            "transform_values": TensorElementParameter(
-                dtype="float32",
-                shape=(len(sample_addresses), 3),
-                values=transform_values,
-                dynamic_axes=(0,),
-            ),
-            "component_mark_counts": TensorElementParameter(
-                dtype="int64",
-                shape=(component_count,),
-                values=component_mark_counts,
-            ),
-            "component_mark_parameters": TensorElementParameter(
-                dtype="float32",
-                shape=(component_count, max_mark_count, mark_parameter_count),
-                values=tuple(
-                    value
-                    for component in component_mark_parameters
-                    for mark in component
-                    for value in mark
-                ),
-            ),
-            "component_control_points": TensorElementParameter(
-                dtype="float32",
-                shape=(
-                    component_count,
-                    max_mark_count,
-                    control_point_count,
-                    control_coordinate_count,
-                ),
-                values=tuple(
-                    value
-                    for component in component_control_points
-                    for mark in component
-                    for point in mark
-                    for value in point
-                ),
-            ),
-            "segment_start_t": TensorElementParameter(
-                dtype="float32",
-                shape=(_batch_render_curve_sample_count - 1,),
-                values=tuple(
-                    index / float(_batch_render_curve_sample_count - 1)
-                    for index in range(_batch_render_curve_sample_count - 1)
-                ),
-            ),
-            "image_height": TensorElementParameter(
-                dtype="float32",
-                shape=(),
-                values=(float(height),),
-            ),
-            "image_width": TensorElementParameter(
-                dtype="float32",
-                shape=(),
-                values=(float(width),),
-            ),
-        },
-        cache_key=(
-            "digits-field",
-            component_count,
-            max_mark_count,
-            _batch_render_curve_sample_count,
-        ),
-    )
+    raise TensorRuntimeError("Digits inverse renderer requires linear or quadratic curves")
 
 
 def _resolution_sampling(layout: Mapping[str, object] | None) -> _ResolutionSampling | None:
@@ -2452,10 +3066,7 @@ def _manifest() -> BenchmarkManifest:
     return BenchmarkManifest(
         id=_benchmark_id,
         name=ProtocolName.parse("benchmarks.digits"),
-        outcome_space=OutcomeSpace(
-            id=_outcome_space_id,
-            outcomes=tuple(Outcome(id=f"digit-{digit}") for digit in range(10)),
-        ),
+        outcome_space=None,
         latent_factor_declaration=_latent_factor_reference(),
         resolution_analysis={
             "kind": "component-discriminability-margin",

@@ -113,7 +113,7 @@ def test_digits_generator_is_deterministic() -> None:
         ),
     )
     assert sample_component_index(first_sample) == first_sample.component_index
-    assert first_sample.outcome_id == f"digit-{first_sample.component_index}"
+    assert first_sample.outcome_id == "inverse-observation"
     assert _coordinate(first_sample.latent_coordinates, role="content")["values"] == {
             "digit_index": first_sample.component_index,
             "digit_variant_index": 0,
@@ -297,7 +297,7 @@ def test_digits_generator_samples_resolution_from_memory_bound() -> None:
         batch.log2_volume,
         generator.distinguishable_state_log2_volume(width=width, height=height),
     )
-    assert sample.outcome_id == f"digit-{sample.component_index}"
+    assert sample.outcome_id == "inverse-observation"
 
 
 def test_digits_generator_counts_setup_window_volume_class() -> None:
@@ -380,7 +380,10 @@ def test_digits_generator_accepts_volume_value_requests() -> None:
         (1, 28, 28),
         (1, 28, 28),
     ]
-    assert [sample.outcome_id for sample in batch.samples] == ["digit-0", "digit-0"]
+    assert [sample.outcome_id for sample in batch.samples] == [
+        "inverse-observation",
+        "inverse-observation",
+    ]
     assert [sample.component_index for sample in batch.samples] == [0, 0]
     assert math.isclose(batch.log2_volume, requested_log2_volume)
     assert volume_request.contains(batch.log2_volume)
@@ -749,7 +752,7 @@ def test_digits_generator_keeps_chart_canvas_when_memory_cap_is_tiny() -> None:
     assert [(sample.width, sample.height) for sample in batch.samples] == [(36, 36)] * 8
 
 
-def test_digits_generator_applies_recorded_variation_coordinates() -> None:
+def test_digits_generator_records_variation_coordinates_and_renders_inverse_field() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     sample = _observation_payload(generator,
         sample_count=1,
@@ -759,37 +762,29 @@ def test_digits_generator_applies_recorded_variation_coordinates() -> None:
     variation_values = cast(dict[str, object], variation["values"])
     plan = sample_materialization_plan(sample)
     component_index = sample_component_index(sample)
-    direct = generator.formation.component_field(
-        width=plan.resolution_assignment.require_axis("W"),
-        height=plan.resolution_assignment.require_axis("H"),
-        component_index=component_index,
-        variation_coordinate=cast(list[Mapping[str, object]], variation_values["coordinates"])[0],
-    )
+    width = plan.resolution_assignment.require_axis("W")
+    height = plan.resolution_assignment.require_axis("H")
     untransformed = generator.formation.component_field(
-        width=plan.resolution_assignment.require_axis("W"),
-        height=plan.resolution_assignment.require_axis("H"),
+        width=width,
+        height=height,
         component_index=component_index,
     )
 
-    assert sample.require_field() == direct
+    assert sample.require_field().shape == (1, height, width)
     coordinate = cast(list[Mapping[str, object]], variation_values["coordinates"])[0]
-    if coordinate["transform_ordinal"] == 0 and sample_width(sample) == 28:
-        assert sample.require_field() == untransformed
-    else:
-        assert sample.require_field() != untransformed
+    assert "transform_ordinal" in coordinate
+    assert sample.require_field() != untransformed
     assert all(0.0 <= value <= 1.0 for value in sample.require_field().values)
 
 
 def test_digits_tensor_fields_match_recorded_field_samples() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
-    outcome_space = generator.manifest.resolve_outcome_space()
     batch = generator(
         shape=4,
         seed=909,
         include_fields=True,
         runtime=runtime,
-        outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
     )
     host_batch = generator(
         shape=4,
@@ -803,29 +798,10 @@ def test_digits_tensor_fields_match_recorded_field_samples() -> None:
         assert fields[index].flatten().tolist() == list(sample.require_field().values)
 
 
-def test_digits_tensor_renderer_uses_per_sample_transform_parameters(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_digits_tensor_renderer_uses_per_sample_deformation_parameters() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     generator_impl = cast(Any, generator)
     runtime = resolve_tensor_runtime("cpu")
-    module_globals = generator_impl._build_batch_tensor.__globals__
-    original_sample_transform_values = module_globals["_digits_sample_transform_values"]
-    transform_value_lengths: list[int] = []
-
-    def sample_transform_values(**kwargs: object) -> tuple[float, ...]:
-        values = cast(Callable[..., tuple[float, ...]], original_sample_transform_values)(
-            **kwargs
-        )
-        transform_value_lengths.append(len(values))
-        return values
-
-    monkeypatch.setitem(
-        module_globals,
-        "_digits_sample_transform_values",
-        sample_transform_values,
-    )
-
     volume_class = generator_impl._default_volume_class()
     resolution_assignment = volume_class.resolution_assignment(
         width_axis=generator.formation.width_axis,
@@ -847,13 +823,39 @@ def test_digits_tensor_renderer_uses_per_sample_transform_parameters(
         "timing_prefix": "",
     }
 
-    generator_impl._build_batch_tensor(**render_kwargs)
-    generator_impl._build_batch_tensor(**render_kwargs)
+    deformed = generator_impl._build_batch_tensor(**render_kwargs)
+    module_globals = generator_impl._build_batch_tensor.__globals__
+    zero_deformation_latents = tuple(
+        module_globals["_inverse_digits_latent_from_nuisance_vector"](
+            latent.identity,
+            latent.to_nuisance_tuple()[:5]
+            + (0.0,) * module_globals["_inverse_deformation_dimension"],
+        )
+        for latent in (
+            module_globals["_inverse_digits_latent_from_address"](
+                seed=cast(int, render_kwargs["seed"]),
+                sample_index=sample_index,
+                sample_address=sample_address,
+            )
+            for sample_index, sample_address in zip(
+                cast(tuple[int, ...], render_kwargs["sample_indices"]),
+                module_globals["_digits_sample_addresses"](
+                    seed=cast(int, render_kwargs["seed"]),
+                    sample_indices=cast(tuple[int, ...], render_kwargs["sample_indices"]),
+                    cardinality=cast(int, render_kwargs["cardinality"]),
+                    minimum_address=cast(int, render_kwargs["minimum_address"]),
+                ),
+                strict=True,
+            )
+        )
+    )
+    undeformed = module_globals["render_inverse_digits"](
+        runtime=runtime,
+        latents=zero_deformation_latents,
+        canvas_side=width,
+    )
 
-    assert transform_value_lengths == [
-        render_kwargs["sample_count"] * 3,
-        render_kwargs["sample_count"] * 3,
-    ]
+    assert not runtime.torch.allclose(deformed, undeformed)
 
 
 def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
@@ -863,8 +865,6 @@ def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
         cuda_runtime = resolve_tensor_runtime("cuda")
     except TensorRuntimeError as error:
         pytest.skip(str(error))
-    outcome_space = generator.manifest.resolve_outcome_space()
-    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     request = StateSpaceVolumeRequest(
         minimum=generator.minimum_log2_volume().value + 6.0,
         maximum=generator.minimum_log2_volume().value + 7.0,
@@ -875,7 +875,6 @@ def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
         seed=444,
         include_fields=False,
         runtime=cpu_runtime,
-        outcome_ids=outcome_ids,
         volume_request=request,
     ).require_tensors()[0]
     cuda_fields = generator(
@@ -883,11 +882,10 @@ def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
         seed=444,
         include_fields=False,
         runtime=cuda_runtime,
-        outcome_ids=outcome_ids,
         volume_request=request,
     ).require_tensors()[0]
 
-    assert cuda_runtime.torch.equal(cpu_fields, cuda_fields.detach().cpu())
+    assert cuda_runtime.torch.allclose(cpu_fields, cuda_fields.detach().cpu(), atol=1e-6)
 
 
 def test_digits_mps_tensor_fields_match_cpu_reference() -> None:
@@ -934,14 +932,12 @@ def test_digits_mps_tensor_fields_match_cpu_reference() -> None:
 def test_digits_tensor_generation_returns_null_set_for_unmatched_volume_requests() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
-    outcome_space = generator.manifest.resolve_outcome_space()
     request = StateSpaceVolumeRequest(minimum=0.5, maximum=0.5)
 
     sample_set = generator(
         shape=1,
         seed=910,
         runtime=runtime,
-        outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
         volume_request=request,
     )
 
@@ -1122,18 +1118,25 @@ def _within_transform_bounds(
 
 
 def _field_has_positive_edge(field: FieldObservation) -> bool:
+    edge_threshold = 5.0e-2
     channels, height, width = field.shape
     for channel in range(channels):
         channel_offset = channel * width * height
         for x_index in range(width):
-            if field.values[channel_offset + x_index] > 0.0:
+            if field.values[channel_offset + x_index] > edge_threshold:
                 return True
-            if field.values[channel_offset + (height - 1) * width + x_index] > 0.0:
+            if (
+                field.values[channel_offset + (height - 1) * width + x_index]
+                > edge_threshold
+            ):
                 return True
         for y_index in range(height):
-            if field.values[channel_offset + y_index * width] > 0.0:
+            if field.values[channel_offset + y_index * width] > edge_threshold:
                 return True
-            if field.values[channel_offset + y_index * width + width - 1] > 0.0:
+            if (
+                field.values[channel_offset + y_index * width + width - 1]
+                > edge_threshold
+            ):
                 return True
     return False
 

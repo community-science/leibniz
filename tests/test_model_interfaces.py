@@ -19,6 +19,7 @@ from leibniz.prediction_spaces import (
     FiniteOutcomeSpace,
     FiniteTokenSequenceSpace,
     FiniteTokenVocabulary,
+    RealVectorSpace,
 )
 
 
@@ -67,6 +68,25 @@ def test_model_interface_can_record_finite_token_sequence_source_space() -> None
         "outcome_count": 2,
         "source_space": sequence_space.to_record(),
     }
+
+
+def test_model_interface_declares_real_vector_outputs() -> None:
+    interface = ModelInterface.from_real_vector_space(
+        id=ProtocolIdentifier.parse("model-interfaces.inverse@0.1.0"),
+        dimension=15,
+        coordinate_name="target-coordinate",
+    )
+
+    assert interface == ModelInterface(
+        id=ProtocolIdentifier.parse("model-interfaces.inverse@0.1.0"),
+        prediction_space=RealVectorSpace(
+            dimension=15,
+            coordinate_name="target-coordinate",
+        ),
+        prediction_kind="direct-real-vector",
+        output_encoding="coordinate-sequence",
+    )
+    assert ModelInterface.from_record(interface.to_record()) == interface
 
 
 def test_model_interface_validates_direct_finite_prediction_results() -> None:
@@ -166,7 +186,7 @@ def test_model_interface_rejects_unsupported_prediction_contracts() -> None:
     ) == (
         "model interface must pair finite probability measures with finite outcome spaces, "
         "or autoregressive sequence probabilities with eos-terminated finite token "
-        "sequence spaces"
+        "sequence spaces, or direct real-vector outputs with real vector spaces"
     )
 
     record = _model_interface_record()
@@ -178,7 +198,7 @@ def test_model_interface_rejects_unsupported_prediction_contracts() -> None:
     ) == (
         "model interface must pair finite probability measures with finite outcome spaces, "
         "or autoregressive sequence probabilities with eos-terminated finite token "
-        "sequence spaces"
+        "sequence spaces, or direct real-vector outputs with real vector spaces"
     )
 
 

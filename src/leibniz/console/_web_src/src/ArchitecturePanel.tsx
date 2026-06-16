@@ -188,8 +188,9 @@ const ROOTS: RootTree[] = [
         id: 'Q-binding',
         gist: 'Binding: evolution, equilibrium, or inverse.',
         meta: 'Step forward in time · settle into a state · work back to a cause.',
-        status: 'direction',
+        status: 'implemented',
         anchor: 'target contract: binding relation',
+        verify: { module: 'leibniz.target_contracts', symbols: ['TargetContract'] },
         step: 'signature',
         rungs: [
           {
@@ -202,10 +203,10 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'relation to the law',
-            text: 'The law decides which bindings are even possible. Picking one is up to you.',
+            text: 'The law decides which bindings are even possible. The field-evolution benchmark exercises evolution; the inverse-renderer benchmark exercises inverse binding by asking a submission to infer a latent cause, including pose and graded deformation, from an observed renderer output.',
           },
         ],
-        verdict: { tone: 'partial', text: 'We have not pinned down the full list of bindings yet.' },
+        verdict: { tone: 'partial', text: 'Evolution and inverse are live benchmark bindings; equilibrium remains a design direction.' },
       },
       {
         id: 'Q-target',
@@ -249,13 +250,13 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'space-time ladder',
-            text: 'Compute the operator on nested space-time grids and compare on the common grid. For a field law, the residual is evaluated consistently in space and time, then converted into a certified distance by the law\'s amplification along the submitted trajectory.',
+            text: 'Compute the operator on nested refinements and compare on the common grid. For a field law, the residual is evaluated consistently in space and time, then converted into a certified distance by the law\'s amplification along the submitted trajectory. For a static inverse map, the residual is converted by the renderer Jacobian conditioning at the submitted latent.',
           },
           {
             level: 3,
             kind: 'add',
             tag: 'measured ruler',
-            text: '$\\varepsilon$ is not declared and there is no gate. It is the residual-certified distance to a solution of the law: $\\varepsilon(t) = \\sum_{s<t} G(s\\to t)\\,\\lVert r(s)\\rVert\\,dt$, where $r$ is the law residual and $G$ is the leading operator-norm amplification of the law linearized about the submitted trajectory itself (oracle-free). Validated bits are continuous in $\\varepsilon$, and the predictability boundary emerges where the certified bits reach zero.',
+            text: '$\\varepsilon$ is not declared and there is no gate. It is the residual-certified distance to a solution of the law: dynamical prediction uses $\\varepsilon(t) = \\sum_{s<t} G(s\\to t)\\,\\lVert r(s)\\rVert\\,dt$, where $r$ is the law residual and $G$ is the leading operator-norm amplification of the law linearized about the submitted trajectory itself; static inverse maps use $\\varepsilon_z = \\lVert R(\\hat z)-y\\rVert / \\sigma_{\\min}(\\partial R/\\partial z)$ at the submitted latent. Validated bits are continuous in $\\varepsilon$, and the boundary emerges where the certified bits reach zero.',
           },
           {
             level: 3,
@@ -267,7 +268,7 @@ const ROOTS: RootTree[] = [
             level: 3,
             kind: 'add',
             tag: 'formal objects',
-            text: 'Formally: query $\\hat\\Phi(x_h, t)$ across refined grids, compute the residual and leading amplification on each prefix, refuse prefixes whose amplification grows under refinement, and credit the ambient evolution entropy resolved above the certified $\\varepsilon$.',
+            text: 'Formally: query $\\hat\\Phi(x_h, t)$ or $\\hat z$ across refined grids, compute the residual and the structural estimator on each prefix, refuse prefixes whose conditioning grows under refinement, and credit the ambient entropy resolved above the certified $\\varepsilon$.',
           },
           {
             level: 4,
@@ -276,7 +277,7 @@ const ROOTS: RootTree[] = [
             text: 'Open rungs remain: the IC distribution is provisional; the certified $\\varepsilon$ uses the leading-amplification estimator, the smooth and chaotic-dynamics instance of a general law-induced one (entropy stability for shock-forming conservation laws is the harder case); and a submitted program that climbs a deep boundary is still wanted. The retired-gate observed-order tolerance and rung-count parameters are gone.',
           },
         ],
-        verdict: { tone: 'partial', text: 'Being rebuilt on continuous certified bits (#344): the binary gate is retired for a residual-certified distance in the law-induced metric, validated across five experiments; the general entropy-stability certification and a boundary-climbing program remain open.' },
+        verdict: { tone: 'partial', text: 'Continuous certified bits now have two worked structural types: dynamical amplification for field evolution and static-map conditioning for inverse rendering; general entropy-stability certification and a boundary-climbing program remain open.' },
       },
       {
         id: 'R-territory',
@@ -367,7 +368,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'locates it, justifies invariance',
-            text: 'It is an $\\varepsilon$-covering count under the metric the law itself induces — the geometry of its entropy or energy/Lyapunov functional, derived from the equation rather than declared — taken in the ambient space rather than the chart, so it does not change if you reparameterize. In that metric a smooth field and a shock are both finite information (a Fourier chart only made the shock look complex), and the count is of the field evolution above persistence. Independent axes multiply, which is why their bits add.',
+            text: 'It is an $\\varepsilon$-covering count under the metric the law itself induces — the geometry of its entropy, energy/Lyapunov functional, or static renderer Jacobian — taken in the ambient space rather than the chart, so it does not change if you reparameterize. In that metric a smooth field and a shock are both finite information (a Fourier chart only made the shock look complex), a field law can count evolution above persistence, and an inverse renderer can count the product answer space of identity bits plus continuous nuisance bits. Independent axes multiply, which is why their bits add.',
           },
           {
             level: 2,

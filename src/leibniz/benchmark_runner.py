@@ -992,7 +992,11 @@ def run_benchmark(
     accessible_subspace = benchmark.accessible_subspace
     program_identity = _load_program_graph_identity(plan.program_path)
     program_graph_record = program_identity.graph.to_record()
-    outcome_space = benchmark.manifest.resolve_outcome_space()
+    outcome_space = (
+        benchmark.manifest.resolve_outcome_space()
+        if target_contract.kind == "finite-outcome"
+        else None
+    )
     outcome_ids = _target_contract_outcome_ids(target_contract)
     summary = _run_summary(
         plan=plan,
@@ -1058,12 +1062,21 @@ def run_benchmark(
     )
 
     progress_path = _training_progress_path(summary)
-    model_interface = ModelInterface.from_outcome_space(
-        id=ProtocolIdentifier.parse(
-            f"model-interfaces.{_identifier_atom(generator.manifest.id)}."
-            f"{summary.run_slug}@0.1.0"
-        ),
-        outcome_space=outcome_space,
+    model_interface_id = ProtocolIdentifier.parse(
+        f"model-interfaces.{_identifier_atom(generator.manifest.id)}."
+        f"{summary.run_slug}@0.1.0"
+    )
+    model_interface = (
+        ModelInterface.from_outcome_space(
+            id=model_interface_id,
+            outcome_space=outcome_space,
+        )
+        if outcome_space is not None
+        else ModelInterface.from_real_vector_space(
+            id=model_interface_id,
+            dimension=_shape_element_count(output_shape),
+            coordinate_name="target-coordinate",
+        )
     )
     checkpoint_artifacts: list[ModelCheckpointArtifact] = []
     progress_timings = TimingCollector()
@@ -1331,7 +1344,11 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         target_contract = benchmark.target_contract
     with workflow_timings.span("evaluation_workflow.load_checkpoint_input"):
         evaluation_input = _evaluation_input_from_plan(plan, generator=generator)
-        outcome_space = generator.manifest.resolve_outcome_space()
+        outcome_space = (
+            generator.manifest.resolve_outcome_space()
+            if target_contract.kind == "finite-outcome"
+            else None
+        )
         selected_checkpoint = evaluation_input.checkpoint
         run_slug = evaluation_input.run_slug
         benchmark_id = evaluation_input.benchmark_id
@@ -1380,7 +1397,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             final_evaluation_batch,
             volume_request=_rung_score_volume_request(frontier_rung),
         )
-        if target_contract.kind == "field-valued":
+        if target_contract.kind in {"field-valued", "inverse"}:
             measurement_groups: tuple[tuple[MeasurementRecord, ...], ...] = ()
             final_sampled_competence = _sampled_competence_record_from_accepted_mass(
                 batch=final_scored_batch,
@@ -1393,6 +1410,8 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
                 final_competence_diagnostics,
             )
         else:
+            if outcome_space is None:
+                raise BenchmarkRunnerError("finite outcome evaluation requires outcome_space")
             final_measurements = finite_measurements_for_predictions(
                 batch=final_evaluation_batch,
                 outcome_space=outcome_space,
@@ -1972,11 +1991,23 @@ def _program_additional_input_shapes(
     input_shapes: tuple[tuple[int, ...], ...],
     target_contract: TargetContract,
 ) -> tuple[tuple[tuple[int, ...], ...], ...]:
-    if target_contract.kind != "field-valued":
-        return ()
     field_shape = input_shapes[0]
-    varied = (*field_shape[:-1], max(1, field_shape[-1] + 1))
-    return ((varied, ()),)
+    if target_contract.kind == "field-valued":
+        varied = (*field_shape[:-1], max(1, field_shape[-1] + 1))
+        return ((varied, ()),)
+    if target_contract.kind == "inverse":
+        if len(field_shape) >= 2:
+            varied = (
+                *field_shape[:-2],
+                max(1, field_shape[-2] + 1),
+                max(1, field_shape[-1] + 1),
+            )
+        elif field_shape:
+            varied = (*field_shape[:-1], max(1, field_shape[-1] + 1))
+        else:
+            raise BenchmarkRunnerError("inverse program input shape must not be scalar")
+        return ((varied,),)
+    return ()
 
 
 def _batchless_program_output_shape(
@@ -2699,7 +2730,7 @@ def _model_predictions(
     horizons: tuple[float, ...] | None = None,
     target_contract: TargetContract,
 ) -> Any:
-    if target_contract.kind == "finite-outcome":
+    if target_contract.kind in {"finite-outcome", "inverse"}:
         return module(fields)
     return _field_valued_model_trajectory(
         runtime=runtime,
@@ -2718,7 +2749,7 @@ def _model_inference_for_cost(
     horizons: tuple[float, ...] | None = None,
     target_contract: TargetContract,
 ) -> Any:
-    if target_contract.kind == "finite-outcome":
+    if target_contract.kind in {"finite-outcome", "inverse"}:
         return module(fields)
     return _field_valued_model_state_at_horizon(
         runtime=runtime,
@@ -2734,7 +2765,7 @@ def _field_valued_target_horizons(
     labels: Any,
     target_contract: TargetContract,
 ) -> tuple[float, ...] | None:
-    if target_contract.kind == "finite-outcome":
+    if target_contract.kind in {"finite-outcome", "inverse"}:
         return None
     if len(tuple(labels.shape)) != 3:
         raise BenchmarkRunnerError(
@@ -3240,7 +3271,7 @@ def _evaluate_checkpoint_rung_measurements(
         probabilities.extend(chunk.probabilities)
         accepted_mass.extend(chunk.accepted_mass)
         competence_diagnostics.extend(chunk.competence_diagnostics)
-        if target_contract.kind == "field-valued":
+        if target_contract.kind in {"field-valued", "inverse"}:
             fields, targets = _batch_tensors(
                 runtime=predictor.runtime,
                 batch=chunk.batch,
@@ -3363,7 +3394,7 @@ def _checkpoint_evaluation_chunks(
             f"checkpoint_evaluation_{purpose}_accepted_mass",
             samples=batch.sample_count,
         ):
-            if target_contract.kind == "field-valued":
+            if target_contract.kind in {"field-valued", "inverse"}:
                 fields, labels = _batch_tensors(
                     runtime=predictor.runtime,
                     batch=batch,
@@ -5553,11 +5584,15 @@ def _training_work_estimates(
     )
 
 
-def _shape_bytes(shape: Sequence[int]) -> float:
+def _shape_element_count(shape: Sequence[int]) -> int:
     element_count = 1
     for axis in shape:
         element_count *= axis
-    return float(element_count * 4)
+    return element_count
+
+
+def _shape_bytes(shape: Sequence[int]) -> float:
+    return float(_shape_element_count(shape) * 4)
 
 
 def _make_optimizer(
@@ -5792,14 +5827,14 @@ def _finite_outcome_ids(contract: TargetContract) -> tuple[str, ...]:
 
 
 def _target_contract_outcome_ids(contract: TargetContract) -> tuple[str, ...]:
-    if contract.kind == "field-valued":
+    if contract.kind in {"field-valued", "inverse"}:
         return ()
     return _finite_outcome_ids(contract)
 
 
 def _target_contract_chance_mass(contract: TargetContract) -> float:
     chance_mass = contract.chance_mass()
-    if chance_mass is None and contract.kind == "field-valued":
+    if chance_mass is None and contract.kind in {"field-valued", "inverse"}:
         return 0.0
     if chance_mass is None:
         raise BenchmarkRunnerError("runner path requires finite-outcome chance mass")
@@ -5834,10 +5869,11 @@ def _build_training_loss(
     target_contract: TargetContract,
     loss_factory: _BenchmarkTrainingLossFactory | None,
 ) -> Any:
-    if target_contract.loss_id == "equation-residual":
+    if target_contract.loss_id in {"equation-residual", "reconstruction"}:
         if loss_factory is None:
             raise BenchmarkRunnerError(
-                "equation-residual target contracts require benchmark build_training_loss"
+                f"{target_contract.loss_id} target contracts require benchmark "
+                "build_training_loss"
             )
         return loss_factory.build_training_loss(runtime, target_contract)
     return build_loss(runtime, target_contract)

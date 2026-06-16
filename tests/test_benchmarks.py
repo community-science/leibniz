@@ -148,19 +148,18 @@ def test_benchmark_manifest_rejects_invalid_observation_ids() -> None:
     )
 
 
-def test_benchmark_manifest_rejects_missing_outcome_declaration() -> None:
-    assert (
-        str(
-            capture_manifest_error(
-                lambda: BenchmarkManifest.from_record(
-                    {
-                        "id": "core.boolean-benchmark@0.1.0",
-                        "name": "core.boolean-benchmark",
-                    }
-                )
-            )
-        )
-        == "manifest must declare outcome_space"
+def test_benchmark_manifest_accepts_inverse_manifest_without_outcome_declaration() -> None:
+    manifest = BenchmarkManifest.from_record(
+        {
+            "id": "core.inverse-benchmark@0.1.0",
+            "name": "core.inverse-benchmark",
+        }
+    )
+
+    assert manifest.outcome_space is None
+    assert "outcome_space" not in manifest.to_record()
+    assert str(capture_manifest_error(manifest.resolve_outcome_space)) == (
+        "manifest does not declare outcome_space"
     )
 
 
@@ -248,9 +247,7 @@ def test_digits_benchmark_manifest_is_python_owned() -> None:
     manifest = load_digits_benchmark(_digits_benchmark_root).manifest
 
     assert manifest.id == ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
-    assert [outcome.id for outcome in manifest.outcome_space.outcomes] == [
-        f"digit-{index}" for index in range(10)
-    ]
+    assert manifest.outcome_space is None
     assert manifest.latent_factor_declaration is not None
     assert manifest.latent_factor_declaration.kind == "latent-factor-declaration"
     assert str(manifest.latent_factor_declaration.protocol_id) == (

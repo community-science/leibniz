@@ -356,38 +356,7 @@ def test_cli_benchmark_train_accepts_program_flag(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    program_path = tmp_path / "digits_28_pool.py"
-    program_path.write_text(
-        """\
-from leibniz.program_graphs import (
-    ProgramGraph,
-    ProgramGraphEdge,
-    ProgramGraphNode,
-    ProgramTensorContract,
-)
-
-
-def build_program_graph(runtime):
-    torch = runtime.torch
-    return ProgramGraph(
-        contract_kind="classification",
-        inputs=(ProgramTensorContract("image", (1, 28, 28)),),
-        outputs=(ProgramTensorContract("class_logits", (10,)),),
-        nodes=(
-            ProgramGraphNode("pool", torch.nn.AdaptiveAvgPool2d((2, 2)), "pool"),
-            ProgramGraphNode("flatten", torch.nn.Flatten(), "flatten"),
-            ProgramGraphNode("readout", torch.nn.Linear(4, 10), "readout"),
-        ),
-        edges=(
-            ProgramGraphEdge("image", "pool"),
-            ProgramGraphEdge("pool", "flatten"),
-            ProgramGraphEdge("flatten", "readout"),
-            ProgramGraphEdge("readout", "class_logits"),
-        ),
-    )
-""",
-        encoding="utf-8",
-    )
+    program_path = _repository_root / "tests/fixtures/programs/digits_inverse_conv_encoder.py"
     exit_code = main(
         [
             "benchmark",

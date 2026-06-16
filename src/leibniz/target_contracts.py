@@ -16,7 +16,7 @@ __all__ = [
     "TargetContractError",
 ]
 
-_target_contract_kind = Literal["finite-outcome", "field-valued"]
+_target_contract_kind = Literal["finite-outcome", "field-valued", "inverse"]
 _competence_parameter_value = int | float | str
 _baseline_parameter_value = int | float | str
 
@@ -119,7 +119,12 @@ class BaselinePredictor:
             raise TargetContractError("baseline kind must be nonempty")
         parameters: dict[str, _baseline_parameter_value] = dict(self.parameters)
         _validate_parameter_mapping(parameters, field="baseline.parameters")
-        if self.kind in {"uniform-outcome-mass", "zero-field", "persistence"}:
+        if self.kind in {
+            "uniform-outcome-mass",
+            "zero-field",
+            "persistence",
+            "uninformed-latent-prior",
+        }:
             if parameters:
                 raise TargetContractError(f"{self.kind} baseline does not accept parameters")
         else:
@@ -158,7 +163,7 @@ class TargetContract:
     baseline: BaselinePredictor
 
     def __post_init__(self) -> None:
-        if self.kind not in {"finite-outcome", "field-valued"}:
+        if self.kind not in {"finite-outcome", "field-valued", "inverse"}:
             raise TargetContractError(f"unsupported target contract kind: {self.kind}")
         if not self.loss_id:
             raise TargetContractError("loss_id must be nonempty")
@@ -179,7 +184,7 @@ class TargetContract:
                 raise TargetContractError(
                     "finite-outcome contract requires uniform-outcome-mass baseline"
                 )
-        else:
+        elif self.kind == "field-valued":
             if self.outcome_ids is not None:
                 raise TargetContractError("field-valued contract does not accept outcome_ids")
             if self.loss_id not in {"mse", "relative-l2", "equation-residual"}:
@@ -197,6 +202,31 @@ class TargetContract:
                 raise TargetContractError(
                     "field-valued contract requires zero-field or persistence baseline"
                 )
+        else:
+            if self.outcome_ids is not None:
+                raise TargetContractError("inverse contract does not accept outcome_ids")
+            if self.loss_id != "reconstruction":
+                raise TargetContractError("inverse contract requires reconstruction loss")
+            if self.competence.kind != "ambient-certified-bits":
+                raise TargetContractError(
+                    "inverse contract requires ambient-certified-bits competence"
+                )
+            if self.baseline.kind != "uninformed-latent-prior":
+                raise TargetContractError(
+                    "inverse contract requires uninformed-latent-prior baseline"
+                )
+            identity_count = self.competence.parameters.get("identity_count")
+            nuisance_dimension = self.competence.parameters.get("nuisance_dimension")
+            if (
+                type(identity_count) is not int
+                or identity_count < 2
+                or type(nuisance_dimension) is not int
+                or nuisance_dimension < 1
+            ):
+                raise TargetContractError(
+                    "inverse contract requires integer identity_count >= 2 and "
+                    "nuisance_dimension >= 1"
+                )
 
     @classmethod
     def finite_outcome(cls, outcome_ids: tuple[str, ...]) -> TargetContract:
@@ -206,6 +236,29 @@ class TargetContract:
             loss_id="cross-entropy",
             competence=CompetenceFunctional(kind="above-chance-accepted-mass"),
             baseline=BaselinePredictor(kind="uniform-outcome-mass"),
+        )
+
+    @classmethod
+    def inverse_latent(
+        cls,
+        *,
+        identity_count: int,
+        nuisance_dimension: int,
+        residual_operator_id: str,
+    ) -> TargetContract:
+        return cls(
+            kind="inverse",
+            outcome_ids=None,
+            loss_id="reconstruction",
+            competence=CompetenceFunctional(
+                kind="ambient-certified-bits",
+                parameters={
+                    "residual_operator_id": residual_operator_id,
+                    "identity_count": identity_count,
+                    "nuisance_dimension": nuisance_dimension,
+                },
+            ),
+            baseline=BaselinePredictor(kind="uninformed-latent-prior"),
         )
 
     @classmethod
@@ -256,12 +309,18 @@ class TargetContract:
             if self.outcome_ids is None:
                 raise TargetContractError("finite-outcome contract requires outcome_ids")
             return (len(self.outcome_ids),)
+        if self.kind == "inverse":
+            identity_count = self.competence.parameters.get("identity_count")
+            nuisance_dimension = self.competence.parameters.get("nuisance_dimension")
+            if type(identity_count) is not int or type(nuisance_dimension) is not int:
+                raise TargetContractError("inverse contract requires latent dimensions")
+            return (identity_count + nuisance_dimension,)
         if field_shape is None:
             raise TargetContractError("field-valued contract requires field_shape")
         return field_shape
 
     def chance_mass(self) -> float | None:
-        if self.kind == "field-valued":
+        if self.kind in {"field-valued", "inverse"}:
             return None
         if self.outcome_ids is None or not self.outcome_ids:
             raise TargetContractError("finite-outcome contract requires outcome_ids")

@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from benchmark_typing import load_digits_benchmark
@@ -11,6 +12,7 @@ from leibniz.benchmark_implementations import (
 from leibniz.observation_generation import (
     load_generator,
 )
+from leibniz.tensor_runtime import resolve_tensor_runtime
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -24,14 +26,44 @@ def test_digits_benchmark_loads_python_implementation_entrypoint() -> None:
     assert str(implementation.manifest.id) == "benchmarks.digits@0.1.0"
     assert callable(implementation.generator)
     assert implementation.generator.__class__.__name__ == "Generator"
-    assert implementation.target_contract.kind == "finite-outcome"
-    assert implementation.target_contract.loss_id == "cross-entropy"
-    assert implementation.target_contract.expected_output_shape(None) == (10,)
-    assert implementation.target_contract.chance_mass() == 0.1
+    assert implementation.target_contract.kind == "inverse"
+    assert implementation.target_contract.loss_id == "reconstruction"
+    assert implementation.target_contract.expected_output_shape(None) == (85,)
+    assert implementation.target_contract.chance_mass() is None
     assert implementation.sampling_protocol.kind == "uniform-monte-carlo"
     assert implementation.sampling_protocol.confidence_method_id == "wilson"
     assert implementation.accessible_subspace.ladder_id == "digits-continuous-transform-covering"
     assert not implementation.accessible_subspace.exclusions
+
+
+def test_digits_inverse_tensor_generation_and_loss_are_label_free() -> None:
+    implementation = load_benchmark(_digits_benchmark_root)
+    runtime = resolve_tensor_runtime("cpu")
+    batch = implementation.generator(
+        seed=17,
+        shape=2,
+        runtime=runtime,
+        outcome_ids=(),
+    )
+    fields, targets = batch.require_tensors()
+
+    assert tuple(fields.shape) == tuple(targets.shape)
+    assert tuple(fields.shape[:2]) == (2, 1)
+    assert int(fields.shape[-1]) == int(fields.shape[-2])
+    assert bool(runtime.torch.allclose(fields, targets))
+
+    predictions = runtime.torch.zeros((2, 85), requires_grad=True)
+    loss: Any = cast(Any, implementation).build_training_loss(
+        runtime,
+        implementation.target_contract,
+    )(
+        predictions,
+        targets,
+    )
+    loss.backward()
+
+    assert float(loss.detach()) > 0.0
+    assert predictions.grad is not None
 
 
 def test_ks_benchmark_loads_field_valued_target_contract() -> None:

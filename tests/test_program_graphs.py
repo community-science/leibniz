@@ -194,6 +194,42 @@ def test_prediction_program_graph_consumes_scalar_dt_input() -> None:
     assert torch.allclose(output, torch.full((2, 1, 8), 0.25))
 
 
+def test_inverse_program_graph_validates_latent_vector_output() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    graph = ProgramGraph(
+        contract_kind="inverse",
+        inputs=(ProgramTensorContract("observation", (1, "N", "N")),),
+        outputs=(ProgramTensorContract("latent", (15,)),),
+        nodes=(
+            ProgramGraphNode(
+                id="inverse_readout",
+                kind="submitted-inverse-readout",
+                operation=torch.nn.Sequential(
+                    torch.nn.AdaptiveAvgPool2d((1, 1)),
+                    torch.nn.Flatten(),
+                    torch.nn.Linear(1, 15),
+                ),
+            ),
+        ),
+        edges=(
+            ProgramGraphEdge("observation", "inverse_readout"),
+            ProgramGraphEdge("inverse_readout", "latent"),
+        ),
+    )
+
+    report = graph.validate(
+        runtime,
+        input_shapes=((1, 8, 8),),
+        additional_input_shapes=(((1, 9, 9),),),
+    )
+    output = graph.build_module(runtime)(torch.zeros(2, 1, 8, 8))
+
+    assert report.contract_kind == "inverse"
+    assert report.output_shapes == (((15,),), ((15,),))
+    assert output.shape == (2, 15)
+
+
 def test_prediction_program_graph_rejects_extra_trailing_inputs() -> None:
     runtime = resolve_tensor_runtime("cpu")
     torch = runtime.torch

@@ -44,6 +44,20 @@ def test_field_valued_target_contract_round_trips_and_declares_shape() -> None:
     assert parsed.chance_mass() is None
 
 
+def test_inverse_target_contract_round_trips_and_declares_latent_shape() -> None:
+    contract = TargetContract.inverse_latent(
+        identity_count=10,
+        nuisance_dimension=5,
+        residual_operator_id="operators.digits.inverse-renderer@0.1.0",
+    )
+
+    parsed = TargetContract.from_record(contract.to_record())
+
+    assert parsed == contract
+    assert parsed.expected_output_shape(None) == (15,)
+    assert parsed.chance_mass() is None
+
+
 @pytest.mark.parametrize(
     "record",
     [
@@ -88,6 +102,32 @@ def test_field_valued_target_contract_round_trips_and_declares_shape() -> None:
                 "parameters": {"threshold": 0.5},
             },
             "baseline": {"kind": "uniform-outcome-mass"},
+        },
+        {
+            "kind": "inverse",
+            "loss_id": "cross-entropy",
+            "competence": {
+                "kind": "ambient-certified-bits",
+                "parameters": {
+                    "residual_operator_id": "op",
+                    "identity_count": 10,
+                    "nuisance_dimension": 5,
+                },
+            },
+            "baseline": {"kind": "uninformed-latent-prior"},
+        },
+        {
+            "kind": "inverse",
+            "loss_id": "reconstruction",
+            "competence": {
+                "kind": "ambient-certified-bits",
+                "parameters": {
+                    "residual_operator_id": "op",
+                    "identity_count": 1,
+                    "nuisance_dimension": 5,
+                },
+            },
+            "baseline": {"kind": "uninformed-latent-prior"},
         },
     ],
 )
