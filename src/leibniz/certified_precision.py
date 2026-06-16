@@ -18,4 +18,8 @@ def residual_certified_epsilon(
 
     if not math.isfinite(floor) or floor <= 0.0:
         raise ValueError("certified epsilon floor must be positive and finite")
-    return (residual_norm * stability_factor).clamp_min(floor)
+    epsilon = residual_norm * stability_factor
+    clamp_min = getattr(epsilon, "clamp_min", None)
+    if callable(clamp_min):
+        return clamp_min(floor)
+    return max(float(epsilon), floor)

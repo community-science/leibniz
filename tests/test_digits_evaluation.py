@@ -257,9 +257,44 @@ def test_inverse_digits_static_certification_bounds_perturbed_latent_error() -> 
 
     assert certificate.certification_status == "certified"
     assert certificate.certified_epsilon >= actual_error
-    assert certificate.certified_epsilon / actual_error < 20.0
+    # This uses the worst nuisance direction from sigma_min(J), not the
+    # perturbation's directional derivative, so it is conservative by design.
+    assert certificate.certified_epsilon / actual_error < 12.5
     assert certificate.residual_norm > 0.0
     assert certificate.sigma_min > 0.0
+
+
+def test_inverse_digits_static_conditioning_refuses_degenerate_submitted_latent() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _digits_module()
+    true_latent = module.InverseDigitsLatent(8, 0.0, 0.0, 1.0, 0.02, 1.0)
+    degenerate_recovered = module.InverseDigitsLatent(8, 0.0, 0.0, 0.0, 0.0, 1.0)
+    observation = module.render_inverse_digits(
+        runtime=runtime,
+        latents=(true_latent,),
+        canvas_side=28,
+    )
+
+    certificate = module.inverse_digits_static_certification(
+        runtime=runtime,
+        recovered_latent=degenerate_recovered,
+        observation=observation,
+        canvas_side=28,
+        refinement_sides=(28, 56),
+    )
+    bits = module.inverse_digits_validated_bits(
+        runtime=runtime,
+        recovered_latent=degenerate_recovered,
+        certified_epsilon=certificate.certified_epsilon,
+        image_epsilon=certificate.residual_norm,
+        canvas_side=28,
+    )
+
+    assert certificate.certification_status == "refused-conditioning-unstable"
+    assert certificate.sigma_min == 0.0
+    assert certificate.conditioning_stability == math.inf
+    assert bits.bits == 0.0
+    assert bits.distinguishable_identity_count == 1
 
 
 def test_inverse_digits_static_conditioning_is_stable_for_well_posed_glyph() -> None:
@@ -296,12 +331,14 @@ def test_inverse_digits_product_entropy_is_resolution_independent() -> None:
         runtime=runtime,
         recovered_latent=latent,
         certified_epsilon=1.0e-2,
+        image_epsilon=1.0e-2,
         canvas_side=32,
     )
     fine = module.inverse_digits_validated_bits(
         runtime=runtime,
         recovered_latent=latent,
         certified_epsilon=1.0e-2,
+        image_epsilon=1.0e-2,
         canvas_side=64,
     )
 
@@ -318,12 +355,14 @@ def test_inverse_digits_identity_bits_drop_at_certified_precision_boundary() -> 
         runtime=runtime,
         recovered_latent=latent,
         certified_epsilon=1.0e-2,
+        image_epsilon=1.0e-2,
         canvas_side=32,
     )
     unresolved = module.inverse_digits_validated_bits(
         runtime=runtime,
         recovered_latent=latent,
         certified_epsilon=10.0,
+        image_epsilon=10.0,
         canvas_side=32,
     )
 
@@ -342,7 +381,7 @@ def test_inverse_digits_bits_rise_as_reconstruction_residual_falls() -> None:
         canvas_side=32,
     )
 
-    def bits_for_offset(offset: float) -> float:
+    def bits_for_offset(offset: float) -> Any:
         recovered_latent = module.InverseDigitsLatent(8, offset, 0.0, 1.0, 0.02, 1.0)
         certificate = module.inverse_digits_static_certification(
             runtime=runtime,
@@ -355,10 +394,16 @@ def test_inverse_digits_bits_rise_as_reconstruction_residual_falls() -> None:
             runtime=runtime,
             recovered_latent=recovered_latent,
             certified_epsilon=certificate.certified_epsilon,
+            image_epsilon=certificate.residual_norm,
             canvas_side=32,
-        ).bits
+        )
 
-    assert bits_for_offset(0.005) > bits_for_offset(0.02) > 0.0
+    near = bits_for_offset(0.005)
+    far = bits_for_offset(0.02)
+
+    assert near.bits > far.bits > 0.0
+    assert near.identity_bits == math.log2(10)
+    assert near.distinguishable_identity_count == 10
 
 
 def test_inverse_digits_label_free_probe_trains_by_reconstruction_only() -> None:

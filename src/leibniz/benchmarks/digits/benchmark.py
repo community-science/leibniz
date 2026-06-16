@@ -19,6 +19,7 @@ from typing import Any, TypeAlias, cast
 from leibniz.artifacts import ArtifactReference
 from leibniz.benchmark_implementations import RawBenchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
+from leibniz.certified_precision import residual_certified_epsilon
 from leibniz.cost_metrology import (
     CostMeasurement,
     OperationCostRecord,
@@ -2746,7 +2747,12 @@ def inverse_digits_static_certification(
         or stability > _static_conditioning_refusal_ratio
     )
     certified_epsilon = (
-        math.inf if refused else residual_norm / max(sigma_min, _static_sigma_floor)
+        math.inf
+        if refused
+        else residual_certified_epsilon(
+            residual_norm,
+            1.0 / max(sigma_min, _static_sigma_floor),
+        )
     )
     return StaticMapCertification(
         certified_epsilon=certified_epsilon,
@@ -2763,11 +2769,17 @@ def inverse_digits_validated_bits(
     runtime: TensorRuntime,
     recovered_latent: InverseDigitsLatent,
     certified_epsilon: float,
+    image_epsilon: float,
     canvas_side: int,
 ) -> InverseDigitsValidatedBits:
     """Return product-latent ambient entropy resolved to certified precision."""
 
-    if not math.isfinite(certified_epsilon) or certified_epsilon <= 0.0:
+    if (
+        not math.isfinite(certified_epsilon)
+        or certified_epsilon <= 0.0
+        or not math.isfinite(image_epsilon)
+        or image_epsilon <= 0.0
+    ):
         return InverseDigitsValidatedBits(
             bits=0.0,
             identity_bits=0.0,
@@ -2778,7 +2790,7 @@ def inverse_digits_validated_bits(
     identity_count = _distinguishable_identity_count(
         runtime=runtime,
         recovered_latent=recovered_latent,
-        certified_epsilon=certified_epsilon,
+        image_epsilon=image_epsilon,
         canvas_side=canvas_side,
     )
     identity_bits = math.log2(identity_count)
@@ -2911,6 +2923,7 @@ def _inverse_digits_ambient_certified_bits(request: Any) -> Any:
                 runtime=runtime,
                 recovered_latent=recovered_latent,
                 certified_epsilon=certification.certified_epsilon,
+                image_epsilon=certification.residual_norm,
                 canvas_side=side,
             )
             values.append(bits.bits)
@@ -2948,7 +2961,7 @@ def _distinguishable_identity_count(
     *,
     runtime: TensorRuntime,
     recovered_latent: InverseDigitsLatent,
-    certified_epsilon: float,
+    image_epsilon: float,
     canvas_side: int,
 ) -> int:
     backend = runtime.backend
@@ -2969,7 +2982,7 @@ def _distinguishable_identity_count(
     distances = (renders.reshape(_volume_class_digit_count, -1) - recovered).pow(2).mean(
         dim=1
     ).sqrt()
-    separated = int(tensor_value_to_host_values((distances > float(certified_epsilon)).sum())[0])
+    separated = int(tensor_value_to_host_values((distances > float(image_epsilon)).sum())[0])
     return max(1, separated + 1)
 
 
