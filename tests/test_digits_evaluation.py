@@ -165,46 +165,52 @@ def test_inverse_digits_deformation_renderer_has_pose_aware_headroom() -> None:
         canvas_side=28,
     )
 
-    identity_logits = torch.zeros((1, 10), requires_grad=True)
-    affine_nuisance = torch.tensor(
-        [[0.0, 0.0, 1.0, 0.0, 1.0]],
+    observation = observation.detach()
+    deform_dim = module._inverse_deformation_dimension
+    freq = torch.tensor(
+        [fx + fy for fx, fy in module._inverse_deformation_modes],
         dtype=torch.float32,
-        requires_grad=True,
     )
-    optimizer = torch.optim.Adam([identity_logits, affine_nuisance], lr=0.05)
-    for _step in range(100):
-        optimizer.zero_grad()
-        nuisance = torch.cat(
-            [
-                affine_nuisance,
-                torch.zeros((1, module._inverse_deformation_dimension)),
-            ],
-            dim=1,
-        )
-        loss = module.inverse_digits_reconstruction_loss(
-            runtime=runtime,
-            identity_logits=identity_logits,
-            nuisance=nuisance,
-            observations=observation,
-            canvas_side=28,
-        )
-        loss.backward()
-        optimizer.step()
+    freq_full = torch.cat([freq, freq])
+    torch.manual_seed(0)
 
-    cheap_identity = int(identity_logits.detach().argmax(dim=1)[0])
-    cheap_nuisance = tuple(
-        float(value)
-        for value in torch.cat(
-            [
-                affine_nuisance.detach()[0],
-                torch.zeros(module._inverse_deformation_dimension),
-            ]
+    def solve(stages: tuple[object, ...], steps: int) -> Any:
+        identity_logits = torch.zeros((1, 10), requires_grad=True)
+        affine = torch.tensor([[0.0, 0.0, 1.0, 0.0, 1.0]], requires_grad=True)
+        deform = torch.zeros((1, deform_dim), requires_grad=True)
+        for cutoff in stages:
+            active = (
+                torch.ones(deform_dim, dtype=torch.bool)
+                if cutoff == "all"
+                else freq_full <= float(cast(float, cutoff))
+            )
+            optimizer = torch.optim.Adam([identity_logits, affine, deform], lr=0.05)
+            for _step in range(steps):
+                optimizer.zero_grad()
+                nuisance = torch.cat([affine, deform], dim=1)
+                module.inverse_digits_reconstruction_loss(
+                    runtime=runtime,
+                    identity_logits=identity_logits,
+                    nuisance=nuisance,
+                    observations=observation,
+                    canvas_side=28,
+                ).backward()
+                if deform.grad is not None:
+                    deform.grad[0, ~active] = 0.0
+                optimizer.step()
+                with torch.no_grad():
+                    deform[0, ~active] = 0.0
+        identity = int(identity_logits.detach().argmax(dim=1)[0])
+        nuisance_vec = tuple(
+            float(value) for value in torch.cat([affine, deform], dim=1).detach()[0]
         )
-    )
-    cheap_latent = module._inverse_digits_latent_from_nuisance_vector(
-        cheap_identity,
-        cheap_nuisance,
-    )
+        return module._inverse_digits_latent_from_nuisance_vector(identity, nuisance_vec)
+
+    # Cheap: the obvious pose-aware solver -- full-latent gradient descent from a generic
+    # init. Strong: coarse-to-fine over deformation frequency. Both are real (residual>0),
+    # so this is the genuine open-frontier gap, not the oracle and not a no-pose strawman.
+    cheap_latent = solve(("all",), 300)
+    strong_latent = solve((1.0, 2.0, "all"), 150)
     cheap_bits = _certified_bits_for_latent(
         module=module,
         runtime=runtime,
@@ -215,15 +221,13 @@ def test_inverse_digits_deformation_renderer_has_pose_aware_headroom() -> None:
     strong_bits = _certified_bits_for_latent(
         module=module,
         runtime=runtime,
-        recovered_latent=true_latent,
+        recovered_latent=strong_latent,
         observation=observation,
         canvas_side=28,
     )
 
     assert cheap_bits.bits > 0.0
-    assert cheap_bits.nuisance_bits == 0.0
-    assert strong_bits.nuisance_bits > 100.0
-    assert strong_bits.bits - cheap_bits.bits > 100.0
+    assert strong_bits.bits - cheap_bits.bits > 8.0
 
 
 def test_inverse_digits_static_certification_bounds_perturbed_latent_error() -> None:
@@ -286,8 +290,7 @@ def test_inverse_digits_static_conditioning_refuses_degenerate_submitted_latent(
     bits = module.inverse_digits_validated_bits(
         runtime=runtime,
         recovered_latent=degenerate_recovered,
-        certified_epsilon=certificate.certified_epsilon,
-        image_epsilon=certificate.residual_norm,
+        certification=certificate,
         canvas_side=28,
     )
 
@@ -319,32 +322,47 @@ def test_inverse_digits_static_conditioning_is_stable_for_well_posed_glyph() -> 
 
     assert certificate.certification_status == "certified"
     assert certificate.conditioning_stability < 2.0
-    assert record["estimator"] == "renderer-jvp-gram-sigma-min"
+    assert record["estimator"] == "renderer-jvp-gram-per-mode-spectrum"
     assert record["sigma_min_ladder"] == list(certificate.sigma_min_ladder)
 
 
 def test_inverse_digits_product_entropy_is_resolution_independent() -> None:
     runtime = resolve_tensor_runtime("cpu")
     module = _digits_module()
-    latent = module.InverseDigitsLatent(8, 0.0, 0.0, 1.0, 0.02, 1.0)
-
-    coarse = module.inverse_digits_validated_bits(
-        runtime=runtime,
-        recovered_latent=latent,
-        certified_epsilon=1.0e-2,
-        image_epsilon=1.0e-2,
-        canvas_side=32,
+    true_latent = module._inverse_digits_latent_from_secret(
+        b"resolution independence seed",
+        sample_index=0,
     )
-    fine = module.inverse_digits_validated_bits(
-        runtime=runtime,
-        recovered_latent=latent,
-        certified_epsilon=1.0e-2,
-        image_epsilon=1.0e-2,
-        canvas_side=64,
+    recovered = module.InverseDigitsLatent(
+        true_latent.identity,
+        true_latent.x_translation + 0.02,
+        true_latent.y_translation,
+        true_latent.scale,
+        true_latent.shear,
+        true_latent.stroke_width,
+        deformation=true_latent.deformation,
     )
 
-    assert coarse.distinguishable_identity_count == fine.distinguishable_identity_count
-    assert math.isclose(coarse.bits, fine.bits, rel_tol=0.0, abs_tol=0.05)
+    def certify(side: int) -> Any:
+        observation = module.render_inverse_digits(
+            runtime=runtime, latents=(true_latent,), canvas_side=side
+        )
+        return module.inverse_digits_static_certification(
+            runtime=runtime,
+            recovered_latent=recovered,
+            observation=observation,
+            canvas_side=side,
+            refinement_sides=(side, side * 2),
+        )
+
+    coarse = certify(32)
+    fine = certify(64)
+
+    # Refining the grid must not inflate the observable latent modes (ambient, not chart),
+    # and the certified nuisance bits stay stable rather than growing with resolution.
+    assert coarse.certification_status == "certified"
+    assert abs(coarse.observable_mode_count - fine.observable_mode_count) <= 3
+    assert math.isclose(coarse.nuisance_bits, fine.nuisance_bits, rel_tol=0.35)
 
 
 def test_inverse_digits_identity_bits_drop_at_certified_precision_boundary() -> None:
@@ -352,24 +370,17 @@ def test_inverse_digits_identity_bits_drop_at_certified_precision_boundary() -> 
     module = _digits_module()
     latent = module.InverseDigitsLatent(8, 0.0, 0.0, 1.0, 0.02, 1.0)
 
-    resolved = module.inverse_digits_validated_bits(
-        runtime=runtime,
-        recovered_latent=latent,
-        certified_epsilon=1.0e-2,
-        image_epsilon=1.0e-2,
-        canvas_side=32,
+    # Identity distinguishability is an image-space epsilon: a fine precision separates
+    # the digit identities, a coarse one (above the inter-render distances) cannot.
+    resolved = module._distinguishable_identity_count(
+        runtime=runtime, recovered_latent=latent, image_epsilon=1.0e-3, canvas_side=32
     )
-    unresolved = module.inverse_digits_validated_bits(
-        runtime=runtime,
-        recovered_latent=latent,
-        certified_epsilon=10.0,
-        image_epsilon=10.0,
-        canvas_side=32,
+    unresolved = module._distinguishable_identity_count(
+        runtime=runtime, recovered_latent=latent, image_epsilon=10.0, canvas_side=32
     )
 
-    assert resolved.identity_bits > 0.0
-    assert unresolved.identity_bits == 0.0
-    assert unresolved.distinguishable_identity_count == 1
+    assert resolved > 1
+    assert unresolved == 1
 
 
 def test_inverse_digits_bits_rise_as_reconstruction_residual_falls() -> None:
@@ -394,8 +405,7 @@ def test_inverse_digits_bits_rise_as_reconstruction_residual_falls() -> None:
         return module.inverse_digits_validated_bits(
             runtime=runtime,
             recovered_latent=recovered_latent,
-            certified_epsilon=certificate.certified_epsilon,
-            image_epsilon=certificate.residual_norm,
+            certification=certificate,
             canvas_side=32,
         )
 
@@ -531,8 +541,7 @@ def _certified_bits_for_latent(
     return module.inverse_digits_validated_bits(
         runtime=runtime,
         recovered_latent=recovered_latent,
-        certified_epsilon=certificate.certified_epsilon,
-        image_epsilon=certificate.residual_norm,
+        certification=certificate,
         canvas_side=canvas_side,
     )
 

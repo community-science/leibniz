@@ -129,7 +129,7 @@ _inverse_nuisance_dimension = (
     _inverse_affine_nuisance_dimension + _inverse_deformation_dimension
 )
 _inverse_latent_dimension = _volume_class_digit_count + _inverse_nuisance_dimension
-_inverse_deformation_amplitude = 0.035
+_inverse_deformation_amplitude = 0.06
 _inverse_affine_axis_ranges = {
     "x_translation": 0.32,
     "y_translation": 0.32,
@@ -352,11 +352,14 @@ class StaticMapCertification:
     sigma_min_ladder: tuple[float, ...]
     conditioning_stability: float
     certification_status: str
+    nuisance_bits: float
+    observable_mode_count: int
+    sigma_spectrum: tuple[float, ...]
 
     def to_record(self) -> dict[str, object]:
         return {
             "kind": "digits-static-map-certification",
-            "estimator": "renderer-jvp-gram-sigma-min",
+            "estimator": "renderer-jvp-gram-per-mode-spectrum",
             "certified_epsilon": self.certified_epsilon,
             "residual_norm": self.residual_norm,
             "sigma_min": self.sigma_min,
@@ -364,6 +367,9 @@ class StaticMapCertification:
             "conditioning_stability": self.conditioning_stability,
             "conditioning_refusal_ratio": _static_conditioning_refusal_ratio,
             "certification_status": self.certification_status,
+            "nuisance_bits": self.nuisance_bits,
+            "observable_mode_count": self.observable_mode_count,
+            "sigma_floor": _static_sigma_floor,
         }
 
 
@@ -2353,8 +2359,8 @@ def inverse_digits_static_certification(
         )[0]
     )
     ladder_sides = tuple(int(side) for side in refinement_sides)
-    sigma_ladder = tuple(
-        _inverse_digits_sigma_min(
+    spectra = tuple(
+        _inverse_digits_nuisance_spectrum(
             runtime=runtime,
             identity=recovered_latent.identity,
             nuisance=recovered_latent.to_nuisance_tuple(),
@@ -2362,15 +2368,28 @@ def inverse_digits_static_certification(
         )
         for side in ladder_sides
     )
-    sigma_min = sigma_ladder[-1]
-    positive_sigmas = tuple(value for value in sigma_ladder if value > _static_sigma_floor)
-    stability = (
-        math.inf if not positive_sigmas else max(positive_sigmas) / min(positive_sigmas)
+    sigma_min_ladder = tuple(
+        _inverse_digits_observable_sigma_min(sigmas) for sigmas, _extents in spectra
+    )
+    sigma_max_ladder = tuple(
+        (max(sigmas) if sigmas else 0.0) for sigmas, _extents in spectra
+    )
+    finest_sigmas, finest_extents = spectra[-1]
+    sigma_min = sigma_min_ladder[-1]
+    sigma_max = sigma_max_ladder[-1]
+    # Conditioning stability tracks the DOMINANT observable direction across refinement
+    # (sigma_max). The least-observable near-floor deformation modes are refused per-mode
+    # in the bit count, not treated as a degeneracy of the whole map -- a degenerate latent
+    # (e.g. zero scale) instead collapses sigma_max itself.
+    conditioning_stability = (
+        math.inf
+        if any(value <= _static_sigma_floor for value in sigma_max_ladder)
+        else max(sigma_max_ladder) / min(sigma_max_ladder)
     )
     refused = (
-        sigma_min <= _static_sigma_floor
-        or not math.isfinite(stability)
-        or stability > _static_conditioning_refusal_ratio
+        sigma_max <= _static_sigma_floor
+        or not math.isfinite(conditioning_stability)
+        or conditioning_stability > _static_conditioning_refusal_ratio
     )
     certified_epsilon = (
         math.inf
@@ -2380,13 +2399,26 @@ def inverse_digits_static_certification(
             1.0 / max(sigma_min, _static_sigma_floor),
         )
     )
+    observable_mode_count = sum(1 for value in finest_sigmas if value > _static_sigma_floor)
+    nuisance_bits = (
+        0.0
+        if refused
+        else _inverse_digits_nuisance_bits(
+            sigma_values=finest_sigmas,
+            extent_values=finest_extents,
+            residual_norm=residual_norm,
+        )
+    )
     return StaticMapCertification(
         certified_epsilon=certified_epsilon,
         residual_norm=residual_norm,
         sigma_min=sigma_min,
-        sigma_min_ladder=sigma_ladder,
-        conditioning_stability=stability,
+        sigma_min_ladder=sigma_min_ladder,
+        conditioning_stability=conditioning_stability,
         certification_status="refused-conditioning-unstable" if refused else "certified",
+        nuisance_bits=nuisance_bits,
+        observable_mode_count=observable_mode_count,
+        sigma_spectrum=finest_sigmas,
     )
 
 
@@ -2394,43 +2426,40 @@ def inverse_digits_validated_bits(
     *,
     runtime: TensorRuntime,
     recovered_latent: InverseDigitsLatent,
-    certified_epsilon: float,
-    image_epsilon: float,
+    certification: StaticMapCertification,
     canvas_side: int,
 ) -> InverseDigitsValidatedBits:
-    """Return product-latent ambient entropy resolved to certified precision."""
+    """Validated bits = image-space identity bits + per-mode certified nuisance bits.
 
-    if (
-        not math.isfinite(certified_epsilon)
-        or certified_epsilon <= 0.0
-        or not math.isfinite(image_epsilon)
-    ):
+    Identity distinguishability is measured in image space at the reconstruction
+    residual; the nuisance bits are the per-direction count from the certification
+    (unobservable modes already refused). A non-certified (degenerate) certificate
+    earns zero.
+    """
+
+    if certification.certification_status != "certified":
         return InverseDigitsValidatedBits(
             bits=0.0,
             identity_bits=0.0,
             nuisance_bits=0.0,
             distinguishable_identity_count=1,
-            certified_epsilon=float(certified_epsilon),
+            certified_epsilon=certification.certified_epsilon,
         )
-    resolved_image_epsilon = max(float(image_epsilon), math.ulp(1.0))
+    image_epsilon = max(certification.residual_norm, math.ulp(1.0))
     identity_count = _distinguishable_identity_count(
         runtime=runtime,
         recovered_latent=recovered_latent,
-        image_epsilon=resolved_image_epsilon,
+        image_epsilon=image_epsilon,
         canvas_side=canvas_side,
     )
     identity_bits = math.log2(identity_count)
-    nuisance_bits = sum(
-        max(0.0, math.log2(axis_range / certified_epsilon))
-        for axis_range in _inverse_nuisance_axis_ranges
-    )
-    bits = identity_bits + nuisance_bits
+    nuisance_bits = certification.nuisance_bits
     return InverseDigitsValidatedBits(
-        bits=bits,
+        bits=identity_bits + nuisance_bits,
         identity_bits=identity_bits,
         nuisance_bits=nuisance_bits,
         distinguishable_identity_count=identity_count,
-        certified_epsilon=certified_epsilon,
+        certified_epsilon=certification.certified_epsilon,
     )
 
 
@@ -2576,8 +2605,7 @@ def _inverse_digits_ambient_certified_bits(request: Any) -> Any:
             bits = inverse_digits_validated_bits(
                 runtime=runtime,
                 recovered_latent=recovered_latent,
-                certified_epsilon=certification.certified_epsilon,
-                image_epsilon=certification.residual_norm,
+                certification=certification,
                 canvas_side=side,
             )
             values.append(bits.bits)
@@ -2593,6 +2621,7 @@ def _inverse_digits_ambient_certified_bits(request: Any) -> Any:
                     "certified_epsilon": certification.certified_epsilon,
                     "residual_norm": certification.residual_norm,
                     "sigma_min": certification.sigma_min,
+                    "observable_mode_count": certification.observable_mode_count,
                     "conditioning_stability": certification.conditioning_stability,
                 }
             )
@@ -2640,13 +2669,21 @@ def _distinguishable_identity_count(
     return max(1, separated + 1)
 
 
-def _inverse_digits_sigma_min(
+def _inverse_digits_nuisance_spectrum(
     *,
     runtime: TensorRuntime,
     identity: int,
     nuisance: tuple[float, ...],
     canvas_side: int,
-) -> float:
+) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    """Return per-direction (singular value, prior extent) of the renderer Jacobian.
+
+    The singular values measure how observable each nuisance direction is in the
+    per-pixel-normalized image; the prior extent is the prior box projected onto that
+    direction. Together they give a per-mode certified precision and bit count, so the
+    unobservable high-frequency deformation modes are refused rather than counted.
+    """
+
     backend = runtime.backend
     device = _runtime_device(runtime)
     identity_tensor = backend.tensor([identity], dtype=backend.long, device=device)
@@ -2679,13 +2716,40 @@ def _inverse_digits_sigma_min(
         columns.append(jvp)
     jacobian_columns = backend.stack(columns, dim=1)
     gram = jacobian_columns.transpose(0, 1).matmul(jacobian_columns)
-    eigenvalues = backend.linalg.eigvalsh(gram)
+    eigenvalues, eigenvectors = backend.linalg.eigh(gram)
     singular_values = eigenvalues.clamp_min(0.0).sqrt()
-    resolvable = singular_values[singular_values > _static_sigma_floor]
-    if int(resolvable.numel()) == 0:
-        return 0.0
-    sigma_min = resolvable.min()
-    return float(tensor_value_to_host_values(sigma_min)[0])
+    ranges = backend.tensor(
+        _inverse_nuisance_axis_ranges,
+        dtype=eigenvectors.dtype,
+        device=device,
+    ).reshape((-1, 1))
+    # prior extent along singular direction i: sqrt(sum_a V[a,i]^2 * range_a^2)
+    extents = ((eigenvectors * eigenvectors) * (ranges * ranges)).sum(dim=0).sqrt()
+    sigma_values = tuple(float(v) for v in tensor_value_to_host_values(singular_values))
+    extent_values = tuple(float(v) for v in tensor_value_to_host_values(extents))
+    return sigma_values, extent_values
+
+
+def _inverse_digits_nuisance_bits(
+    *,
+    sigma_values: tuple[float, ...],
+    extent_values: tuple[float, ...],
+    residual_norm: float,
+) -> float:
+    """Per-direction validated bits: only directions observable above the floor count."""
+
+    safe_residual = max(residual_norm, math.ulp(1.0))
+    total = 0.0
+    for sigma, extent in zip(sigma_values, extent_values, strict=True):
+        if sigma <= _static_sigma_floor:
+            continue
+        total += max(0.0, math.log2(extent * sigma / safe_residual))
+    return total
+
+
+def _inverse_digits_observable_sigma_min(sigma_values: tuple[float, ...]) -> float:
+    observable = tuple(value for value in sigma_values if value > _static_sigma_floor)
+    return min(observable) if observable else 0.0
 
 
 def _inverse_digits_latent_from_secret(
