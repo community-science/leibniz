@@ -28,7 +28,7 @@ def test_digits_benchmark_loads_python_implementation_entrypoint() -> None:
     assert implementation.generator.__class__.__name__ == "Generator"
     assert implementation.target_contract.kind == "inverse"
     assert implementation.target_contract.loss_id == "reconstruction"
-    assert implementation.target_contract.expected_output_shape(None) == (15,)
+    assert implementation.target_contract.expected_output_shape(None) == (85,)
     assert implementation.target_contract.chance_mass() is None
     assert implementation.sampling_protocol.kind == "uniform-monte-carlo"
     assert implementation.sampling_protocol.confidence_method_id == "wilson"
@@ -52,7 +52,7 @@ def test_digits_inverse_tensor_generation_and_loss_are_label_free() -> None:
     assert int(fields.shape[-1]) == int(fields.shape[-2])
     assert bool(runtime.torch.allclose(fields, targets))
 
-    predictions = runtime.torch.zeros((2, 15), requires_grad=True)
+    predictions = runtime.torch.zeros((2, 85), requires_grad=True)
     loss: Any = cast(Any, implementation).build_training_loss(
         runtime,
         implementation.target_contract,

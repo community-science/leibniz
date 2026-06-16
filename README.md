@@ -209,10 +209,11 @@ The digits benchmark samples rectangular canvases with independently varying
 height and width. Observation formation now derives the lower canvas floor from
 generic component discriminability analysis rather than a fixed pixel extent per
 digit; the benchmark manifest declares the scalar discriminability margin used
-by that live analysis. Spatial variation is sampled as affine matrix
-coordinates inside the benchmark-owned identity-preserving envelope. Submitted
-Digits inverse programs must therefore accept the observation tensor shape and
-emit the latent-vector output declared by their program graph. Prediction
+by that live analysis. Spatial variation is sampled from the benchmark-owned
+identity-preserving envelope: affine pose, stroke style, and graded
+multi-scale 2D deformation coefficients. Submitted Digits inverse programs
+must therefore accept the observation tensor shape and emit the latent-vector
+output declared by their program graph. Prediction
 programs can declare symbolic support axes, allowing one program family to run
 against variable-size field-valued tasks such as KS without a benchmark-specific
 model name.
@@ -225,9 +226,9 @@ training or scoring path. Certified score is the ambient epsilon-entropy of the
 product latent space, with image residual converted to latent precision by the
 static renderer geometry. Identity contributes only where classes remain
 distinguishable at the certified precision, and nuisance bits come from the
-continuous affine chart. Larger canvases can expose more distinguishable
-nuisance states, but sampled canvas shape is not score-bearing by itself unless
-it changes what latent states can be certified.
+continuous affine, stroke, and deformation chart. Larger canvases can expose
+more distinguishable nuisance states, but sampled canvas shape is not
+score-bearing by itself unless it changes what latent states can be certified.
 
 While a benchmark run is training, gate-check progress may be written under
 `results/training/` as the current training-run record. The console may

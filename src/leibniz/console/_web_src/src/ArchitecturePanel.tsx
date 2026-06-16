@@ -203,7 +203,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'relation to the law',
-            text: 'The law decides which bindings are even possible. The field-evolution benchmark exercises evolution; the inverse-renderer benchmark exercises inverse binding by asking a submission to infer a latent cause from an observed renderer output.',
+            text: 'The law decides which bindings are even possible. The field-evolution benchmark exercises evolution; the inverse-renderer benchmark exercises inverse binding by asking a submission to infer a latent cause, including pose and graded deformation, from an observed renderer output.',
           },
         ],
         verdict: { tone: 'partial', text: 'Evolution and inverse are live benchmark bindings; equilibrium remains a design direction.' },

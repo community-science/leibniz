@@ -40,7 +40,7 @@ def test_model_inspection_summarizes_program_nodes() -> None:
         id=ProtocolIdentifier.parse("model-inspections.tests.digits-program@0.1.0"),
         program_graph=program_graph,
         input_shape=(1, 24, 24),
-        output_shape=(15,),
+        output_shape=(85,),
     )
 
     assert inspection.program.matches_record(program_graph)
@@ -59,7 +59,7 @@ def test_evaluation_bundle_validates_program_sources() -> None:
         model_manifest=model_manifest,
         program_graph=program_graph,
         input_shape=(1, 24, 24),
-        output_shape=(15,),
+        output_shape=(85,),
     )
     dataset = MeasurementDataset(measurements=())
     score_view = MeasurementScoreView.from_dataset(
@@ -116,7 +116,7 @@ def _model_manifest(program_graph: dict[str, object]) -> ModelArtifactManifest:
                     id=ProtocolIdentifier.parse(
                         "model-interfaces.tests.program@0.1.0"
                     ),
-                    dimension=15,
+                    dimension=85,
                     coordinate_name="target-coordinate",
                 ).to_record()
             ),
