@@ -284,6 +284,80 @@ def test_inverse_digits_static_conditioning_is_stable_for_well_posed_glyph() -> 
     assert record["sigma_min_ladder"] == list(certificate.sigma_min_ladder)
 
 
+def test_inverse_digits_product_entropy_is_resolution_independent() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _digits_module()
+    latent = module.InverseDigitsLatent(8, 0.0, 0.0, 1.0, 0.02, 1.0)
+
+    coarse = module.inverse_digits_validated_bits(
+        runtime=runtime,
+        recovered_latent=latent,
+        certified_epsilon=1.0e-2,
+        canvas_side=32,
+    )
+    fine = module.inverse_digits_validated_bits(
+        runtime=runtime,
+        recovered_latent=latent,
+        certified_epsilon=1.0e-2,
+        canvas_side=64,
+    )
+
+    assert coarse.distinguishable_identity_count == fine.distinguishable_identity_count
+    assert math.isclose(coarse.bits, fine.bits, rel_tol=0.0, abs_tol=0.05)
+
+
+def test_inverse_digits_identity_bits_drop_at_certified_precision_boundary() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _digits_module()
+    latent = module.InverseDigitsLatent(8, 0.0, 0.0, 1.0, 0.02, 1.0)
+
+    resolved = module.inverse_digits_validated_bits(
+        runtime=runtime,
+        recovered_latent=latent,
+        certified_epsilon=1.0e-2,
+        canvas_side=32,
+    )
+    unresolved = module.inverse_digits_validated_bits(
+        runtime=runtime,
+        recovered_latent=latent,
+        certified_epsilon=10.0,
+        canvas_side=32,
+    )
+
+    assert resolved.identity_bits > 0.0
+    assert unresolved.identity_bits == 0.0
+    assert unresolved.distinguishable_identity_count == 1
+
+
+def test_inverse_digits_bits_rise_as_reconstruction_residual_falls() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _digits_module()
+    true_latent = module.InverseDigitsLatent(8, 0.0, 0.0, 1.0, 0.02, 1.0)
+    observation = module.render_inverse_digits(
+        runtime=runtime,
+        latents=(true_latent,),
+        canvas_side=32,
+    )
+
+    def bits_for_offset(offset: float) -> float:
+        recovered_latent = module.InverseDigitsLatent(8, offset, 0.0, 1.0, 0.02, 1.0)
+        certificate = module.inverse_digits_static_certification(
+            runtime=runtime,
+            recovered_latent=recovered_latent,
+            observation=observation,
+            canvas_side=32,
+            refinement_sides=(32, 64),
+        )
+        return module.inverse_digits_validated_bits(
+            runtime=runtime,
+            recovered_latent=recovered_latent,
+            certified_epsilon=certificate.certified_epsilon,
+            canvas_side=32,
+        ).bits
+
+    assert bits_for_offset(0.005) > bits_for_offset(0.02) > 0.0
+
+
 def _measurement_for_sequence(
     *,
     sequence: tuple[int, ...],

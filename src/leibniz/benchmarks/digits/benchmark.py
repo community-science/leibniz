@@ -86,9 +86,11 @@ from leibniz.timing import TimingCollector
 __all__ = [
     "InverseDigitsLatent",
     "InverseDigitsObservationBatch",
+    "InverseDigitsValidatedBits",
     "StaticMapCertification",
     "benchmark",
     "inverse_digits_static_certification",
+    "inverse_digits_validated_bits",
     "new_inverse_digits_secret",
     "render_inverse_digits",
     "render_inverse_digits_tensor",
@@ -111,6 +113,13 @@ _canonical_digits_cardinality = _volume_class_digit_count
 _batch_render_curve_sample_count = 25
 _static_conditioning_refusal_ratio = 2.0
 _static_sigma_floor = 1.0e-8
+_inverse_nuisance_axis_ranges = {
+    "x_translation": 0.32,
+    "y_translation": 0.32,
+    "scale": 0.46,
+    "shear": 0.36,
+    "stroke_width": 0.60,
+}
 
 # --- Domain-growth chart geometry (fixed render resolution, growing canvas) ---
 #
@@ -311,6 +320,27 @@ class StaticMapCertification:
             "conditioning_stability": self.conditioning_stability,
             "conditioning_refusal_ratio": _static_conditioning_refusal_ratio,
             "certification_status": self.certification_status,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InverseDigitsValidatedBits:
+    """Product-latent ambient entropy resolved to certified precision."""
+
+    bits: float
+    identity_bits: float
+    nuisance_bits: float
+    distinguishable_identity_count: int
+    certified_epsilon: float
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "kind": "digits-inverse-product-entropy",
+            "bits": self.bits,
+            "identity_bits": self.identity_bits,
+            "nuisance_bits": self.nuisance_bits,
+            "distinguishable_identity_count": self.distinguishable_identity_count,
+            "certified_epsilon": self.certified_epsilon,
         }
 
 
@@ -2654,6 +2684,72 @@ def inverse_digits_static_certification(
         conditioning_stability=stability,
         certification_status="refused-conditioning-unstable" if refused else "certified",
     )
+
+
+def inverse_digits_validated_bits(
+    *,
+    runtime: TensorRuntime,
+    recovered_latent: InverseDigitsLatent,
+    certified_epsilon: float,
+    canvas_side: int,
+) -> InverseDigitsValidatedBits:
+    """Return product-latent ambient entropy resolved to certified precision."""
+
+    if not math.isfinite(certified_epsilon) or certified_epsilon <= 0.0:
+        return InverseDigitsValidatedBits(
+            bits=0.0,
+            identity_bits=0.0,
+            nuisance_bits=0.0,
+            distinguishable_identity_count=1,
+            certified_epsilon=float(certified_epsilon),
+        )
+    identity_count = _distinguishable_identity_count(
+        runtime=runtime,
+        recovered_latent=recovered_latent,
+        certified_epsilon=certified_epsilon,
+        canvas_side=canvas_side,
+    )
+    identity_bits = math.log2(identity_count)
+    nuisance_bits = sum(
+        max(0.0, math.log2(axis_range / certified_epsilon))
+        for axis_range in _inverse_nuisance_axis_ranges.values()
+    )
+    bits = identity_bits + nuisance_bits
+    return InverseDigitsValidatedBits(
+        bits=bits,
+        identity_bits=identity_bits,
+        nuisance_bits=nuisance_bits,
+        distinguishable_identity_count=identity_count,
+        certified_epsilon=certified_epsilon,
+    )
+
+
+def _distinguishable_identity_count(
+    *,
+    runtime: TensorRuntime,
+    recovered_latent: InverseDigitsLatent,
+    certified_epsilon: float,
+    canvas_side: int,
+) -> int:
+    torch = runtime.torch
+    identities = torch.arange(_volume_class_digit_count, dtype=torch.long, device=runtime.device)
+    nuisance = torch.tensor(
+        [recovered_latent.to_nuisance_tuple()] * _volume_class_digit_count,
+        dtype=torch.float32,
+        device=runtime.device,
+    )
+    renders = render_inverse_digits_tensor(
+        runtime,
+        identities=identities,
+        nuisance=nuisance,
+        canvas_side=canvas_side,
+    )
+    recovered = renders[recovered_latent.identity].reshape(1, -1)
+    distances = (renders.reshape(_volume_class_digit_count, -1) - recovered).pow(2).mean(
+        dim=1
+    ).sqrt()
+    separated = int((distances > float(certified_epsilon)).sum())
+    return max(1, separated + 1)
 
 
 def _inverse_digits_sigma_min(
