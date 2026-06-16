@@ -19,6 +19,7 @@ from leibniz.prediction_spaces import (
     FiniteTokenSequenceSpace,
     PredictionSpace,
     PredictionSpaceValidationError,
+    RealVectorSpace,
     parse_prediction_space,
 )
 from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
@@ -32,8 +33,13 @@ __all__ = [
 _PredictionKind: TypeAlias = Literal[
     "direct-finite-probability-measure",
     "autoregressive-finite-token-sequence",
+    "direct-real-vector",
 ]
-_OutputEncoding: TypeAlias = Literal["probability-mass-sequence", "sequence-probability"]
+_OutputEncoding: TypeAlias = Literal[
+    "probability-mass-sequence",
+    "sequence-probability",
+    "coordinate-sequence",
+]
 
 _model_interface_record = RecordSpec(
     fields={
@@ -81,10 +87,17 @@ class ModelInterface:
             and self.prediction_space.sequence_boundary == "eos-terminated"
         ):
             return
+        if (
+            self.prediction_kind == "direct-real-vector"
+            and self.output_encoding == "coordinate-sequence"
+            and isinstance(self.prediction_space, RealVectorSpace)
+        ):
+            return
         raise ModelInterfaceValidationError(
             "model interface must pair finite probability measures with finite outcome "
             "spaces, or autoregressive sequence probabilities with eos-terminated "
-            "finite token sequence spaces"
+            "finite token sequence spaces, or direct real-vector outputs with real vector "
+            "spaces"
         )
 
     @classmethod
@@ -104,11 +117,29 @@ class ModelInterface:
         )
 
     @classmethod
+    def from_real_vector_space(
+        cls,
+        *,
+        id: ProtocolIdentifier,
+        dimension: int,
+        coordinate_name: str = "value",
+    ) -> ModelInterface:
+        return cls(
+            id=id,
+            prediction_space=RealVectorSpace(
+                dimension=dimension,
+                coordinate_name=coordinate_name,
+            ),
+            prediction_kind="direct-real-vector",
+            output_encoding="coordinate-sequence",
+        )
+
+    @classmethod
     def from_record(
         cls,
         record: Mapping[str, object],
         *,
-        outcome_space: OutcomeSpace,
+        outcome_space: OutcomeSpace | None = None,
     ) -> ModelInterface:
         try:
             validated = _model_interface_record.validate(record)
@@ -135,6 +166,13 @@ class ModelInterface:
                 "autoregressive-finite-token-sequence requires finite-token-sequence "
                 "prediction_space"
             )
+        if validated["prediction_kind"] == "direct-real-vector" and not isinstance(
+            prediction_space,
+            RealVectorSpace,
+        ):
+            raise ModelInterfaceValidationError(
+                "direct-real-vector requires real-vector prediction_space"
+            )
         interface = cls(
             id=_record.identifier(validated["id"], "id"),
             prediction_space=prediction_space,
@@ -142,6 +180,10 @@ class ModelInterface:
             output_encoding=cast(_OutputEncoding, validated["output_encoding"]),
         )
         if isinstance(interface.prediction_space, FiniteOutcomeSpace):
+            if outcome_space is None:
+                raise ModelInterfaceValidationError(
+                    "finite outcome model interfaces require outcome_space"
+                )
             interface.validate_outcome_space(outcome_space)
         return interface
 

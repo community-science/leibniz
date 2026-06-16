@@ -48,11 +48,11 @@ class _RecordSerializable(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkManifest:
-    """A benchmark manifest for fixed finite outcomes."""
+    """A benchmark manifest for a benchmark task."""
 
     id: ProtocolIdentifier
     name: ProtocolName
-    outcome_space: OutcomeSpace
+    outcome_space: OutcomeSpace | None = None
     observation_ids: frozenset[str] | None = None
     latent_factor_declaration: ArtifactReference | None = None
     resolution_analysis: Mapping[str, object] | None = None
@@ -177,6 +177,8 @@ class BenchmarkManifest:
     def resolve_outcome_space(self) -> OutcomeSpace:
         """Return this benchmark's fixed finite outcome space."""
 
+        if self.outcome_space is None:
+            raise BenchmarkManifestValidationError("manifest does not declare outcome_space")
         return self.outcome_space
 
     def to_record(self) -> dict[str, object]:
@@ -184,7 +186,8 @@ class BenchmarkManifest:
             "id": str(self.id),
             "name": str(self.name),
         }
-        record["outcome_space"] = self.outcome_space.to_record()
+        if self.outcome_space is not None:
+            record["outcome_space"] = self.outcome_space.to_record()
         if self.observation_ids is not None:
             record["observation_ids"] = sorted(self.observation_ids)
         if self.latent_factor_declaration is not None:
@@ -263,10 +266,10 @@ def _manifest_name(validated: Mapping[str, object]) -> ProtocolName:
     return _as_name(value, field="name")
 
 
-def _manifest_outcome_space(validated: Mapping[str, object]) -> OutcomeSpace:
+def _manifest_outcome_space(validated: Mapping[str, object]) -> OutcomeSpace | None:
     value = validated.get("outcome_space")
     if value is None:
-        raise BenchmarkManifestValidationError("manifest must declare outcome_space")
+        return None
     try:
         return OutcomeSpace.from_record(_extract.mapping(value, "outcome_space"))
     except ValueError as error:

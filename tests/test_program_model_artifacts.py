@@ -40,14 +40,12 @@ def test_model_inspection_summarizes_program_nodes() -> None:
         id=ProtocolIdentifier.parse("model-inspections.tests.digits-program@0.1.0"),
         program_graph=program_graph,
         input_shape=(1, 24, 24),
-        output_shape=(10,),
+        output_shape=(15,),
     )
 
     assert inspection.program.matches_record(program_graph)
     assert tuple(component.kind for component in inspection.components) == (
-        "pool",
-        "flatten",
-        "readout",
+        "encoder",
     )
     assert inspection.to_record()["program_graph"] == program_graph
 
@@ -61,7 +59,7 @@ def test_evaluation_bundle_validates_program_sources() -> None:
         model_manifest=model_manifest,
         program_graph=program_graph,
         input_shape=(1, 24, 24),
-        output_shape=(10,),
+        output_shape=(15,),
     )
     dataset = MeasurementDataset(measurements=())
     score_view = MeasurementScoreView.from_dataset(
@@ -114,9 +112,12 @@ def _model_manifest(program_graph: dict[str, object]) -> ModelArtifactManifest:
         interface=ArtifactReference(
             kind="model-interface",
             record_digest=ContentDigest.from_value(
-                ModelInterface.from_outcome_space(
-                    id=ProtocolIdentifier.parse("model-interfaces.tests.program@0.1.0"),
-                    outcome_space=_digits_benchmark_manifest().resolve_outcome_space(),
+                ModelInterface.from_real_vector_space(
+                    id=ProtocolIdentifier.parse(
+                        "model-interfaces.tests.program@0.1.0"
+                    ),
+                    dimension=15,
+                    coordinate_name="target-coordinate",
                 ).to_record()
             ),
         ),
@@ -132,7 +133,7 @@ def _model_manifest(program_graph: dict[str, object]) -> ModelArtifactManifest:
 
 def _digits_program_graph() -> dict[str, object]:
     return load_program_graph(
-        _fixture("fixtures/programs/digits_pool.py"),
+        _fixture("fixtures/programs/digits_inverse_conv_encoder.py"),
         resolve_host_tensor_runtime(),
     ).graph.to_record()
 

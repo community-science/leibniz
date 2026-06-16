@@ -72,8 +72,9 @@ def profile_formation_operators(plan: FormationOperatorProfilePlan) -> dict[str,
         tensor_runtime_available_memory_bytes(runtime),
         _initial_generation_memory_limit_bytes,
     )
-    outcome_ids = tuple(
-        outcome.id for outcome in generator.manifest.resolve_outcome_space().outcomes
+    outcome_space = generator.manifest.outcome_space
+    outcome_ids = (
+        () if outcome_space is None else tuple(outcome.id for outcome in outcome_space.outcomes)
     )
 
     def tensor_once(seed: int) -> None:

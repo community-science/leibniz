@@ -113,7 +113,7 @@ def test_digits_generator_is_deterministic() -> None:
         ),
     )
     assert sample_component_index(first_sample) == first_sample.component_index
-    assert first_sample.outcome_id == f"digit-{first_sample.component_index}"
+    assert first_sample.outcome_id == "inverse-observation"
     assert _coordinate(first_sample.latent_coordinates, role="content")["values"] == {
             "digit_index": first_sample.component_index,
             "digit_variant_index": 0,
@@ -297,7 +297,7 @@ def test_digits_generator_samples_resolution_from_memory_bound() -> None:
         batch.log2_volume,
         generator.distinguishable_state_log2_volume(width=width, height=height),
     )
-    assert sample.outcome_id == f"digit-{sample.component_index}"
+    assert sample.outcome_id == "inverse-observation"
 
 
 def test_digits_generator_counts_setup_window_volume_class() -> None:
@@ -380,7 +380,10 @@ def test_digits_generator_accepts_volume_value_requests() -> None:
         (1, 28, 28),
         (1, 28, 28),
     ]
-    assert [sample.outcome_id for sample in batch.samples] == ["digit-0", "digit-0"]
+    assert [sample.outcome_id for sample in batch.samples] == [
+        "inverse-observation",
+        "inverse-observation",
+    ]
     assert [sample.component_index for sample in batch.samples] == [0, 0]
     assert math.isclose(batch.log2_volume, requested_log2_volume)
     assert volume_request.contains(batch.log2_volume)
@@ -783,13 +786,11 @@ def test_digits_generator_applies_recorded_variation_coordinates() -> None:
 def test_digits_tensor_fields_match_recorded_field_samples() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
-    outcome_space = generator.manifest.resolve_outcome_space()
     batch = generator(
         shape=4,
         seed=909,
         include_fields=True,
         runtime=runtime,
-        outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
     )
     host_batch = generator(
         shape=4,
@@ -863,8 +864,6 @@ def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
         cuda_runtime = resolve_tensor_runtime("cuda")
     except TensorRuntimeError as error:
         pytest.skip(str(error))
-    outcome_space = generator.manifest.resolve_outcome_space()
-    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     request = StateSpaceVolumeRequest(
         minimum=generator.minimum_log2_volume().value + 6.0,
         maximum=generator.minimum_log2_volume().value + 7.0,
@@ -875,7 +874,6 @@ def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
         seed=444,
         include_fields=False,
         runtime=cpu_runtime,
-        outcome_ids=outcome_ids,
         volume_request=request,
     ).require_tensors()[0]
     cuda_fields = generator(
@@ -883,7 +881,6 @@ def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
         seed=444,
         include_fields=False,
         runtime=cuda_runtime,
-        outcome_ids=outcome_ids,
         volume_request=request,
     ).require_tensors()[0]
 
@@ -934,14 +931,12 @@ def test_digits_mps_tensor_fields_match_cpu_reference() -> None:
 def test_digits_tensor_generation_returns_null_set_for_unmatched_volume_requests() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
-    outcome_space = generator.manifest.resolve_outcome_space()
     request = StateSpaceVolumeRequest(minimum=0.5, maximum=0.5)
 
     sample_set = generator(
         shape=1,
         seed=910,
         runtime=runtime,
-        outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
         volume_request=request,
     )
 

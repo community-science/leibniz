@@ -2363,7 +2363,10 @@ def _console_interval_label(point: Mapping[str, object]) -> str:
 
 
 def _prediction_space_label(manifest: BenchmarkManifest) -> str:
-    return f"finite outcome space with {len(manifest.outcome_space.outcomes)} outcomes"
+    outcome_space = manifest.outcome_space
+    if outcome_space is None:
+        return "real vector target space"
+    return f"finite outcome space with {len(outcome_space.outcomes)} outcomes"
 
 
 def _model_volume_label(manifest: BenchmarkManifest) -> str:
@@ -2857,6 +2860,8 @@ def _point_sample_count(point: Mapping[str, object]) -> int:
 
 
 def _chance_mass(manifest: BenchmarkManifest) -> float:
+    if manifest.outcome_space is None:
+        return 0.0
     outcome_count = len(manifest.outcome_space.outcomes)
     if outcome_count < 1:
         return 0.0

@@ -119,7 +119,7 @@ const generatedSample = benchmarkTask?.batches[3]?.samples[0];
 if (generatedSample === undefined) {
   throw new Error('expected generated sample');
 }
-assertEqual(generatedSample.outcome_id.startsWith('digit-'), true, 'sample outcome id');
+assertEqual(generatedSample.outcome_id, 'inverse-observation', 'sample outcome id');
 assertEqual(requiredFieldShape(generatedSample).join('x'), '1x36x36', 'sample field shape');
 assertEqual(
   Object.hasOwn(generatedSample, 'preview_crop'),

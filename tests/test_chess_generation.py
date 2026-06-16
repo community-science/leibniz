@@ -46,7 +46,9 @@ def test_chess_generator_exposes_python_manifest() -> None:
 
     assert str(generator.manifest.id) == "benchmarks.chess@0.1.0"
     assert generator.manifest.observation_ids is None
-    outcome_ids = tuple(outcome.id for outcome in generator.manifest.outcome_space.outcomes)
+    outcome_space = generator.manifest.outcome_space
+    assert outcome_space is not None
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     assert outcome_ids == tuple(sorted(outcome_ids))
     assert "e2e4" in outcome_ids
     assert "g1f3" in outcome_ids
@@ -610,7 +612,9 @@ def test_chess_representative_analysis_exposes_indexed_family_metadata() -> None
 def test_chess_generator_returns_board_tensors_and_move_targets() -> None:
     generator = load_generator(_chess_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
-    outcome_ids = tuple(outcome.id for outcome in generator.manifest.outcome_space.outcomes)
+    outcome_space = generator.manifest.outcome_space
+    assert outcome_space is not None
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     log2_volume = generator.minimum_log2_volume().value
     request = StateSpaceVolumeRequest(minimum=log2_volume, maximum=log2_volume)
 
@@ -640,7 +644,9 @@ def test_chess_generator_returns_board_tensors_and_move_targets() -> None:
 def test_chess_metadata_and_tensor_construction_share_sample_addresses() -> None:
     generator = load_generator(_chess_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
-    outcome_ids = tuple(outcome.id for outcome in generator.manifest.outcome_space.outcomes)
+    outcome_space = generator.manifest.outcome_space
+    assert outcome_space is not None
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
 
     metadata_sample_set = generator(
         seed=47,
@@ -674,7 +680,9 @@ def test_chess_metadata_and_tensor_construction_share_sample_addresses() -> None
 def test_chess_generator_can_return_metadata_free_tensors() -> None:
     generator = load_generator(_chess_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
-    outcome_ids = tuple(outcome.id for outcome in generator.manifest.outcome_space.outcomes)
+    outcome_space = generator.manifest.outcome_space
+    assert outcome_space is not None
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
 
     sample_set = generator(
         seed=47,

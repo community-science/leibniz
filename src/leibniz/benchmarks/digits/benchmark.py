@@ -58,7 +58,6 @@ from leibniz.observation_showcases import (
     ObservationShowcaseManifest,
     ObservationShowcaseSample,
 )
-from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.state_space import (
     AccessibleSubspace,
     ContinuousAxisRegion,
@@ -108,7 +107,6 @@ _latent_factor_id = ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0
 _materialization_id = ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0")
 _formation_id = ProtocolIdentifier.parse("benchmarks.digits.observation-formation@0.1.0")
 _generator_id = ProtocolIdentifier.parse("benchmarks.digits.generator@0.1.0")
-_outcome_space_id = ProtocolIdentifier.parse("benchmarks.digits.outcomes@0.1.0")
 _field_scalar_construction_bytes = 64
 _default_memory_budget_fraction = 0.10
 _default_generation_memory_limit_bytes = 32_768_000
@@ -1070,7 +1068,6 @@ class Generator:
     ) -> tuple[Any, Any]:
         """Generate tensor fields and targets directly from the Digits volume shell."""
 
-        sample_count = _sample_count(sample_shape)
         fields = self._generate_tensor_fields(
             sample_shape=sample_shape,
             seed=seed,
@@ -1082,41 +1079,9 @@ class Generator:
             timing=timing,
             timing_prefix=timing_prefix,
         )
-        if not outcome_ids:
-            return fields, fields
-        with _timing_span(timing, f"{timing_prefix}target_tensor", samples=sample_count):
-            component_outcome_ids = tuple(
-                outcome.id for outcome in self.manifest.outcome_space.outcomes
-            )
-            unknown = tuple(
-                outcome_id
-                for outcome_id in component_outcome_ids[: volume_class.digit_count]
-                if outcome_id not in outcome_ids
-            )
-            if unknown:
-                raise TensorRuntimeError(f"unknown target outcome id: {unknown[0]}")
-            component_to_outcome = tuple(
-                outcome_ids.index(outcome_id)
-                for outcome_id in component_outcome_ids[: volume_class.digit_count]
-            )
-            labels = tensor_runtime_construct_tensor(
-                runtime,
-                recipe=TensorElementRecipe(
-                    shape=(*sample_shape, len(outcome_ids))
-                    if sample_shape
-                    else (len(outcome_ids),),
-                    dtype="float32",
-                    program=_target_tensor_program(
-                        seed=seed,
-                        sample_indices=sample_indices,
-                        cardinality=volume_class.cardinality,
-                        minimum_address=volume_class.minimum_address,
-                        component_to_outcome=component_to_outcome,
-                        outcome_count=len(outcome_ids),
-                    ),
-                ),
-            )
-        return fields, labels
+        if outcome_ids:
+            raise ObservationGenerationError("inverse Digits does not expose finite labels")
+        return fields, fields
 
     def _generate_tensor_fields(
         self,
@@ -1511,9 +1476,8 @@ class Generator:
         return AxisAssignment(values=values)
 
     def _outcome_id(self, component_index: int) -> str:
-        if component_index >= len(self.manifest.outcome_space.outcomes):
-            raise ObservationGenerationError("component index is outside outcome space")
-        return self.manifest.outcome_space.outcomes[component_index].id
+        del component_index
+        return "inverse-observation"
 
     def _latent_coordinates(
         self,
@@ -2246,59 +2210,6 @@ def _constant_tensor_program(value: float) -> TensorBatchProgram:
         kernel=element_function,
         parameters={},
         cache_key=("constant", value),
-    )
-
-
-def _target_tensor_program(
-    *,
-    seed: int,
-    sample_indices: tuple[int, ...],
-    cardinality: int,
-    minimum_address: int,
-    component_to_outcome: tuple[int, ...],
-    outcome_count: int,
-) -> TensorBatchProgram:
-    sample_addresses = _digits_sample_addresses(
-        seed=seed,
-        sample_indices=sample_indices,
-        cardinality=cardinality,
-        minimum_address=minimum_address,
-    )
-
-    def element_function(
-        coordinates: tuple[Any, ...],
-        *,
-        sample_address_values: Any,
-        component_to_outcome: Any,
-    ) -> Any:
-        if len(coordinates) == 1:
-            outcome_index = coordinates[0]
-            sample_axis_index = outcome_index[0] * 0
-        else:
-            sample_axis_index, outcome_index = coordinates
-        sample_address = sample_address_values[sample_axis_index]
-        component_index = sample_address.remainder(len(component_to_outcome))
-        target_index = component_to_outcome[component_index]
-        return (target_index.reshape((-1, 1)) == outcome_index.reshape((1, -1))).to(
-            dtype=target_index.dtype
-        )
-
-    return TensorBatchProgram(
-        kernel=element_function,
-        parameters={
-            "sample_address_values": TensorElementParameter(
-                dtype="int64",
-                shape=(len(sample_addresses),),
-                values=sample_addresses,
-                dynamic_axes=(0,),
-            ),
-            "component_to_outcome": TensorElementParameter(
-                dtype="int64",
-                shape=(len(component_to_outcome),),
-                values=component_to_outcome,
-            ),
-        },
-        cache_key=("target", outcome_count),
     )
 
 
@@ -3233,10 +3144,7 @@ def _manifest() -> BenchmarkManifest:
     return BenchmarkManifest(
         id=_benchmark_id,
         name=ProtocolName.parse("benchmarks.digits"),
-        outcome_space=OutcomeSpace(
-            id=_outcome_space_id,
-            outcomes=tuple(Outcome(id=f"digit-{digit}") for digit in range(10)),
-        ),
+        outcome_space=None,
         latent_factor_declaration=_latent_factor_reference(),
         resolution_analysis={
             "kind": "component-discriminability-margin",

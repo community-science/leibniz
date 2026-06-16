@@ -992,7 +992,11 @@ def run_benchmark(
     accessible_subspace = benchmark.accessible_subspace
     program_identity = _load_program_graph_identity(plan.program_path)
     program_graph_record = program_identity.graph.to_record()
-    outcome_space = benchmark.manifest.resolve_outcome_space()
+    outcome_space = (
+        benchmark.manifest.resolve_outcome_space()
+        if target_contract.kind == "finite-outcome"
+        else None
+    )
     outcome_ids = _target_contract_outcome_ids(target_contract)
     summary = _run_summary(
         plan=plan,
@@ -1058,12 +1062,21 @@ def run_benchmark(
     )
 
     progress_path = _training_progress_path(summary)
-    model_interface = ModelInterface.from_outcome_space(
-        id=ProtocolIdentifier.parse(
-            f"model-interfaces.{_identifier_atom(generator.manifest.id)}."
-            f"{summary.run_slug}@0.1.0"
-        ),
-        outcome_space=outcome_space,
+    model_interface_id = ProtocolIdentifier.parse(
+        f"model-interfaces.{_identifier_atom(generator.manifest.id)}."
+        f"{summary.run_slug}@0.1.0"
+    )
+    model_interface = (
+        ModelInterface.from_outcome_space(
+            id=model_interface_id,
+            outcome_space=outcome_space,
+        )
+        if outcome_space is not None
+        else ModelInterface.from_real_vector_space(
+            id=model_interface_id,
+            dimension=_shape_element_count(output_shape),
+            coordinate_name="target-coordinate",
+        )
     )
     checkpoint_artifacts: list[ModelCheckpointArtifact] = []
     progress_timings = TimingCollector()
@@ -1331,7 +1344,11 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         target_contract = benchmark.target_contract
     with workflow_timings.span("evaluation_workflow.load_checkpoint_input"):
         evaluation_input = _evaluation_input_from_plan(plan, generator=generator)
-        outcome_space = generator.manifest.resolve_outcome_space()
+        outcome_space = (
+            generator.manifest.resolve_outcome_space()
+            if target_contract.kind == "finite-outcome"
+            else None
+        )
         selected_checkpoint = evaluation_input.checkpoint
         run_slug = evaluation_input.run_slug
         benchmark_id = evaluation_input.benchmark_id
@@ -1393,6 +1410,8 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
                 final_competence_diagnostics,
             )
         else:
+            if outcome_space is None:
+                raise BenchmarkRunnerError("finite outcome evaluation requires outcome_space")
             final_measurements = finite_measurements_for_predictions(
                 batch=final_evaluation_batch,
                 outcome_space=outcome_space,
@@ -5565,11 +5584,15 @@ def _training_work_estimates(
     )
 
 
-def _shape_bytes(shape: Sequence[int]) -> float:
+def _shape_element_count(shape: Sequence[int]) -> int:
     element_count = 1
     for axis in shape:
         element_count *= axis
-    return float(element_count * 4)
+    return element_count
+
+
+def _shape_bytes(shape: Sequence[int]) -> float:
+    return float(_shape_element_count(shape) * 4)
 
 
 def _make_optimizer(

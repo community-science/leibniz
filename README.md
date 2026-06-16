@@ -172,7 +172,7 @@ Run the canonical reference trainer against an explicit submitted program:
 ```bash
 leibniz benchmark train \
   digits \
-  --program tests/fixtures/programs/digits_pool.py
+  --program tests/fixtures/programs/digits_inverse_conv_encoder.py
 ```
 
 Run the same reference trainer against the variable-resolution KS prediction

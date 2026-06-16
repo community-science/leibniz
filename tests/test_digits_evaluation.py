@@ -8,71 +8,21 @@ from typing import Any, cast
 import pytest
 from benchmark_typing import load_digits_benchmark
 
-from leibniz.artifacts import ArtifactReference
 from leibniz.benchmarks import BenchmarkManifest
-from leibniz.identifiers import ProtocolIdentifier
-from leibniz.materialization import MaterializationPlanDocument
-from leibniz.measurements import MeasurementRecord
 from leibniz.observation_generation import StateSpaceVolumeRequest
-from leibniz.outcomes import (
-    AcceptedEvent,
-    FiniteProbabilityMeasure,
-    ProbabilityMass,
-    RawScoringEvidence,
-)
 from leibniz.state_space import ContinuousAxisRegion, RealIntervalDomain
 from leibniz.tensor_runtime import resolve_tensor_runtime
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
-_digits_fixture_root = _repository_root / "tests" / "fixtures" / "digits"
 
-
-def test_digits_length_one_perfect_measurement_scores_full_accepted_mass() -> None:
-    measurement = _measurement_for_sequence(
-        sequence=(7,),
-        plan_name="materialization_plan_l1.json",
-        measure_kind="perfect",
-    )
-
-    measurement.validate_manifest(_digits_manifest())
-
-    assert measurement.raw_scoring_evidence.observation_id == (
-        "benchmarks.digits.observations.l1.digit-7@0.1.0"
-    )
-    assert measurement.raw_scoring_evidence.accepted_mass == 1.0
-    assert measurement.raw_scoring_evidence.negative_log_score == 0.0
-    assert [artifact.kind for artifact in measurement.evidence_artifacts] == [
-        "observation-formation-declaration",
-        "materialization-plan",
-    ]
-
-
-def test_digits_length_one_uniform_and_wrong_measurements_score_expected_mass() -> None:
-    uniform = _measurement_for_sequence(
-        sequence=(7,),
-        plan_name="materialization_plan_l1.json",
-        measure_kind="uniform",
-    )
-    wrong = _measurement_for_sequence(
-        sequence=(7,),
-        plan_name="materialization_plan_l1.json",
-        measure_kind="wrong",
-    )
-
-    assert math.isclose(uniform.raw_scoring_evidence.accepted_mass, 0.1)
-    assert math.isclose(uniform.raw_scoring_evidence.negative_log_score, math.log(10))
-    assert wrong.raw_scoring_evidence.accepted_mass == 0.0
-    assert wrong.raw_scoring_evidence.negative_log_score == math.inf
-
-
-def test_digits_manifest_declares_single_digit_outcomes() -> None:
+def test_digits_manifest_declares_inverse_contract_without_finite_outcomes() -> None:
     manifest = _digits_manifest()
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
 
-    assert manifest.outcome_space is not None
-    assert [outcome.id for outcome in manifest.outcome_space.outcomes] == [
-        f"digit-{index}" for index in range(10)
-    ]
+    assert manifest.outcome_space is None
+    assert benchmark.target_contract.kind == "inverse"
+    assert benchmark.target_contract.expected_output_shape(None) == (15,)
 
 
 def test_digits_realized_regions_claim_continuous_transform_cells() -> None:
@@ -200,16 +150,18 @@ def test_inverse_digits_renderer_changes_continuously_with_pose() -> None:
     assert far_delta > near_delta
 
 
-def test_inverse_digits_canonical_template_baseline_does_not_saturate_headroom() -> None:
+def test_inverse_digits_canonical_template_baseline_leaves_headroom_on_prior() -> None:
     runtime = resolve_tensor_runtime("cpu")
     module = _digits_module()
+    batch = module.sample_inverse_digits_observations(
+        runtime=runtime,
+        secret=b"deterministic inverse headroom seed",
+        sample_count=64,
+        canvas_side=32,
+    )
     observations = module.render_inverse_digits(
         runtime=runtime,
-        latents=(
-            module.InverseDigitsLatent(0, 0.12, -0.08, 0.82, 0.16, 1.2),
-            module.InverseDigitsLatent(1, -0.14, 0.07, 1.16, -0.15, 0.8),
-            module.InverseDigitsLatent(8, 0.13, 0.11, 0.78, 0.18, 1.3),
-        ),
+        latents=batch.latents,
         canvas_side=32,
     )
     templates = module.render_inverse_digits(
@@ -220,10 +172,20 @@ def test_inverse_digits_canonical_template_baseline_does_not_saturate_headroom()
         ),
         canvas_side=32,
     )
-    squared_errors = (observations.reshape(3, 1, -1) - templates.reshape(1, 10, -1)).pow(2)
+    true_residual = (observations - batch.observations).pow(2).mean().sqrt()
+    squared_errors = (
+        observations.reshape(len(batch.latents), 1, -1) - templates.reshape(1, 10, -1)
+    ).pow(2)
     template_predictions = squared_errors.mean(dim=2).argmin(dim=1)
+    template_residual = squared_errors.mean(dim=2).min(dim=1).values.sqrt().mean()
+    matched = sum(
+        int(template_predictions[index]) == latent.identity
+        for index, latent in enumerate(batch.latents)
+    )
 
-    assert tuple(int(value) for value in template_predictions) != (0, 1, 8)
+    assert float(true_residual) == 0.0
+    assert matched <= len(batch.latents) // 2
+    assert float(template_residual) > 0.2
 
 
 def test_inverse_digits_static_certification_bounds_perturbed_latent_error() -> None:
@@ -496,92 +458,6 @@ def test_inverse_digits_mnist_held_out_check_if_local_idx_available() -> None:
         if recovered_digit == label
     )
     assert _binomial_upper_tail(matches, len(labels), 0.1) < 0.05
-
-
-def _measurement_for_sequence(
-    *,
-    sequence: tuple[int, ...],
-    plan_name: str,
-    measure_kind: str,
-) -> MeasurementRecord:
-    manifest = _digits_manifest()
-    declaration = load_digits_benchmark(_digits_benchmark_root).formation
-    plan = MaterializationPlanDocument.from_bytes(
-        (_digits_fixture_root / plan_name).read_bytes()
-    ).plan
-    scale = 1
-    outcome_space = manifest.resolve_outcome_space()
-    assert manifest.outcome_space is not None
-    assert len(sequence) == 1
-    accepted_outcome = f"digit-{sequence[0]}"
-    sequence_label = accepted_outcome.removeprefix("digit-")
-    observation_id = ProtocolIdentifier.parse(
-        f"benchmarks.digits.observations.l{scale}.digit-{sequence_label}@0.1.0"
-    )
-    accepted_event = AcceptedEvent.from_record(
-        {
-            "id": f"benchmarks.digits.events.l{scale}.digit-{sequence_label}@0.1.0",
-            "outcome_space_id": str(outcome_space.id),
-            "outcomes": [accepted_outcome],
-        },
-        outcome_space=outcome_space,
-    )
-    probability_measure = FiniteProbabilityMeasure(
-        id=ProtocolIdentifier.parse(
-            f"benchmarks.digits.measures.l{scale}.digit-{sequence_label}.{measure_kind}@0.1.0"
-        ),
-        outcome_space_id=outcome_space.id,
-        probabilities=_probabilities(
-            outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
-            accepted_outcome=accepted_outcome,
-            measure_kind=measure_kind,
-        ),
-    )
-    return MeasurementRecord(
-        benchmark_id=manifest.id,
-        outcome_space=outcome_space,
-        accepted_event=accepted_event,
-        probability_measure=probability_measure,
-        raw_scoring_evidence=RawScoringEvidence.from_event_and_measure(
-            id=ProtocolIdentifier.parse(
-                f"benchmarks.digits.evidence.l{scale}.digit-{sequence_label}.{measure_kind}@0.1.0"
-            ),
-            observation_id=str(observation_id),
-            event=accepted_event,
-            measure=probability_measure,
-        ),
-        evidence_artifacts=(
-            ArtifactReference(
-                kind="observation-formation-declaration",
-                protocol_id=declaration.id,
-                record_digest=declaration.digest,
-            ),
-            ArtifactReference(
-                kind="materialization-plan",
-                protocol_id=plan.id,
-                record_digest=plan.digest,
-            ),
-        ),
-    )
-
-
-def _probabilities(
-    *,
-    outcome_ids: tuple[str, ...],
-    accepted_outcome: str,
-    measure_kind: str,
-) -> tuple[ProbabilityMass, ...]:
-    if measure_kind == "perfect":
-        return (ProbabilityMass(accepted_outcome, 1.0),)
-    if measure_kind == "wrong":
-        wrong_outcome = next(
-            outcome_id for outcome_id in outcome_ids if outcome_id != accepted_outcome
-        )
-        return (ProbabilityMass(wrong_outcome, 1.0),)
-    if measure_kind == "uniform":
-        probability = 1.0 / len(outcome_ids)
-        return tuple(ProbabilityMass(outcome_id, probability) for outcome_id in outcome_ids)
-    raise AssertionError(f"unknown measure kind: {measure_kind}")
 
 
 def _digits_manifest() -> BenchmarkManifest:

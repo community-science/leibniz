@@ -452,9 +452,12 @@ class ConsoleDataBuilder:
             )
             generator = load_generator(benchmark_root)
             manifest = generator.manifest
-            atom_count = len(manifest.outcome_space.outcomes)
-            outcome_atom_name = _outcome_atom_name(
-                tuple(outcome.id for outcome in manifest.outcome_space.outcomes)
+            outcome_space = manifest.outcome_space
+            atom_count = 0 if outcome_space is None else len(outcome_space.outcomes)
+            outcome_atom_name = (
+                "continuous target"
+                if outcome_space is None
+                else _outcome_atom_name(tuple(outcome.id for outcome in outcome_space.outcomes))
             )
             tasks.append(
                 {
