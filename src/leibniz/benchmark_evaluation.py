@@ -449,14 +449,12 @@ def sampled_competence_metrology_cost_integral(
                 StateSpaceIntegralTerm(
                     lower=minimum,
                     upper=maximum,
-                    competence_density=CostMeasurement.abstract_flops_bit_density(
-                        _record_cost_measurement_ops_per_item(
-                            point,
-                            field_prefix=field_prefix,
-                            error_type=error_type,
-                        )
+                    competence_density=_record_cost_measurement_energy_per_item(
+                        point,
+                        field_prefix=field_prefix,
+                        error_type=error_type,
                     ),
-                    kind="metrology-compute-cost",
+                    kind="metrology-energy-cost",
                     representative_log2_volume=log2_volume,
                 )
             )
@@ -469,7 +467,7 @@ def _competence_point_interval_sort_key(point: CompetencePoint) -> tuple[float, 
     return (lower, upper)
 
 
-def _record_cost_measurement_ops_per_item(
+def _record_cost_measurement_energy_per_item(
     point: Mapping[str, object],
     *,
     field_prefix: str,
@@ -486,7 +484,7 @@ def _record_cost_measurement_ops_per_item(
         field=f"{field_prefix}.inference_cost_sample_count",
         error_type=error_type,
     )
-    return measurement.abstract_flops_per_item(sample_count)
+    return measurement.energy_joules_per_item(sample_count)
 
 
 def _record_optional_nonnegative_number(

@@ -113,6 +113,79 @@ function modelResult({
     },
     measurement_count: measurementCount,
     model_key: modelKey,
+    capability_map: {
+      kind: 'partition-capability-map-v1',
+      value: score,
+      confidence_half_width: 0,
+      confidence_method_id: 'integral-term-propagated-confidence',
+      sample_count: measurementCount,
+      total_measure: 4,
+      score_width_bits: score,
+      mean_competence: 0.75,
+      mean_competence_confidence_half_width: 0,
+      leaf_count: 2,
+      refinement_ladder: [
+        {
+          kind: 'partition-refinement-step-v1',
+          depth: 0,
+          leaf_count: 1,
+          value: score / 2,
+          confidence_half_width: 0,
+        },
+        {
+          kind: 'partition-refinement-step-v1',
+          depth: 1,
+          leaf_count: 2,
+          value: score,
+          confidence_half_width: 0,
+          movement: score / 2,
+        },
+      ],
+      root: {
+        kind: 'partition-capability-node-v1',
+        label: 'Capability map',
+        measure: 4,
+        sample_count: measurementCount,
+        competence: 0.75,
+        confidence_half_width: 0,
+        children: [
+          {
+            kind: 'partition-capability-node-v1',
+            label: 'test.region.parent',
+            measure: 4,
+            sample_count: measurementCount,
+            competence: 0.75,
+            confidence_half_width: 0,
+            region: fixtureRegion,
+            children: [
+              {
+                kind: 'partition-capability-node-v1',
+                label: 'test.region.left',
+                measure: 1,
+                sample_count: 1,
+                competence: 0,
+                confidence_half_width: 0,
+                region: fixtureRegion,
+                children: [],
+              },
+              {
+                kind: 'partition-capability-node-v1',
+                label: 'test.region.right',
+                measure: 3,
+                sample_count: 1,
+                competence: 1,
+                confidence_half_width: 0,
+                region: fixtureRegion,
+                children: [],
+              },
+            ],
+          },
+        ],
+      },
+      diagnostics: {
+        adaptive_sampling: 'deferred',
+      },
+    },
     points: [
       {
         competence_value_kind: 'validated-bits',
@@ -650,6 +723,21 @@ assertEqual(parsedPoint.predictability_boundary, 0.5, 'predictability boundary')
 assertEqual(parsedPoint.time_points?.[1]?.bits, 0.75, 'time point bits');
 assertEqual(parsedPoint.time_points?.[1]?.certified_epsilon, 0.03, 'time point epsilon');
 assertEqual(parsedPoint.time_points?.[1]?.evolution_scale, 0.3, 'time point scale');
+assertEqual(
+  parsedResultViews[0].benchmark_results[0]?.leaderboard[0]?.capability_map?.root.children[0]?.children[1]?.label,
+  'test.region.right',
+  'parser keeps capability map tree depth',
+);
+assertEqual(
+  parsedResultViews[0].benchmark_results[0]?.leaderboard[0]?.capability_map?.refinement_ladder.length,
+  2,
+  'parser keeps multi-rung capability map ladder',
+);
+assertEqual(
+  parsedResultViews[0].benchmark_results[0]?.leaderboard[0]?.capability_map?.refinement_ladder[1]?.leaf_count,
+  2,
+  'parser keeps refined capability map leaf count',
+);
 const parsedBenchmarkResult = parsedResultViews[0];
 if (parsedBenchmarkResult?.format !== 'leibniz.console.benchmark-results') {
   throw new Error('parsed benchmark result view must keep its discriminant');
