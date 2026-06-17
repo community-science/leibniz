@@ -360,7 +360,7 @@ const ROOTS: RootTree[] = [
             text: 'Sampling is still dense and post-hoc. Adaptive resampling toward suspicious splits is a follow-up diagnostic path, not part of the scorer in code today.',
           },
         ],
-        verdict: { tone: 'partial', text: 'The query-space partition tree, measure-weighted integral, convergence ladder, and capability map are in code; adaptive sampling remains deferred.' },
+        verdict: { tone: 'partial', text: 'The query-space partition tree — measure-weighted integral, convergence ladder, capability map — is in code, realizing the score-hierarchy territory; the bootstrap and multi-scale territories (and adaptive sampling) are still ahead, so the one-mechanism claim is shown on one territory, not all.' },
       },
       {
         id: 'R-ratchet',
