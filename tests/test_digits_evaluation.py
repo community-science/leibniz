@@ -424,6 +424,7 @@ def test_inverse_digits_submitted_encoder_trains_label_free_and_earns_bits() -> 
     torch = runtime.torch
     from leibniz.program_graphs import load_program_graph
 
+    torch.manual_seed(0)
     benchmark = load_digits_benchmark(_digits_benchmark_root)
     program = load_program_graph(
         _repository_root / "tests/fixtures/programs/digits_inverse_conv_encoder.py",
@@ -457,15 +458,24 @@ def test_inverse_digits_submitted_encoder_trains_label_free_and_earns_bits() -> 
         targets=targets,
     )
     bits = competence(request)
+    expected_bits = (
+        29.244558334350586,
+        36.90852737426758,
+        32.08088684082031,
+        32.670597076416016,
+    )
 
     assert final_loss < initial_loss * 0.1
-    assert float(bits.mean()) > 1.0
+    for actual, expected in zip(bits, expected_bits, strict=True):
+        assert math.isclose(float(actual), expected, rel_tol=0.0, abs_tol=1.0e-6)
+    assert math.isclose(float(bits.mean()), 32.72614288330078, rel_tol=0.0, abs_tol=1.0e-6)
     diagnostics = cast(
         tuple[Mapping[str, object], ...],
         getattr(bits, "leibniz_competence_diagnostics", ()),
     )
     assert diagnostics[0]["kind"] == "certified-bits-diagnostics"
     assert diagnostics[0]["structural_type"] == "static-conditioning"
+    assert "signal_scale" not in diagnostics[0]
     stability = cast(Mapping[str, object], diagnostics[0]["stability"])
     entropy = cast(Mapping[str, object], diagnostics[0]["ambient_entropy"])
     assert "sigma_min" in stability

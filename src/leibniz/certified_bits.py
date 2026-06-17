@@ -46,7 +46,7 @@ class AmbientEntropy:
     """Per-sample ambient entropy resolved above a requested precision."""
 
     bits: Any
-    signal: Any
+    signal: Any | None = None
     diagnostics: Mapping[str, object] | Sequence[Mapping[str, object]] = ()
 
 
@@ -62,7 +62,7 @@ class CertificationEstimator(Protocol):
         ...
 
     def ambient_entropy_above(self, precision: Any) -> AmbientEntropy:
-        """Return resolved bits and signal scale above ``precision``."""
+        """Return resolved bits and, when applicable, a signal gate above ``precision``."""
         ...
 
 
@@ -114,7 +114,11 @@ def evaluate_certified_bits(
             _sample_float(residuals, sample_index) for residuals in residual_ladder
         )
         epsilon = _sample_float(certified_epsilon, sample_index)
-        signal = _sample_float(entropy.signal, sample_index)
+        signal = (
+            None
+            if entropy.signal is None
+            else _sample_float(entropy.signal, sample_index)
+        )
         entropy_bits = _sample_float(entropy.bits, sample_index)
         refused = _sample_bool(stability.refused, sample_index)
 
@@ -125,11 +129,11 @@ def evaluate_certified_bits(
             status = stability.refused_status
             zero_credit_reason = "stability-refusal"
             bits = 0.0
-        elif not math.isfinite(signal):
+        elif signal is not None and not math.isfinite(signal):
             status = "refused-nonfinite-signal"
             zero_credit_reason = "nonfinite-signal"
             bits = 0.0
-        elif epsilon >= signal:
+        elif signal is not None and epsilon >= signal:
             zero_credit_reason = "precision-not-below-signal"
             bits = 0.0
 
@@ -141,12 +145,13 @@ def evaluate_certified_bits(
             "residual_norm": residual_values[-1],
             "residual_norms": list(residual_values),
             "certified_epsilon": epsilon,
-            "signal_scale": signal,
             "ambient_entropy_bits": entropy_bits,
             "zero_credit_reason": zero_credit_reason,
             "stability": _sample_diagnostic(stability.diagnostics, sample_index),
             "ambient_entropy": _sample_diagnostic(entropy.diagnostics, sample_index),
         }
+        if signal is not None:
+            diagnostic["signal_scale"] = signal
         if estimator_kind is not None:
             diagnostic["estimator"] = estimator_kind
         if structural_type is not None:
@@ -171,17 +176,31 @@ def _sample_count(values: Any) -> int:
         return 1
 
 
-def _certified_epsilon(residual_norm: Any, stability_factor: Any, *, sample_count: int) -> Any:
-    try:
+def _certified_epsilon(
+    residual_norm: Any,
+    stability_factor: Any,
+    *,
+    sample_count: int,
+) -> Any:
+    if not _uses_sequence_samples(residual_norm) and not _uses_sequence_samples(
+        stability_factor
+    ):
         return residual_certified_epsilon(residual_norm, stability_factor)
-    except TypeError:
-        return tuple(
-            residual_certified_epsilon(
-                _sample_float(residual_norm, sample_index),
-                _sample_float(stability_factor, sample_index),
-            )
-            for sample_index in range(sample_count)
+    return tuple(
+        residual_certified_epsilon(
+            _sample_float(residual_norm, sample_index),
+            _sample_float(stability_factor, sample_index),
         )
+        for sample_index in range(sample_count)
+    )
+
+
+def _uses_sequence_samples(values: Any) -> bool:
+    shape = getattr(values, "shape", None)
+    return shape is None and isinstance(values, Sequence) and not isinstance(
+        values,
+        str | bytes,
+    )
 
 
 def _sample_float(values: Any, sample_index: int) -> float:

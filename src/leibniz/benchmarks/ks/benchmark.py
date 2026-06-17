@@ -834,12 +834,8 @@ class _KSDynamicalAmplificationEstimator:
             signal=entropy.signal,
             diagnostics=tuple(
                 {
-                    "evolution_scale": float(entropy.signal[sample_index]),
                     "resolved_mode_count": int(
                         entropy.resolved_mode_count[sample_index]
-                    ),
-                    "ambient_evolution_entropy_bits": float(
-                        entropy.bits[sample_index]
                     ),
                 }
                 for sample_index in range(int(self.ladder[-1].shape[0]))

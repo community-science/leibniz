@@ -17,7 +17,7 @@ class SyntheticEstimator:
     factor: tuple[float, ...]
     refused: tuple[bool, ...]
     entropy_bits: tuple[float, ...]
-    signal: tuple[float, ...]
+    signal: tuple[float, ...] | None
     kind: str = "synthetic-estimator"
     structural_type: str = "synthetic"
 
@@ -106,3 +106,19 @@ def test_certified_bits_core_zeroes_credit_when_refinement_is_refused() -> None:
     assert result.values == [3.0, 0.0]
     assert result.diagnostics[1]["certification_status"] == "refused-synthetic-stability"
     assert result.diagnostics[1]["zero_credit_reason"] == "stability-refusal"
+
+
+def test_certified_bits_core_allows_estimators_without_signal_gate() -> None:
+    estimator = SyntheticEstimator(
+        residual_ladder=((100.0,),),
+        factor=(1.0,),
+        refused=(False,),
+        entropy_bits=(5.0,),
+        signal=None,
+    )
+
+    result = evaluate_certified_bits(estimator)
+
+    assert result.values == (5.0,)
+    assert result.diagnostics[0]["certification_status"] == "certified"
+    assert "signal_scale" not in result.diagnostics[0]

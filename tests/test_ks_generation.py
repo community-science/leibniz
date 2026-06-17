@@ -365,7 +365,7 @@ def test_ks_ambient_certified_bits_reward_planted_convergent_ladder(monkeypatch:
     )
     diagnostics = bits.leibniz_competence_diagnostics
 
-    assert float(bits[0]) > 0.0
+    assert math.isclose(float(bits[0]), 28.629935626347844, rel_tol=0.0, abs_tol=1.0e-12)
     assert diagnostics[0]["kind"] == "certified-bits-diagnostics"
     assert diagnostics[0]["structural_type"] == "dynamical-amplification"
     assert diagnostics[0]["predictability_boundary"] > 0.0
@@ -380,6 +380,8 @@ def test_ks_ambient_certified_bits_reward_planted_convergent_ladder(monkeypatch:
     assert math.isclose(
         float(bits[0]),
         cast(float, diagnostics[0]["bits"]),
+        rel_tol=0.0,
+        abs_tol=1.0e-12,
     )
 
 

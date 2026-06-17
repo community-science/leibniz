@@ -2665,7 +2665,7 @@ class _InverseDigitsStaticConditioningEstimator:
         )
 
     def ambient_entropy_above(self, precision: Any) -> AmbientEntropy:
-        precision_value = float(precision)
+        _ = precision
         bits = inverse_digits_validated_bits(
             runtime=self.runtime,
             recovered_latent=self.recovered_latent,
@@ -2674,7 +2674,6 @@ class _InverseDigitsStaticConditioningEstimator:
         )
         return AmbientEntropy(
             bits=bits.bits,
-            signal=max(1.0, precision_value * 2.0),
             diagnostics=bits.to_record()
             | {
                 "nuisance_bits": bits.nuisance_bits,

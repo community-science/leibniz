@@ -1276,25 +1276,11 @@ def _competence_diagnostic_sections(
                 ),
                 (
                     "Evolution Scale",
-                    _console_metric_value(
-                        _first_present(
-                            diagnostic,
-                            entropy,
-                            key="signal_scale",
-                            nested_key="evolution_scale",
-                        )
-                    ),
+                    _console_metric_value(diagnostic.get("signal_scale")),
                 ),
                 (
                     "Ambient Entropy",
-                    _console_metric_value(
-                        _first_present(
-                            diagnostic,
-                            entropy,
-                            key="ambient_entropy_bits",
-                            nested_key="ambient_evolution_entropy_bits",
-                        )
-                    ),
+                    _console_metric_value(diagnostic.get("ambient_entropy_bits")),
                 ),
                 (
                     "Resolved Modes",
@@ -1430,17 +1416,6 @@ def _console_competence_sample_row(diagnostic: Mapping[str, object]) -> list[str
 
 def _diagnostic_mapping(value: object) -> Mapping[str, object]:
     return cast(Mapping[str, object], value) if isinstance(value, Mapping) else {}
-
-
-def _first_present(
-    diagnostic: Mapping[str, object],
-    nested: Mapping[str, object],
-    *,
-    key: str,
-    nested_key: str,
-) -> object:
-    value = diagnostic.get(key)
-    return nested.get(nested_key) if value is None else value
 
 
 def _console_string_value(value: object) -> str:
