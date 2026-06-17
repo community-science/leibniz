@@ -244,6 +244,7 @@ def test_measure_program_cost_is_deterministic_for_repeated_runs() -> None:
     assert first.per_op == second.per_op
     assert first.operation_trace == second.operation_trace
     assert first.movement == second.movement
+    assert first.bytes_resident == second.bytes_resident
     assert first.unmodeled_operations == second.unmodeled_operations
 
 
@@ -276,7 +277,27 @@ def test_measure_program_cost_records_movement_outside_abstract_flops() -> None:
 
     assert measurement.abstract_flops == 0
     assert measurement.moved_elements == 8
+    assert measurement.bytes_resident == 128
     assert measurement.movement[0].name == "aten.gather.default"
+
+
+def test_measure_program_cost_records_resident_table_bytes() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    table = torch.randn(128, 16, dtype=torch.float32, device=runtime.device)
+    indices = torch.tensor([0, 3, 5, 7], device=runtime.device)
+
+    def program(held_table: Any, rows: Any) -> Any:
+        return torch.index_select(held_table, 0, rows)
+
+    measurement = measure_program_cost(runtime, program, (table, indices), strict=True)
+
+    table_bytes = 128 * 16 * 4
+    index_bytes = 4 * 8
+    output_bytes = 4 * 16 * 4
+    assert measurement.bytes_resident >= table_bytes
+    assert measurement.bytes_resident == table_bytes + index_bytes + output_bytes
+    assert measurement.moved_elements == 4 * 16
 
 
 def test_measure_program_cost_treats_unsqueeze_as_shape_movement() -> None:
@@ -395,6 +416,7 @@ def test_without_operation_trace_drops_trace_and_keeps_totals() -> None:
     assert stripped.abstract_flops == measurement.abstract_flops
     assert stripped.operation_count == measurement.operation_count
     assert stripped.per_op == measurement.per_op
+    assert stripped.bytes_resident == measurement.bytes_resident
     assert "operation_trace" in stripped.to_record()
     assert stripped.to_record()["operation_trace"] == []
     assert stripped.without_operation_trace() is stripped

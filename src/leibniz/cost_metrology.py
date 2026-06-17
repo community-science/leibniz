@@ -378,6 +378,7 @@ class CostMeasurement:
     execution_mode: _CostExecutionMode = "measured"
     operation_stream_source: str = "runtime-executed"
     operations_executed: bool = True
+    bytes_resident: int = 0
     roofline: Mapping[str, object] | None = None
 
     @classmethod
@@ -391,6 +392,7 @@ class CostMeasurement:
         _require_nonnegative_int(self.abstract_flops, "abstract_flops")
         _require_nonnegative_int(self.moved_elements, "moved_elements")
         _require_nonnegative_int(self.operation_count, "operation_count")
+        _require_nonnegative_int(self.bytes_resident, "bytes_resident")
         _require_finite_nonnegative_float(self.wall_seconds, "wall_seconds")
         _require_nonempty_string(self.tensor_device, "tensor_device")
         if self.execution_mode not in {"measured", "dry-run"}:
@@ -458,6 +460,7 @@ class CostMeasurement:
                 mapping.get("operations_executed", True),
                 "operations_executed",
             ),
+            bytes_resident=_record_int(mapping.get("bytes_resident", 0), "bytes_resident"),
             roofline=cast(Mapping[str, object] | None, roofline),
         )
 
@@ -476,6 +479,7 @@ class CostMeasurement:
             "execution_mode": self.execution_mode,
             "operation_stream_source": self.operation_stream_source,
             "operations_executed": self.operations_executed,
+            "bytes_resident": self.bytes_resident,
         }
         if self.roofline is not None:
             record["roofline"] = dict(self.roofline)
@@ -710,9 +714,11 @@ def _measurement_from_operation_stream(
     movement: dict[str, _MovementAccumulator] = {}
     unmodeled: dict[str, _UnmodeledAccumulator] = {}
     operation_trace: list[CostOperationTraceRecord] = []
+    bytes_resident = 0
     for operation in operations:
         trace = _operation_trace_from_runtime(operation)
         operation_trace.append(trace)
+        bytes_resident = max(bytes_resident, _operation_resident_bytes(trace))
         output_elements = _specs_numel(trace.output_tensors)
         moved_elements = _movement_elements(
             name=trace.name,
@@ -781,6 +787,7 @@ def _measurement_from_operation_stream(
         execution_mode=execution_mode,
         operation_stream_source=operation_stream_source,
         operations_executed=operations_executed,
+        bytes_resident=bytes_resident,
         roofline=roofline,
     )
 
@@ -1043,6 +1050,33 @@ def _spec_numel(spec: TensorValueSpec) -> int:
 
 def _specs_numel(specs: Iterable[TensorValueSpec]) -> int:
     return sum(_spec_numel(spec) for spec in specs)
+
+
+def _operation_resident_bytes(trace: CostOperationTraceRecord) -> int:
+    return _specs_bytes((*trace.input_tensors, *trace.output_tensors))
+
+
+def _spec_bytes(spec: TensorValueSpec) -> int:
+    return _spec_numel(spec) * _dtype_size_bytes(spec.dtype)
+
+
+def _specs_bytes(specs: Iterable[TensorValueSpec]) -> int:
+    return sum(_spec_bytes(spec) for spec in specs)
+
+
+def _dtype_size_bytes(dtype: str) -> int:
+    normalized = dtype.removeprefix("torch.").lower()
+    if normalized in {"complex128"}:
+        return 16
+    if normalized in {"float64", "double", "complex64", "int64", "long"}:
+        return 8
+    if normalized in {"float32", "float", "complex32", "int32"}:
+        return 4
+    if normalized in {"float16", "half", "bfloat16", "int16", "short"}:
+        return 2
+    if normalized in {"int8", "uint8", "qint8", "quint8", "bool"}:
+        return 1
+    return 0
 
 
 _pointwise_ops = frozenset(
