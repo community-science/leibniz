@@ -1260,6 +1260,8 @@ def _competence_diagnostic_sections(
     if not diagnostics:
         return ()
     diagnostic = diagnostics[0]
+    stability = _diagnostic_mapping(diagnostic.get("stability"))
+    entropy = _diagnostic_mapping(diagnostic.get("ambient_entropy"))
     sections: list[Mapping[str, object]] = [
         _console_detail_entries_section(
             title="Competence Diagnostics",
@@ -1274,15 +1276,15 @@ def _competence_diagnostic_sections(
                 ),
                 (
                     "Evolution Scale",
-                    _console_metric_value(diagnostic.get("evolution_scale")),
+                    _console_metric_value(diagnostic.get("signal_scale")),
                 ),
                 (
                     "Ambient Entropy",
-                    _console_metric_value(diagnostic.get("ambient_evolution_entropy_bits")),
+                    _console_metric_value(diagnostic.get("ambient_entropy_bits")),
                 ),
                 (
                     "Resolved Modes",
-                    _console_number_value(diagnostic.get("resolved_mode_count")),
+                    _console_number_value(entropy.get("resolved_mode_count")),
                 ),
                 (
                     "Residual",
@@ -1290,19 +1292,19 @@ def _competence_diagnostic_sections(
                 ),
                 (
                     "Law Amplification",
-                    _console_metric_value(diagnostic.get("law_amplification")),
+                    _console_metric_value(stability.get("law_amplification")),
                 ),
                 (
                     "Amplification Stability",
-                    _console_metric_value(diagnostic.get("law_amplification_stability")),
+                    _console_metric_value(stability.get("law_amplification_stability")),
                 ),
                 (
                     "Amplification Estimator",
-                    _console_string_value(diagnostic.get("law_amplification_estimator")),
+                    _console_string_value(stability.get("law_amplification_estimator")),
                 ),
                 (
                     "Refinement Factors",
-                    _console_sequence_value(diagnostic.get("certification_refinement_factors")),
+                    _console_sequence_value(stability.get("certification_refinement_factors")),
                 ),
                 (
                     "Diagnostic Records",
@@ -1401,14 +1403,19 @@ def _console_competence_time_point_row(point: Mapping[str, object]) -> list[str]
 
 
 def _console_competence_sample_row(diagnostic: Mapping[str, object]) -> list[str]:
+    stability = _diagnostic_mapping(diagnostic.get("stability"))
     return [
         _console_number_value(diagnostic.get("sample_index")),
         _console_string_value(diagnostic.get("certification_status")),
         _console_metric_value(diagnostic.get("bits")),
         _console_metric_value(diagnostic.get("predictability_boundary")),
         _console_metric_value(diagnostic.get("residual_norm")),
-        _console_metric_value(diagnostic.get("law_amplification")),
+        _console_metric_value(stability.get("law_amplification")),
     ]
+
+
+def _diagnostic_mapping(value: object) -> Mapping[str, object]:
+    return cast(Mapping[str, object], value) if isinstance(value, Mapping) else {}
 
 
 def _console_string_value(value: object) -> str:

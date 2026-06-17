@@ -1,5 +1,6 @@
 import math
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -364,17 +365,23 @@ def test_ks_ambient_certified_bits_reward_planted_convergent_ladder(monkeypatch:
     )
     diagnostics = bits.leibniz_competence_diagnostics
 
-    assert float(bits[0]) > 0.0
-    assert diagnostics[0]["kind"] == "ks-ambient-certified-diagnostics"
+    assert math.isclose(float(bits[0]), 28.629935626347844, rel_tol=0.0, abs_tol=1.0e-12)
+    assert diagnostics[0]["kind"] == "certified-bits-diagnostics"
+    assert diagnostics[0]["structural_type"] == "dynamical-amplification"
     assert diagnostics[0]["predictability_boundary"] > 0.0
     assert cast(float, diagnostics[0]["certified_epsilon"]) < cast(
         float,
-        diagnostics[0]["evolution_scale"],
+        diagnostics[0]["signal_scale"],
     )
-    assert diagnostics[0]["resolved_mode_count"] > 0
+    entropy = cast(Mapping[str, object], diagnostics[0]["ambient_entropy"])
+    resolved_mode_count = entropy["resolved_mode_count"]
+    assert isinstance(resolved_mode_count, int)
+    assert resolved_mode_count > 0
     assert math.isclose(
         float(bits[0]),
-        cast(float, diagnostics[0]["ambient_evolution_entropy_bits"]),
+        cast(float, diagnostics[0]["bits"]),
+        rel_tol=0.0,
+        abs_tol=1.0e-12,
     )
 
 
@@ -476,8 +483,8 @@ def test_ks_ambient_certified_bits_require_evolution_beyond_initial_state(
     diagnostics = bits.leibniz_competence_diagnostics
 
     assert float(bits[0]) == 0.0
-    assert diagnostics[0]["evolution_scale"] == 0.0
-    assert diagnostics[0]["ambient_evolution_entropy_bits"] == 0.0
+    assert diagnostics[0]["signal_scale"] == 0.0
+    assert diagnostics[0]["bits"] == 0.0
 
 
 def test_ks_ambient_certified_bits_do_not_threshold_on_observed_order(monkeypatch: Any) -> None:
@@ -534,7 +541,8 @@ def test_ks_ambient_certified_bits_refuse_growing_amplification(monkeypatch: Any
 
     assert float(bits[0]) == 0.0
     assert diagnostics[0]["certification_status"] == "refused-amplification-growing"
-    assert diagnostics[0]["law_amplification_ladder"] == [1.0, 2.0, 4.0]
+    stability = cast(Mapping[str, object], diagnostics[0]["stability"])
+    assert stability["law_amplification_ladder"] == [1.0, 2.0, 4.0]
 
 
 def test_ks_ambient_certified_bits_refuse_real_underresolved_amplification(
@@ -557,18 +565,19 @@ def test_ks_ambient_certified_bits_refuse_real_underresolved_amplification(
         horizon=0.25,
     )
     diagnostics = bits.leibniz_competence_diagnostics
-    amplification_ladder = cast(list[float], diagnostics[0]["law_amplification_ladder"])
+    stability = cast(Mapping[str, object], diagnostics[0]["stability"])
+    amplification_ladder = cast(list[float], stability["law_amplification_ladder"])
 
     assert float(bits[0]) == 0.0
     assert diagnostics[0]["certification_status"] == "refused-amplification-growing"
     assert amplification_ladder[0] < amplification_ladder[1] < amplification_ladder[2]
-    assert cast(float, diagnostics[0]["law_amplification_stability"]) > cast(
+    assert cast(float, stability["law_amplification_stability"]) > cast(
         float,
-        diagnostics[0]["law_amplification_refusal_ratio"],
+        stability["law_amplification_refusal_ratio"],
     )
     assert cast(float, diagnostics[0]["certified_epsilon"]) < cast(
         float,
-        diagnostics[0]["evolution_scale"],
+        diagnostics[0]["signal_scale"],
     )
 
 

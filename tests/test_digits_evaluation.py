@@ -2,6 +2,7 @@ import math
 import os
 import struct
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -418,11 +419,70 @@ def test_inverse_digits_bits_rise_as_reconstruction_residual_falls() -> None:
     assert near.distinguishable_identity_count == 10
 
 
+def test_inverse_digits_ambient_certified_bits_match_pre_refactor_static_score() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    module = _digits_module()
+    latent = module.InverseDigitsLatent(8, 0.0, 0.0, 1.0, 0.02, 1.0)
+    observation = module.render_inverse_digits(
+        runtime=runtime,
+        latents=(latent,),
+        canvas_side=32,
+    )
+    expected = _certified_bits_for_latent(
+        module=module,
+        runtime=runtime,
+        recovered_latent=latent,
+        observation=observation,
+        canvas_side=32,
+    )
+    predictions = torch.zeros(
+        (1, module._inverse_latent_dimension),
+        dtype=torch.float32,
+        device=runtime.device,
+    )
+    predictions[0, 8] = 10.0
+    predictions[0, module._volume_class_digit_count :] = torch.tensor(
+        latent.to_nuisance_tuple(),
+        dtype=torch.float32,
+        device=runtime.device,
+    )
+    competence = cast(Any, benchmark).build_training_competence(
+        runtime,
+        benchmark.target_contract,
+    )
+
+    bits = competence(
+        SimpleNamespace(
+            runtime=runtime,
+            predictions=predictions,
+            targets=observation,
+        )
+    )
+    diagnostics = cast(
+        tuple[Mapping[str, object], ...],
+        getattr(bits, "leibniz_competence_diagnostics", ()),
+    )
+
+    expected_tensor_bits = predictions.new_tensor([expected.bits])
+    assert float(bits[0]) == float(expected_tensor_bits[0])
+    assert math.isclose(
+        cast(float, diagnostics[0]["bits"]),
+        expected.bits,
+        rel_tol=0.0,
+        abs_tol=1.0e-12,
+    )
+    assert diagnostics[0]["structural_type"] == "static-conditioning"
+    assert "signal_scale" not in diagnostics[0]
+
+
 def test_inverse_digits_submitted_encoder_trains_label_free_and_earns_bits() -> None:
     runtime = resolve_tensor_runtime("cpu")
     torch = runtime.torch
     from leibniz.program_graphs import load_program_graph
 
+    torch.manual_seed(0)
     benchmark = load_digits_benchmark(_digits_benchmark_root)
     program = load_program_graph(
         _repository_root / "tests/fixtures/programs/digits_inverse_conv_encoder.py",
@@ -459,9 +519,20 @@ def test_inverse_digits_submitted_encoder_trains_label_free_and_earns_bits() -> 
 
     assert final_loss < initial_loss * 0.1
     assert float(bits.mean()) > 1.0
+    diagnostics = cast(
+        tuple[Mapping[str, object], ...],
+        getattr(bits, "leibniz_competence_diagnostics", ()),
+    )
+    assert diagnostics[0]["kind"] == "certified-bits-diagnostics"
+    assert diagnostics[0]["structural_type"] == "static-conditioning"
+    assert "signal_scale" not in diagnostics[0]
+    stability = cast(Mapping[str, object], diagnostics[0]["stability"])
+    entropy = cast(Mapping[str, object], diagnostics[0]["ambient_entropy"])
+    assert "sigma_min" in stability
+    assert "identity_bits" in entropy
     assert not any(
         "label" in diagnostic
-        for diagnostic in getattr(bits, "leibniz_competence_diagnostics", ())
+        for diagnostic in diagnostics
     )
 
 
