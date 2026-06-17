@@ -247,10 +247,15 @@ def _score_module(
                     "horizons": horizons,
                 },
             )()
-        )
+    )
     diagnostics = bits.leibniz_competence_diagnostics
     boundaries = [
-        float(cast(dict[str, object], diagnostic).get("predictability_boundary", 0.0))
+        float(
+            cast(
+                float,
+                cast(dict[str, object], diagnostic).get("predictability_boundary", 0.0),
+            )
+        )
         for diagnostic in diagnostics
     ]
     mean_bits = math.fsum(float(value) for value in bits) / int(bits.shape[0])

@@ -262,7 +262,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'what makes a task admissible',
-            text: 'A task earns its place when the forward law hands you the certified answer as a byproduct — sample a cause, run the law, and you already hold the answer — so minting an instance is cheap and the difficulty lives in the inverse. Where the answer is instead an adversarial game tree, minting a certified instance costs as much as solving it and there is no cheap ground, so such games (chess) are out even though their rules are a law; the open frontier they would offer belongs on the cost axis instead, as the search for a cheaper algorithm.',
+            text: 'A task earns its place when the forward law hands you the certified answer as a byproduct — sample a cause, run the law, and you already hold the answer — so minting an instance is cheap and the difficulty lives in the inverse. Where the answer is instead an adversarial game tree, minting a certified instance costs as much as solving it and there is no cheap ground, so such games are out even though their rules are a law; the open frontier they would offer belongs on the cost axis instead, as the search for a cheaper algorithm.',
           },
           {
             level: 3,
@@ -290,12 +290,18 @@ const ROOTS: RootTree[] = [
           },
           {
             level: 4,
+            kind: 'code',
+            tag: 'capability meter',
+            text: 'The boundary-climbing submission test now runs four program graphs through the same certified-bit path: persistence gets zero and a shallow boundary, a partial law scores above it, a residual-trained predictor climbs higher, and the numerical solver remains the reference ceiling. The assertion is order and boundary depth, not a hard-coded score.',
+          },
+          {
+            level: 4,
             kind: 'horizon',
             tag: 'open',
-            text: 'Open rungs remain: the IC distribution is provisional; the certified $\\varepsilon$ uses the leading-amplification estimator, the smooth and chaotic-dynamics instance of a general law-induced one (entropy stability for shock-forming conservation laws is the harder case); and a submitted program that climbs a deep boundary is still wanted. The retired-gate observed-order tolerance and rung-count parameters are gone.',
+            text: 'Open rungs remain: the IC distribution is provisional; the certified $\\varepsilon$ uses the leading-amplification estimator, the smooth and chaotic-dynamics instance of a general law-induced one (entropy stability for shock-forming conservation laws is the harder case). The retired-gate observed-order tolerance and rung-count parameters are gone.',
           },
         ],
-        verdict: { tone: 'partial', text: 'Continuous certified bits now have two worked structural types: dynamical amplification for field evolution and static-map conditioning for inverse rendering; general entropy-stability certification and a boundary-climbing program remain open.' },
+        verdict: { tone: 'partial', text: 'Continuous certified bits now have two worked structural types and a boundary-climbing submission test; general entropy-stability certification remains open.' },
       },
       {
         id: 'R-territory',
@@ -516,7 +522,7 @@ const STEPS: RoadmapStep[] = [
     id: 'ladder',
     title: 'Refinement-ladder records and convergence-grounded scoring',
     outcome:
-      'Emit convergence diagnostics for the ladder and score field prediction as continuous validated evolution bits resolved to the residual-certified precision, with the predictability boundary emerging where certified bits reach zero. The binary gate and its parameters are retired.',
+      'Emit convergence diagnostics for the ladder and score field prediction as continuous validated evolution bits resolved to the residual-certified precision, with the predictability boundary emerging where certified bits reach zero. The boundary-climbing test shows the score rising with submitted capability. The binary gate and its parameters are retired.',
   },
   {
     id: 'cost',
