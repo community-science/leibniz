@@ -108,7 +108,7 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'intrinsic vs extrinsic',
-            text: 'With a law, correctness is intrinsic. With only a convention it is extrinsic: there is no governing law, just an agreed-on label. That is pre-scientific.',
+            text: 'With a law, correctness is intrinsic. With only a convention — an agreed-on label, no governing law — it is extrinsic. Predicting that label from data is honest work that earns uncertified $h$ bits; what is pre-scientific, and forks off, is treating a match against the stored label as certified correctness — a convention masquerading as a law.',
           },
           {
             level: 2,
@@ -152,7 +152,7 @@ const ROOTS: RootTree[] = [
             text: 'Most real problems are $f = g + h$: a part $g$ whose law we know, so answers there are scored against the law, and a part $h$ we have only data for, scored by how much of that data a model actually accounts for. Discovering the law of an $h$ converts it into a $g$ — and on the ledger that shows up as its bits turning from uncertified into certified. That migration is the measurable trace of a field becoming a science.',
           },
         ],
-        verdict: { tone: 'open', text: 'The $g + h$ split and the uncertified-to-certified migration orient discovery; the form of the $h$ score and multi-scale universes still need to be specified.' },
+        verdict: { tone: 'open', text: 'The $g + h$ split and the uncertified-to-certified migration orient discovery; the $h$ score is now fixed in form (predictive log-loss bits from a probabilistic submission); multi-scale universes still need to be specified.' },
       },
     ],
   },
@@ -433,7 +433,13 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'one measure, two regimes',
-            text: 'Validated bits come off one ledger whatever the source: certified against the law where there is one ($g$), and where there is not ($h$) an absolute count of how much of the real data a model accounts for — uncertified, so a ratcheting lower bound that climbs toward the certified value as the law is discovered, not a ranking against other models. Both regimes count generalizing information in the same bit unit and independent information adds, so datasets combine without a hand-picked weighting; the form of the $h$ estimate is left open. Moving the $g$/$h$ boundary converts bits between certified and uncertified for the same information — it does not manufacture bits, so there is nothing to be gained by elaborating the known law to swallow data it does not generalize. The inverse-renderer already does the certified case per mode, an information-spectrum count whose additivity discounts redundancy on its own.',
+            text: 'Validated bits come off one ledger whatever the source: certified against the law where there is one ($g$), and where there is not ($h$) an absolute count of how much of the real data a model accounts for — uncertified, so a ratcheting lower bound that climbs toward the certified value as the law is discovered, not a ranking against other models. Both regimes count generalizing information in the same bit unit and independent information adds, so datasets combine without a hand-picked weighting; $h$ is scored as the predictive log-loss bits of a probabilistic submission, its density parameterization left open. Moving the $g$/$h$ boundary converts bits between certified and uncertified for the same information — it does not manufacture bits, so there is nothing to be gained by elaborating the known law to swallow data it does not generalize. The inverse-renderer already does the certified case per mode, an information-spectrum count whose additivity discounts redundancy on its own.',
+          },
+          {
+            level: 3,
+            kind: 'add',
+            tag: 'predict a distribution, not a label',
+            text: 'A submission earns bits by predicting a distribution over the observable and being scored on the information it resolves — not by emitting a point estimate or a hard label. So the line that matters is probabilistic prediction versus point output, not classification versus reconstruction: against a known law a reconstruction earns certified $g$ bits, and where there is no law a probabilistic classifier earns all-$h$ bits. Uncertified predictive classification is in scope; only a certified answer-key forks off.',
           },
           {
             level: 2,
@@ -489,7 +495,7 @@ const EDGES: CouplingEdge[] = [
     roots: ['U', 'R'],
     title: 'Grounding',
     warn: true,
-    body: 'Grounding is really two questions wearing one name: does the universe have a law (Universe), and is an answer checked by an exact verifier or by convergence (Refinement)? So a contract can just record whether there is a law and let the verifier-or-convergence part fall out of refinement, instead of declaring “grounding” outright. And where there is no law yet, correctness does not vanish — it becomes an absolute measure of how much of the real data a model accounts for, just uncertified: a lower bound nobody can yet prove optimal, which tightens as the law is discovered. Known-law and no-law are the two ends of one dial — certified versus uncertified — so the same ledger measures both, and how useful a known law is shows up as the share of the total bits it can certify.',
+    body: 'Grounding is really two questions wearing one name: does the universe have a law (Universe), and is an answer checked by an exact verifier or by convergence (Refinement)? So a contract can just record whether there is a law and let the verifier-or-convergence part fall out of refinement, instead of declaring “grounding” outright. And where there is no law yet, correctness does not vanish — it becomes an absolute measure of how much of the real data a model accounts for, just uncertified: a lower bound nobody can yet prove optimal, which tightens as the law is discovered. Known-law and no-law are the two ends of one dial — certified versus uncertified — so the same ledger measures both, and how useful a known law is shows up as the share of the total bits it can certify — the law’s g-coverage.',
   },
   {
     id: 'edge-score',
@@ -545,7 +551,7 @@ const STEPS: RoadmapStep[] = [
     id: 'discovery',
     title: 'Readout and unknown-law universes (reserved)',
     outcome:
-      'A readout-valued, convergence-grounded task, plus the $g + h$ ledger: an absolute but uncertified score on the data-only part $h$ (its form left open), aggregated with certified $g$ bits through the partition tree, with a law promoted from $h$ into $g$ by the trusted-ground criteria rather than by the maintainer, and the scaffolding for unknown-law and multi-scale universes. Parked until the consolidated certified spine is solid.',
+      'A readout-valued, convergence-grounded task, plus the $g + h$ ledger: a probabilistic submission scored by predictive log-loss bits on the data-only part $h$ (no point-estimate or reference fallback), aggregated with certified $g$ bits through the partition tree, with a law promoted from $h$ into $g$ by the trusted-ground criteria rather than by the maintainer, and the scaffolding for unknown-law and multi-scale universes. Parked until the consolidated certified spine is solid.',
   },
 ];
 
