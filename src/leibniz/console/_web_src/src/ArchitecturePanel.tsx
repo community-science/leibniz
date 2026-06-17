@@ -243,8 +243,8 @@ const ROOTS: RootTree[] = [
         gist: 'Correctness is convergence to a law, not an oracle.',
         meta: 'Refine space and time, test the residual, and score the resolved bits.',
         status: 'implemented',
-        anchor: 'benchmark_runner.py: operator-aware field competence and raw bit scoring',
-        verify: { module: 'leibniz.benchmark_runner', symbols: ['_FieldTrainingCompetenceRequest', '_training_score_integral'] },
+        anchor: 'certified_bits.py: shared certified known-law ledger',
+        verify: { module: 'leibniz.certified_bits', symbols: ['CertificationEstimator', 'evaluate_certified_bits'] },
         rungs: [
           {
             level: 1,
@@ -280,7 +280,13 @@ const ROOTS: RootTree[] = [
             level: 3,
             kind: 'add',
             tag: 'formal objects',
-            text: 'Formally: query $\\hat\\Phi(x_h, t)$ or $\\hat z$ across refined grids, compute the residual and the structural estimator on each prefix, refuse prefixes whose conditioning grows under refinement, and credit the ambient entropy resolved above the certified $\\varepsilon$.',
+            text: 'Formally: query $\\hat\\Phi(x_h, t)$ or $\\hat z$ across refined grids, compute the residual and the structural estimator on each prefix, refuse prefixes whose conditioning grows under refinement, and credit the ambient entropy resolved above the certified $\\varepsilon$. Both worked structural types now enter the same known-law ledger through a CertificationEstimator: dynamical amplification for field evolution, static conditioning for inverse rendering.',
+          },
+          {
+            level: 3,
+            kind: 'code',
+            tag: 'ledger',
+            text: 'certified_bits.py owns the certified-$g$ leaf: residuals, stability/refusal, ambient_entropy_above, zero credit, and one diagnostic envelope. The relative-$h$ leaf is only a declared seam at this boundary; no frontier-relative aggregator ships yet.',
           },
           {
             level: 4,

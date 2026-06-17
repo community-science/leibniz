@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -129,14 +130,16 @@ def test_ks_oracle_stepper_scores_positive_through_real_residual() -> None:
         )
     )
     diagnostics = bits.leibniz_competence_diagnostics
+    stability = cast(Mapping[str, object], diagnostics[0]["stability"])
+    entropy = cast(Mapping[str, object], diagnostics[0]["ambient_entropy"])
 
     assert cast(float, diagnostics[0]["residual_norm"]) >= 0.0
-    assert cast(float, diagnostics[0]["law_amplification"]) >= 1.0
+    assert cast(float, stability["law_amplification"]) >= 1.0
     assert cast(float, diagnostics[0]["certified_epsilon"]) < cast(
         float,
-        diagnostics[0]["evolution_scale"],
+        diagnostics[0]["signal_scale"],
     )
-    assert cast(float, diagnostics[0]["ambient_evolution_entropy_bits"]) > 0.0
+    assert cast(float, entropy["ambient_evolution_entropy_bits"]) > 0.0
     assert diagnostics[0]["predictability_boundary"] > 0.0
     assert float(bits[0]) > 0.0
 

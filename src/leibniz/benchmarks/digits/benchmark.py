@@ -2605,12 +2605,7 @@ def _inverse_digits_ambient_certified_bits(request: Any) -> Any:
                     sample_count=1,
                 )
                 values.append(float(evaluation.values[0]))
-                diagnostics.append(
-                    _inverse_digits_certified_diagnostic_record(
-                        sample_index=sample_index,
-                        record=evaluation.diagnostics[0],
-                    )
-                )
+                diagnostics.append(_sample_indexed_record(evaluation.diagnostics[0], sample_index))
                 continue
             evaluation = evaluate_certified_bits(
                 _InverseDigitsStaticConditioningEstimator(
@@ -2623,19 +2618,19 @@ def _inverse_digits_ambient_certified_bits(request: Any) -> Any:
             )
             values.append(float(evaluation.values[0]))
             diagnostics.append(
-                _inverse_digits_certified_diagnostic_record(
-                    sample_index=sample_index,
-                    record=evaluation.diagnostics[0],
-                )
+                _sample_indexed_record(evaluation.diagnostics[0], sample_index)
             )
         except (ObservationGenerationError, ValueError):
             values.append(0.0)
             diagnostics.append(
                 {
-                    "kind": "digits-inverse-certified-diagnostics",
+                    "kind": "certified-bits-diagnostics",
                     "sample_index": sample_index,
+                    "structural_type": "static-conditioning",
                     "certification_status": "refused-invalid-latent",
                     "bits": 0.0,
+                    "stability": {},
+                    "ambient_entropy": {},
                 }
             )
     result = predictions.new_tensor(values)
@@ -2688,34 +2683,11 @@ class _InverseDigitsStaticConditioningEstimator:
             },
         )
 
-
-def _inverse_digits_certified_diagnostic_record(
-    *,
-    sample_index: int,
+def _sample_indexed_record(
     record: Mapping[str, object],
+    sample_index: int,
 ) -> Mapping[str, object]:
-    stability = cast(Mapping[str, object], record["stability"])
-    entropy = cast(Mapping[str, object], record["ambient_entropy"])
-    diagnostic: dict[str, object] = {
-        "kind": "digits-inverse-certified-diagnostics",
-        "sample_index": sample_index,
-        "certification_status": record["certification_status"],
-        "bits": record["bits"],
-        "residual_norm": record["residual_norm"],
-        "sigma_min": stability["sigma_min"],
-    }
-    if record["certification_status"] == "certified":
-        diagnostic |= {
-            "identity_bits": entropy["identity_bits"],
-            "nuisance_bits": entropy["nuisance_bits"],
-            "distinguishable_identity_count": entropy[
-                "distinguishable_identity_count"
-            ],
-            "certified_epsilon": record["certified_epsilon"],
-            "observable_mode_count": stability["observable_mode_count"],
-            "conditioning_stability": stability["conditioning_stability"],
-        }
-    return diagnostic
+    return dict(record) | {"sample_index": sample_index}
 
 
 def _distinguishable_identity_count(

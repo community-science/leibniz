@@ -2,6 +2,7 @@ import math
 import os
 import struct
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -459,9 +460,19 @@ def test_inverse_digits_submitted_encoder_trains_label_free_and_earns_bits() -> 
 
     assert final_loss < initial_loss * 0.1
     assert float(bits.mean()) > 1.0
+    diagnostics = cast(
+        tuple[Mapping[str, object], ...],
+        getattr(bits, "leibniz_competence_diagnostics", ()),
+    )
+    assert diagnostics[0]["kind"] == "certified-bits-diagnostics"
+    assert diagnostics[0]["structural_type"] == "static-conditioning"
+    stability = cast(Mapping[str, object], diagnostics[0]["stability"])
+    entropy = cast(Mapping[str, object], diagnostics[0]["ambient_entropy"])
+    assert "sigma_min" in stability
+    assert "identity_bits" in entropy
     assert not any(
         "label" in diagnostic
-        for diagnostic in getattr(bits, "leibniz_competence_diagnostics", ())
+        for diagnostic in diagnostics
     )
 
 
