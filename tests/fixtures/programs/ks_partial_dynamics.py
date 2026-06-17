@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from leibniz.program_graphs import (
@@ -16,18 +17,27 @@ def build_program_graph(runtime: Any) -> ProgramGraph:
     torch = runtime.torch
 
     class PartialKSStep(torch.nn.Module):
-        """A cheap explicit step using only the unstable linear KS terms."""
+        """A partial KS step: exact linear dynamics, no nonlinear transport."""
 
         def forward(self, field: Any, dt: Any) -> Any:
             step_dt = float(dt[0]) if hasattr(dt, "shape") and len(tuple(dt.shape)) else float(dt)
             spatial_points = int(field.shape[-1])
-            dx = _box_length / float(spatial_points)
-            u_xx = (
-                field.roll(shifts=-1, dims=-1)
-                - (2.0 * field)
-                + field.roll(shifts=1, dims=-1)
-            ) / (dx * dx)
-            return field - (step_dt * u_xx)
+            frequencies = tuple(
+                index if index <= spatial_points // 2 else index - spatial_points
+                for index in range(spatial_points)
+            )
+            growth = tuple(
+                ((2.0 * math.pi * frequency / _box_length) ** 2)
+                - ((2.0 * math.pi * frequency / _box_length) ** 4)
+                for frequency in frequencies
+            )
+            linear = torch.tensor(
+                tuple(complex(math.exp(step_dt * value), 0.0) for value in growth),
+                dtype=torch.complex128,
+                device=field.device,
+            ).reshape((1, 1, spatial_points))
+            spectrum = torch.fft.fft(field.to(dtype=torch.float64), dim=-1)
+            return torch.fft.ifft(linear * spectrum, dim=-1).real.to(dtype=field.dtype)
 
     return ProgramGraph(
         contract_kind="prediction",

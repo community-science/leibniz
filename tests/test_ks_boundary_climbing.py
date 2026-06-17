@@ -52,9 +52,9 @@ def test_ks_submission_ladder_program_graphs_load_and_score() -> None:
     }
 
     assert scores["persistence"][0] == 0.0
-    assert scores["solver"][0] > scores["persistence"][0]
+    assert scores["partial"][0] > scores["persistence"][0]
+    assert scores["solver"][0] > scores["partial"][0]
     assert scores["solver"][1] > scores["persistence"][1]
-    assert scores["partial"][0] >= scores["persistence"][0]
 
 
 def test_ks_learned_predictor_trains_against_label_free_residual() -> None:
@@ -78,7 +78,6 @@ def test_ks_learned_predictor_trains_against_label_free_residual() -> None:
         runtime,
         benchmark.target_contract,
     )
-    optimizer = torch.optim.Adam(module.parameters(), lr=0.4)
 
     initial_loss = _residual_training_loss(
         runtime=runtime,
@@ -87,17 +86,13 @@ def test_ks_learned_predictor_trains_against_label_free_residual() -> None:
         targets=targets,
         loss_function=loss_function,
     )
-    for _step in range(12):
-        optimizer.zero_grad()
-        loss = _residual_training_loss(
-            runtime=runtime,
-            module=module,
-            fields=fields,
-            targets=targets,
-            loss_function=loss_function,
-        )
-        loss.backward()
-        optimizer.step()
+    _train_learned_module(
+        runtime=runtime,
+        module=module,
+        fields=fields,
+        targets=targets,
+        loss_function=loss_function,
+    )
     final_loss = _residual_training_loss(
         runtime=runtime,
         module=module,
@@ -107,6 +102,85 @@ def test_ks_learned_predictor_trains_against_label_free_residual() -> None:
     )
 
     assert float(final_loss.detach()) < float(initial_loss.detach())
+
+
+def test_ks_certified_bits_climb_with_predictor_capability() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    torch.manual_seed(353)
+    benchmark = load_benchmark(_ks_benchmark_root)
+    batch = cast(Any, benchmark.generator)(
+        seed=17,
+        shape=2,
+        sample_indices=(0, 1),
+        volume_request=StateSpaceVolumeRequest(0.0, 1.0),
+        runtime=runtime,
+    )
+    fields, targets = batch.require_tensors()
+    competence = cast(Any, benchmark).build_training_competence(
+        runtime,
+        benchmark.target_contract,
+    )
+    learned = _load_program_module(
+        runtime=runtime,
+        program_path=_program_root / "ks_learned_residual.py",
+    )
+    loss_function = cast(Any, benchmark).build_training_loss(
+        runtime,
+        benchmark.target_contract,
+    )
+    _train_learned_module(
+        runtime=runtime,
+        module=learned,
+        fields=fields,
+        targets=targets,
+        loss_function=loss_function,
+    )
+    scores = {
+        "persistence": _score_program(
+            runtime=runtime,
+            benchmark=benchmark,
+            competence=competence,
+            batch=batch,
+            fields=fields,
+            targets=targets,
+            program_path=_program_root / "ks_persistence.py",
+        ),
+        "partial": _score_program(
+            runtime=runtime,
+            benchmark=benchmark,
+            competence=competence,
+            batch=batch,
+            fields=fields,
+            targets=targets,
+            program_path=_program_root / "ks_partial_dynamics.py",
+        ),
+        "learned": _score_module(
+            runtime=runtime,
+            benchmark=benchmark,
+            competence=competence,
+            batch=batch,
+            fields=fields,
+            targets=targets,
+            module=learned,
+        ),
+        "solver": _score_program(
+            runtime=runtime,
+            benchmark=benchmark,
+            competence=competence,
+            batch=batch,
+            fields=fields,
+            targets=targets,
+            program_path=_program_root / "ks_spectral_solver.py",
+        ),
+    }
+
+    assert scores["persistence"][0] == 0.0
+    assert scores["persistence"][1] == 0.0
+    assert scores["persistence"][0] < scores["partial"][0] < scores["learned"][0]
+    assert scores["learned"][0] <= scores["solver"][0]
+    assert scores["learned"][1] == _ks_horizon
+    assert scores["solver"][1] == _ks_horizon
 
 
 def _score_program(
@@ -150,29 +224,30 @@ def _score_module(
         _ks_horizon * index / float(_ks_time_count - 1)
         for index in range(1, _ks_time_count)
     )
-    trajectory = _field_valued_model_trajectory(
-        runtime=runtime,
-        module=module,
-        fields=fields,
-        labels=targets,
-        horizons=horizons,
-    )
-    bits = competence(
-        type(
-            "Request",
-            (),
-            {
-                "runtime": runtime,
-                "module": module,
-                "generator": benchmark.generator,
-                "batch": batch,
-                "sample_keys": tuple(sample.to_record() for sample in batch.samples),
-                "predictions": trajectory,
-                "targets": targets,
-                "horizons": horizons,
-            },
-        )()
-    )
+    with runtime.torch.no_grad():
+        trajectory = _field_valued_model_trajectory(
+            runtime=runtime,
+            module=module,
+            fields=fields,
+            labels=targets,
+            horizons=horizons,
+        )
+        bits = competence(
+            type(
+                "Request",
+                (),
+                {
+                    "runtime": runtime,
+                    "module": module,
+                    "generator": benchmark.generator,
+                    "batch": batch,
+                    "sample_keys": tuple(sample.to_record() for sample in batch.samples),
+                    "predictions": trajectory,
+                    "targets": targets,
+                    "horizons": horizons,
+                },
+            )()
+        )
     diagnostics = bits.leibniz_competence_diagnostics
     boundaries = [
         float(cast(dict[str, object], diagnostic).get("predictability_boundary", 0.0))
@@ -203,3 +278,25 @@ def _residual_training_loss(
         horizons=horizons,
     )
     return loss_function(trajectory, targets)
+
+
+def _train_learned_module(
+    *,
+    runtime: Any,
+    module: Any,
+    fields: Any,
+    targets: Any,
+    loss_function: Any,
+) -> None:
+    optimizer = runtime.torch.optim.Adam(module.parameters(), lr=0.4)
+    for _step in range(12):
+        optimizer.zero_grad()
+        loss = _residual_training_loss(
+            runtime=runtime,
+            module=module,
+            fields=fields,
+            targets=targets,
+            loss_function=loss_function,
+        )
+        loss.backward()
+        optimizer.step()
