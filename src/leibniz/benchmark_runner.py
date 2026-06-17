@@ -4302,6 +4302,13 @@ def _training_gate_score_estimate(
         volume_axis=None,
         bounded_mass=target_contract.kind != "field-valued",
     )
+    chance_mass = _target_contract_chance_mass(target_contract)
+    _attach_partition_score(
+        current_point,
+        batch=batch,
+        accepted_mass=accepted_mass,
+        chance_mass=chance_mass,
+    )
     sampled_competence = _training_sampled_competence_record(
         benchmark_id=batch.benchmark_id,
         previous_frontier_points=previous_frontier_points,
@@ -4309,13 +4316,15 @@ def _training_gate_score_estimate(
         bounded_mass=target_contract.kind != "field-valued",
     )
     compact_sampled_competence = _compact_training_sampled_competence(sampled_competence)
+    partition_score = _training_sampled_competence_partition_score(
+        compact_sampled_competence
+    )
     _assign_sampled_competence_inference_cost(
         compact_sampled_competence,
         measurement=inference_cost[0],
         sample_count=inference_cost[1],
     )
     point_records = _training_score_estimate_points(compact_sampled_competence)
-    chance_mass = _target_contract_chance_mass(target_contract)
     competence_points = tuple(
         CompetencePoint.from_sampled_record(
             point,
@@ -4329,7 +4338,7 @@ def _training_gate_score_estimate(
         points=competence_points,
         chance_mass=chance_mass,
     )
-    score = score_integral.value
+    score = _required_float(partition_score.get("value"), "score_estimate.partition_score.value")
     record: dict[str, object] = {
         "kind": "training-running-score-estimate",
         "status": "provisional",
@@ -4707,6 +4716,26 @@ def _compact_training_sampled_competence(
             )
         compact["points"] = compact_points
     return compact
+
+
+def _training_sampled_competence_partition_score(
+    sampled_competence: dict[str, object],
+) -> Mapping[str, object]:
+    points = sampled_competence.get("points")
+    if not isinstance(points, Sequence) or isinstance(points, str | bytes):
+        partition_score = sampled_competence.get("partition_score")
+        if isinstance(partition_score, Mapping):
+            return cast(Mapping[str, object], partition_score)
+        raise BenchmarkRunnerError("training gate score estimate is missing partition score")
+    for point in reversed(cast(Sequence[object], points)):
+        if not isinstance(point, Mapping):
+            continue
+        partition_score = cast(Mapping[str, object], point).get("partition_score")
+        if isinstance(partition_score, Mapping):
+            score = cast(Mapping[str, object], partition_score)
+            sampled_competence["partition_score"] = dict(score)
+            return score
+    raise BenchmarkRunnerError("training gate score estimate is missing partition score")
 
 
 def _assign_sampled_competence_inference_cost(

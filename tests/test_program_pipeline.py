@@ -295,6 +295,20 @@ def test_program_checkpoint_evaluation_materializes_ks_result_view(tmp_path: Pat
             learning_rate=1e-3,
         )
     )
+    training_record = load_object_document(
+        training_summary.training_summary_path.read_bytes(),
+        description="training summary",
+    )
+    training_estimate = cast(dict[str, object], training_record["training_estimate"])
+    training_sampled_competence = cast(
+        dict[str, object],
+        training_estimate["sampled_competence"],
+    )
+    training_partition_score = cast(
+        dict[str, object],
+        training_sampled_competence["partition_score"],
+    )
+    assert training_estimate["score"] == training_partition_score["value"]
     evaluation_summary = evaluate_benchmark_checkpoint(
         BenchmarkEvaluationPlan(
             checkpoint_artifact_path=_selected_checkpoint_artifact_path(
