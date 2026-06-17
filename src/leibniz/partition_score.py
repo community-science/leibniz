@@ -83,13 +83,13 @@ class PartitionScoreNode:
     """One node in a competence partition tree."""
 
     estimate: PartitionCompetenceEstimate
-    children: tuple["PartitionScoreNode", ...] = ()
+    children: tuple[PartitionScoreNode, ...] = ()
 
     @property
     def is_leaf(self) -> bool:
         return not self.children
 
-    def leaves(self) -> tuple["PartitionScoreNode", ...]:
+    def leaves(self) -> tuple[PartitionScoreNode, ...]:
         if self.is_leaf:
             return (self,)
         return tuple(leaf for child in self.children for leaf in child.leaves())
@@ -408,8 +408,16 @@ def _candidate_splits(
             )
             candidates.append(
                 (
-                    _region_from_components(region, f"{region.id}.component-{index}", left_components),
-                    _region_from_components(region, f"{region.id}.not-component-{index}", right_components),
+                    _region_from_components(
+                        region,
+                        f"{region.id}.component-{index}",
+                        left_components,
+                    ),
+                    _region_from_components(
+                        region,
+                        f"{region.id}.not-component-{index}",
+                        right_components,
+                    ),
                 )
             )
     if len(region.components) == 1:
@@ -554,7 +562,11 @@ def _nodes_at_depth(
 ) -> tuple[PartitionScoreNode, ...]:
     if depth <= 0 or not node.children:
         return (node,)
-    return tuple(child_node for child in node.children for child_node in _nodes_at_depth(child, depth - 1))
+    return tuple(
+        child_node
+        for child in node.children
+        for child_node in _nodes_at_depth(child, depth - 1)
+    )
 
 
 def _sample_mean_half_width(values: Sequence[float], *, confidence_z: float) -> float:
@@ -589,8 +601,11 @@ def _component_accepts_sample(
     root_component: ProductRegion,
     coordinates: Mapping[str, object],
 ) -> bool:
-    if leaf_component.stratum_id is not None and leaf_component.stratum_id != root_component.stratum_id:
+    if (
+        leaf_component.stratum_id is not None
+        and leaf_component.stratum_id != root_component.stratum_id
+    ):
         return False
     if root_component.stratum_id is not None and leaf_component.stratum_id is None:
         return False
-    return leaf_component.contains(cast(Mapping[str, object], coordinates))
+    return leaf_component.contains(coordinates)

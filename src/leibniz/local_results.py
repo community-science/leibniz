@@ -3600,9 +3600,9 @@ def _capability_map_from_score_integral(
     if total_measure <= 0.0:
         return None
     sample_count = sum(
-        int(child.get("sample_count", 0))
+        sample_count_value
         for child in children
-        if isinstance(child.get("sample_count"), int)
+        for sample_count_value in (_capability_node_sample_count(child),)
     )
     confidence_half_width = math.sqrt(
         math.fsum(
@@ -3673,7 +3673,11 @@ def _capability_leaf_from_integral_term(
         "kind": "partition-capability-node-v1",
         "label": str(region.get("id") or f"term-{index}"),
         "measure": upper - lower,
-        "sample_count": int(term["sample_count"]) if isinstance(term.get("sample_count"), int) else 0,
+        "sample_count": (
+            term["sample_count"]
+            if isinstance(term.get("sample_count"), int)
+            else 0
+        ),
         "competence": _as_nonnegative_number(
             term.get("competence_density"),
             "score_integral.term.competence_density",
@@ -3683,6 +3687,11 @@ def _capability_leaf_from_integral_term(
         "children": [],
     }
     return record
+
+
+def _capability_node_sample_count(node: Mapping[str, object]) -> int:
+    value = node.get("sample_count")
+    return value if isinstance(value, int) else 0
 
 
 def _validate_capability_map(record: Mapping[str, object], prefix: str) -> None:

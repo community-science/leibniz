@@ -178,7 +178,10 @@ def _grid_samples(root: StateSpaceRegion) -> tuple[PartitionSample, ...]:
                 )
             )
             index += 1
-    assert all(root.contains(sample.region_component_index, sample.axis_coordinates) for sample in samples)
+    assert all(
+        root.contains(sample.region_component_index, sample.axis_coordinates)
+        for sample in samples
+    )
     return tuple(samples)
 
 
@@ -202,7 +205,10 @@ def _line_samples(
                 )
             )
             index += 1
-    assert all(root.contains(sample.region_component_index, sample.axis_coordinates) for sample in samples)
+    assert all(
+        root.contains(sample.region_component_index, sample.axis_coordinates)
+        for sample in samples
+    )
     return tuple(samples)
 
 
