@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import cmath
 import math
 from typing import Any
 
@@ -17,66 +16,48 @@ _box_length = 22.0
 def build_program_graph(runtime: Any) -> ProgramGraph:
     torch = runtime.torch
 
-    class LearnedKSStep(torch.nn.Module):
+    class LearnedResidualKSStep(torch.nn.Module):
+        """Partial linear dynamics plus a learned residual correction."""
+
         def __init__(self) -> None:
             super().__init__()  # pyright: ignore[reportUnknownMemberType]
-            self.nonlinear_scale = torch.nn.Parameter(torch.tensor(0.5))
+            self.correction = torch.nn.Sequential(
+                torch.nn.Conv1d(
+                    1,
+                    16,
+                    kernel_size=5,
+                    padding=2,
+                    padding_mode="circular",
+                ),
+                torch.nn.Tanh(),
+                torch.nn.Conv1d(
+                    16,
+                    16,
+                    kernel_size=5,
+                    padding=2,
+                    padding_mode="circular",
+                ),
+                torch.nn.Tanh(),
+                torch.nn.Conv1d(
+                    16,
+                    1,
+                    kernel_size=5,
+                    padding=2,
+                    padding_mode="circular",
+                ),
+            )
+            torch.nn.init.zeros_(self.correction[-1].weight)
+            torch.nn.init.zeros_(self.correction[-1].bias)
 
         def forward(self, field: Any, dt: Any) -> Any:
             step_dt = float(dt[0]) if hasattr(dt, "shape") and len(tuple(dt.shape)) else float(dt)
-            state = field.to(dtype=torch.float64)
-            spatial_points = int(state.shape[-1])
-            (
-                linear,
-                half_linear,
-                q,
-                f1,
-                f2,
-                f3,
-                derivative,
-                dealias,
-            ) = _solver_tensors(torch, state.device, spatial_points, step_dt)
-            spectrum = torch.fft.fft(state, dim=-1)
-            nonlinear = _nonlinear_spectrum(
-                torch,
-                spectrum,
-                derivative,
-                dealias,
-                scale=self.nonlinear_scale,
+            linear_state = _linear_ks_step(
+                torch=torch,
+                field=field,
+                dt=step_dt,
             )
-            a_spectrum = (half_linear * spectrum) + (q * nonlinear)
-            a_nonlinear = _nonlinear_spectrum(
-                torch,
-                a_spectrum,
-                derivative,
-                dealias,
-                scale=self.nonlinear_scale,
-            )
-            b_spectrum = (half_linear * spectrum) + (q * a_nonlinear)
-            b_nonlinear = _nonlinear_spectrum(
-                torch,
-                b_spectrum,
-                derivative,
-                dealias,
-                scale=self.nonlinear_scale,
-            )
-            c_spectrum = (half_linear * a_spectrum) + (
-                q * ((2.0 * b_nonlinear) - nonlinear)
-            )
-            c_nonlinear = _nonlinear_spectrum(
-                torch,
-                c_spectrum,
-                derivative,
-                dealias,
-                scale=self.nonlinear_scale,
-            )
-            next_spectrum = (
-                linear * spectrum
-                + f1 * nonlinear
-                + (2.0 * f2 * (a_nonlinear + b_nonlinear))
-                + f3 * c_nonlinear
-            )
-            return torch.fft.ifft(next_spectrum, dim=-1).real.to(dtype=field.dtype)
+            correction = self.correction(field)
+            return linear_state + (step_dt * correction)
 
     return ProgramGraph(
         contract_kind="prediction",
@@ -88,12 +69,12 @@ def build_program_graph(runtime: Any) -> ProgramGraph:
         nodes=(
             ProgramGraphNode(
                 id="step",
-                kind="submitted-ks-learned-residual-step",
-                operation=LearnedKSStep(),
+                kind="submitted-ks-learned-residual-correction-step",
+                operation=LearnedResidualKSStep(),
                 parameters={
                     "box_length": _box_length,
-                    "method": "ETDRK4",
-                    "learned_parameter": "nonlinear_scale",
+                    "base_dynamics": "linear_spectral_ks",
+                    "learned_component": "local_residual_correction",
                     "training_signal": "ks_residual_loss",
                 },
             ),
@@ -106,126 +87,21 @@ def build_program_graph(runtime: Any) -> ProgramGraph:
     )
 
 
-def _solver_tensors(
-    torch: Any,
-    device: Any,
-    spatial_points: int,
-    dt: float,
-) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
+def _linear_ks_step(*, torch: Any, field: Any, dt: float) -> Any:
+    spatial_points = int(field.shape[-1])
     frequencies = tuple(
         index if index <= spatial_points // 2 else index - spatial_points
         for index in range(spatial_points)
     )
-    wave_numbers = tuple(
-        2.0 * math.pi * frequency / _box_length for frequency in frequencies
+    growth = tuple(
+        ((2.0 * math.pi * frequency / _box_length) ** 2)
+        - ((2.0 * math.pi * frequency / _box_length) ** 4)
+        for frequency in frequencies
     )
-    linear_values = tuple(
-        (wave_number * wave_number) - (wave_number**4) for wave_number in wave_numbers
-    )
-    coefficient_rows = tuple(
-        _etdrk4_coefficients(value, dt=dt) for value in linear_values
-    )
-    shape = (1, 1, spatial_points)
-    return (
-        torch.tensor(
-            tuple(complex(math.exp(dt * value), 0.0) for value in linear_values),
-            dtype=torch.complex128,
-            device=device,
-        ).reshape(shape),
-        torch.tensor(
-            tuple(complex(math.exp(0.5 * dt * value), 0.0) for value in linear_values),
-            dtype=torch.complex128,
-            device=device,
-        ).reshape(shape),
-        torch.tensor(
-            tuple(row[0] for row in coefficient_rows),
-            dtype=torch.complex128,
-            device=device,
-        ).reshape(shape),
-        torch.tensor(
-            tuple(row[1] for row in coefficient_rows),
-            dtype=torch.complex128,
-            device=device,
-        ).reshape(shape),
-        torch.tensor(
-            tuple(row[2] for row in coefficient_rows),
-            dtype=torch.complex128,
-            device=device,
-        ).reshape(shape),
-        torch.tensor(
-            tuple(row[3] for row in coefficient_rows),
-            dtype=torch.complex128,
-            device=device,
-        ).reshape(shape),
-        torch.tensor(
-            tuple(complex(0.0, wave_number) for wave_number in wave_numbers),
-            dtype=torch.complex128,
-            device=device,
-        ).reshape(shape),
-        torch.tensor(
-            tuple(
-                1.0 if abs(frequency) <= spatial_points // 3 else 0.0
-                for frequency in frequencies
-            ),
-            dtype=torch.float64,
-            device=device,
-        ).reshape(shape),
-    )
-
-
-def _nonlinear_spectrum(
-    torch: Any,
-    spectrum: Any,
-    derivative: Any,
-    dealias: Any,
-    *,
-    scale: Any,
-) -> Any:
-    field = torch.fft.ifft(spectrum, dim=-1).real
-    nonlinear = -0.5 * torch.fft.fft(field * field, dim=-1) * derivative
-    return scale.to(dtype=field.dtype) * nonlinear * dealias
-
-
-def _etdrk4_coefficients(
-    linear_value: float,
-    *,
-    dt: float,
-) -> tuple[complex, complex, complex, complex]:
-    roots = tuple(
-        complex(
-            math.cos(math.pi * ((index + 0.5) / 16.0)),
-            math.sin(math.pi * ((index + 0.5) / 16.0)),
-        )
-        for index in range(16)
-    )
-    lr_values = tuple((dt * linear_value) + root for root in roots)
-    q = dt * sum((cmath.exp(lr / 2.0) - 1.0) / lr for lr in lr_values) / len(
-        lr_values
-    )
-    f1 = (
-        dt
-        * sum(
-            (-4.0 - lr + cmath.exp(lr) * (4.0 - (3.0 * lr) + (lr * lr)))
-            / (lr * lr * lr)
-            for lr in lr_values
-        )
-        / len(lr_values)
-    )
-    f2 = (
-        dt
-        * sum(
-            (2.0 + lr + cmath.exp(lr) * (-2.0 + lr)) / (lr * lr * lr)
-            for lr in lr_values
-        )
-        / len(lr_values)
-    )
-    f3 = (
-        dt
-        * sum(
-            (-4.0 - (3.0 * lr) - (lr * lr) + cmath.exp(lr) * (4.0 - lr))
-            / (lr * lr * lr)
-            for lr in lr_values
-        )
-        / len(lr_values)
-    )
-    return (q, f1, f2, f3)
+    linear = torch.tensor(
+        tuple(complex(math.exp(dt * value), 0.0) for value in growth),
+        dtype=torch.complex128,
+        device=field.device,
+    ).reshape((1, 1, spatial_points))
+    spectrum = torch.fft.fft(field.to(dtype=torch.float64), dim=-1)
+    return torch.fft.ifft(linear * spectrum, dim=-1).real.to(dtype=field.dtype)

@@ -292,7 +292,7 @@ const ROOTS: RootTree[] = [
             level: 4,
             kind: 'code',
             tag: 'capability meter',
-            text: 'The boundary-climbing submission test now runs four program graphs through the same certified-bit path: persistence gets zero and a shallow boundary, a partial law scores above it, a residual-trained predictor climbs higher, and the numerical solver remains the reference ceiling. The assertion is order and boundary depth, not a hard-coded score.',
+            text: 'The boundary-climbing submission test now runs four program graphs through the same certified-bit path: persistence gets zero and a shallow boundary, a partial law scores above it, a residual-trained predictor climbs higher with a margin, and the numerical solver remains the reference ceiling. The assertion is certified-bit order plus deep-boundary reach for strong submissions, not a graded boundary-depth ladder or a hard-coded score.',
           },
           {
             level: 4,
@@ -522,7 +522,7 @@ const STEPS: RoadmapStep[] = [
     id: 'ladder',
     title: 'Refinement-ladder records and convergence-grounded scoring',
     outcome:
-      'Emit convergence diagnostics for the ladder and score field prediction as continuous validated evolution bits resolved to the residual-certified precision, with the predictability boundary emerging where certified bits reach zero. The boundary-climbing test shows the score rising with submitted capability. The binary gate and its parameters are retired.',
+      'Emit convergence diagnostics for the ladder and score field prediction as continuous validated evolution bits resolved to the residual-certified precision, with the predictability boundary emerging where certified bits reach zero. The boundary-climbing test shows certified bits rising with submitted capability and strong submissions reaching a deep boundary. The binary gate and its parameters are retired.',
   },
   {
     id: 'cost',

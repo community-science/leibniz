@@ -7,6 +7,7 @@ from typing import Any, cast
 from leibniz.benchmark_implementations import load_benchmark
 from leibniz.benchmark_runner import (
     _field_valued_model_trajectory,  # pyright: ignore[reportPrivateUsage]
+    _FieldTrainingCompetenceRequest,  # pyright: ignore[reportPrivateUsage]
 )
 from leibniz.observation_generation import StateSpaceVolumeRequest
 from leibniz.program_graphs import load_program_graph
@@ -177,7 +178,8 @@ def test_ks_certified_bits_climb_with_predictor_capability() -> None:
 
     assert scores["persistence"][0] == 0.0
     assert scores["persistence"][1] == 0.0
-    assert scores["persistence"][0] < scores["partial"][0] < scores["learned"][0]
+    assert scores["partial"][0] > scores["persistence"][0]
+    assert scores["learned"][0] > scores["partial"][0] + 1.0
     assert scores["learned"][0] <= scores["solver"][0]
     assert scores["learned"][1] == _ks_horizon
     assert scores["solver"][1] == _ks_horizon
@@ -233,21 +235,18 @@ def _score_module(
             horizons=horizons,
         )
         bits = competence(
-            type(
-                "Request",
-                (),
-                {
-                    "runtime": runtime,
-                    "module": module,
-                    "generator": benchmark.generator,
-                    "batch": batch,
-                    "sample_keys": tuple(sample.to_record() for sample in batch.samples),
-                    "predictions": trajectory,
-                    "targets": targets,
-                    "horizons": horizons,
-                },
-            )()
-    )
+            _FieldTrainingCompetenceRequest(
+                runtime=runtime,
+                module=module,
+                fields=fields,
+                predictions=trajectory,
+                targets=targets,
+                horizons=horizons,
+                batch=batch,
+                generator=benchmark.generator,
+                sample_keys=tuple(sample.to_record() for sample in batch.samples),
+            )
+        )
     diagnostics = bits.leibniz_competence_diagnostics
     boundaries = [
         float(
@@ -293,8 +292,8 @@ def _train_learned_module(
     targets: Any,
     loss_function: Any,
 ) -> None:
-    optimizer = runtime.torch.optim.Adam(module.parameters(), lr=0.4)
-    for _step in range(12):
+    optimizer = runtime.torch.optim.Adam(module.parameters(), lr=1.0e-3)
+    for _step in range(500):
         optimizer.zero_grad()
         loss = _residual_training_loss(
             runtime=runtime,
