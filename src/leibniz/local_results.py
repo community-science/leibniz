@@ -1572,11 +1572,11 @@ def _generator_oracle_cost_reference_points(
             raise LocalResultImportError(
                 f"oracle_cost_reference_points.{index}.cost_measurement: {error}"
             ) from error
-        cost = float(cost_measurement.abstract_flops)
+        cost = float(cost_measurement.energy_joules())
         if cost <= 0:
             raise LocalResultImportError(
                 f"oracle_cost_reference_points.{index}.cost_measurement."
-                "abstract_flops must be positive"
+                "energy_joules must be positive"
             )
         metadata = _extract.mapping(
             point.get("metadata"),
@@ -1620,9 +1620,7 @@ def _integrated_reference_curve_points(
             point.get("cost_density"),
             "reference_curve.cost_density",
         )
-        cumulative_cost += (log2_volume - previous_log2_volume) * (
-            CostMeasurement.abstract_flops_bit_density(cost_density)
-        )
+        cumulative_cost += (log2_volume - previous_log2_volume) * cost_density
         integrated_points.append(
             {
                 "log2_volume": log2_volume,
@@ -2057,11 +2055,11 @@ def _cost_measurement_pair_from_record(
     return (measurement, sample_count)
 
 
-def _cost_measurement_pair_ops_per_item(pair: tuple[CostMeasurement, int]) -> float:
-    return pair[0].abstract_flops_per_item(pair[1])
+def _cost_measurement_pair_energy_per_item(pair: tuple[CostMeasurement, int]) -> float:
+    return pair[0].energy_joules_per_item(pair[1])
 
 
-def _summary_cost_measurement_ops_per_item(
+def _summary_cost_measurement_energy_per_item(
     record: Mapping[str, object],
     *,
     measurement_field: str,
@@ -2074,7 +2072,7 @@ def _summary_cost_measurement_ops_per_item(
         sample_count_field=sample_count_field,
         required=False,
     )
-    return None if pair is None else _cost_measurement_pair_ops_per_item(pair)
+    return None if pair is None else _cost_measurement_pair_energy_per_item(pair)
 
 
 def _max_cost_measurement_pair(
@@ -2085,9 +2083,9 @@ def _max_cost_measurement_pair(
         return right
     if right is None:
         return left
-    if _cost_measurement_pair_ops_per_item(right) > _cost_measurement_pair_ops_per_item(
-        left
-    ):
+    if _cost_measurement_pair_energy_per_item(
+        right
+    ) > _cost_measurement_pair_energy_per_item(left):
         return right
     return left
 
@@ -2250,7 +2248,7 @@ def _model_console_view_model(
                 (
                     "Inference Cost",
                     _console_number_value(
-                        _summary_cost_measurement_ops_per_item(
+                        _summary_cost_measurement_energy_per_item(
                             cost_summary,
                             measurement_field="inference_cost_measurement",
                             sample_count_field="inference_cost_sample_count",
@@ -2519,7 +2517,7 @@ def _competence_points(
         if inference_costs:
             inference_cost = max(
                 inference_costs,
-                key=_cost_measurement_pair_ops_per_item,
+                key=_cost_measurement_pair_energy_per_item,
             )
             point["inference_cost_measurement"] = inference_cost[0].to_record()
             point["inference_cost_sample_count"] = inference_cost[1]

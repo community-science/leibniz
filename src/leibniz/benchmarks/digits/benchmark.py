@@ -191,6 +191,8 @@ def _digits_oracle_cost_measurement(
                 calls=1,
                 abstract_flops=pixel_count,
                 output_elements=pixel_count,
+                operation_class="elementwise",
+                dtype="fp32",
             ),
         ),
         moved_elements=0,
