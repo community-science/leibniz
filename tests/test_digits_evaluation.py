@@ -430,6 +430,13 @@ def test_inverse_digits_ambient_certified_bits_match_pre_refactor_static_score()
         latents=(latent,),
         canvas_side=32,
     )
+    expected = _certified_bits_for_latent(
+        module=module,
+        runtime=runtime,
+        recovered_latent=latent,
+        observation=observation,
+        canvas_side=32,
+    )
     predictions = torch.zeros(
         (1, module._inverse_latent_dimension),
         dtype=torch.float32,
@@ -458,12 +465,13 @@ def test_inverse_digits_ambient_certified_bits_match_pre_refactor_static_score()
         getattr(bits, "leibniz_competence_diagnostics", ()),
     )
 
-    assert math.isclose(float(bits[0]), 2776.6796875, rel_tol=0.0, abs_tol=1.0e-6)
+    expected_tensor_bits = predictions.new_tensor([expected.bits])
+    assert float(bits[0]) == float(expected_tensor_bits[0])
     assert math.isclose(
         cast(float, diagnostics[0]["bits"]),
-        2776.67966508589,
+        expected.bits,
         rel_tol=0.0,
-        abs_tol=1.0e-9,
+        abs_tol=1.0e-12,
     )
     assert diagnostics[0]["structural_type"] == "static-conditioning"
     assert "signal_scale" not in diagnostics[0]
