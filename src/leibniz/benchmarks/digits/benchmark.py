@@ -19,6 +19,11 @@ from typing import Any, TypeAlias, cast
 from leibniz.artifacts import ArtifactReference
 from leibniz.benchmark_implementations import RawBenchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
+from leibniz.certified_bits import (
+    AmbientEntropy,
+    CertificationStability,
+    evaluate_certified_bits,
+)
 from leibniz.certified_precision import residual_certified_epsilon
 from leibniz.cost_metrology import (
     CostMeasurement,
@@ -2590,40 +2595,38 @@ def _inverse_digits_ambient_certified_bits(request: Any) -> Any:
                 refinement_sides=(side, max(side + 1, side * 2)),
             )
             if certification.certification_status != "certified":
-                values.append(0.0)
+                evaluation = evaluate_certified_bits(
+                    _InverseDigitsStaticConditioningEstimator(
+                        runtime=runtime,
+                        recovered_latent=recovered_latent,
+                        certification=certification,
+                        canvas_side=side,
+                    ),
+                    sample_count=1,
+                )
+                values.append(float(evaluation.values[0]))
                 diagnostics.append(
-                    {
-                        "kind": "digits-inverse-certified-diagnostics",
-                        "sample_index": sample_index,
-                        "certification_status": certification.certification_status,
-                        "bits": 0.0,
-                        "residual_norm": certification.residual_norm,
-                        "sigma_min": certification.sigma_min,
-                    }
+                    _inverse_digits_certified_diagnostic_record(
+                        sample_index=sample_index,
+                        record=evaluation.diagnostics[0],
+                    )
                 )
                 continue
-            bits = inverse_digits_validated_bits(
-                runtime=runtime,
-                recovered_latent=recovered_latent,
-                certification=certification,
-                canvas_side=side,
+            evaluation = evaluate_certified_bits(
+                _InverseDigitsStaticConditioningEstimator(
+                    runtime=runtime,
+                    recovered_latent=recovered_latent,
+                    certification=certification,
+                    canvas_side=side,
+                ),
+                sample_count=1,
             )
-            values.append(bits.bits)
+            values.append(float(evaluation.values[0]))
             diagnostics.append(
-                {
-                    "kind": "digits-inverse-certified-diagnostics",
-                    "sample_index": sample_index,
-                    "certification_status": certification.certification_status,
-                    "bits": bits.bits,
-                    "identity_bits": bits.identity_bits,
-                    "nuisance_bits": bits.nuisance_bits,
-                    "distinguishable_identity_count": bits.distinguishable_identity_count,
-                    "certified_epsilon": certification.certified_epsilon,
-                    "residual_norm": certification.residual_norm,
-                    "sigma_min": certification.sigma_min,
-                    "observable_mode_count": certification.observable_mode_count,
-                    "conditioning_stability": certification.conditioning_stability,
-                }
+                _inverse_digits_certified_diagnostic_record(
+                    sample_index=sample_index,
+                    record=evaluation.diagnostics[0],
+                )
             )
         except (ObservationGenerationError, ValueError):
             values.append(0.0)
@@ -2638,6 +2641,81 @@ def _inverse_digits_ambient_certified_bits(request: Any) -> Any:
     result = predictions.new_tensor(values)
     result.leibniz_competence_diagnostics = tuple(diagnostics)
     return result
+
+
+@dataclass(frozen=True, slots=True)
+class _InverseDigitsStaticConditioningEstimator:
+    runtime: TensorRuntime
+    recovered_latent: InverseDigitsLatent
+    certification: StaticMapCertification
+    canvas_side: int
+    kind: str = "renderer-jvp-gram-per-mode-spectrum"
+    structural_type: str = "static-conditioning"
+
+    def residuals(self) -> tuple[float, ...]:
+        return (self.certification.residual_norm,)
+
+    def stability(self) -> CertificationStability:
+        refused = self.certification.certification_status != "certified"
+        factor = (
+            math.inf
+            if refused
+            else 1.0 / max(self.certification.sigma_min, _static_sigma_floor)
+        )
+        return CertificationStability(
+            factor=factor,
+            refused=refused,
+            diagnostics=self.certification.to_record(),
+            refused_status=self.certification.certification_status,
+        )
+
+    def ambient_entropy_above(self, precision: Any) -> AmbientEntropy:
+        precision_value = float(precision)
+        bits = inverse_digits_validated_bits(
+            runtime=self.runtime,
+            recovered_latent=self.recovered_latent,
+            certification=self.certification,
+            canvas_side=self.canvas_side,
+        )
+        return AmbientEntropy(
+            bits=bits.bits,
+            signal=max(1.0, precision_value * 2.0),
+            diagnostics=bits.to_record()
+            | {
+                "nuisance_bits": bits.nuisance_bits,
+                "distinguishable_identity_count": bits.distinguishable_identity_count,
+                "certified_epsilon": bits.certified_epsilon,
+            },
+        )
+
+
+def _inverse_digits_certified_diagnostic_record(
+    *,
+    sample_index: int,
+    record: Mapping[str, object],
+) -> Mapping[str, object]:
+    stability = cast(Mapping[str, object], record["stability"])
+    entropy = cast(Mapping[str, object], record["ambient_entropy"])
+    diagnostic: dict[str, object] = {
+        "kind": "digits-inverse-certified-diagnostics",
+        "sample_index": sample_index,
+        "certification_status": record["certification_status"],
+        "bits": record["bits"],
+        "residual_norm": record["residual_norm"],
+        "sigma_min": stability["sigma_min"],
+    }
+    if record["certification_status"] == "certified":
+        diagnostic |= {
+            "identity_bits": entropy["identity_bits"],
+            "nuisance_bits": entropy["nuisance_bits"],
+            "distinguishable_identity_count": entropy[
+                "distinguishable_identity_count"
+            ],
+            "certified_epsilon": record["certified_epsilon"],
+            "observable_mode_count": stability["observable_mode_count"],
+            "conditioning_stability": stability["conditioning_stability"],
+        }
+    return diagnostic
 
 
 def _distinguishable_identity_count(
