@@ -149,10 +149,10 @@ const ROOTS: RootTree[] = [
             level: 3,
             kind: 'add',
             tag: 'known part plus unknown part',
-            text: 'Most real problems are $f = g + h$: a part $g$ whose law we know, so answers there are scored against the law, and a part $h$ we have only data for. Discovering the law of an $h$ converts it into a $g$ — and on the ledger that shows up as its bits turning from frontier-relative into certified-absolute. That migration is the measurable trace of a field becoming a science.',
+            text: 'Most real problems are $f = g + h$: a part $g$ whose law we know, so answers there are scored against the law, and a part $h$ we have only data for, scored by how much of that data a model actually accounts for. Discovering the law of an $h$ converts it into a $g$ — and on the ledger that shows up as its bits turning from uncertified into certified. That migration is the measurable trace of a field becoming a science.',
           },
         ],
-        verdict: { tone: 'open', text: 'The $g + h$ split and the relative-to-absolute migration orient discovery; relative-$h$ scoring and multi-scale universes still need to be specified.' },
+        verdict: { tone: 'open', text: 'The $g + h$ split and the uncertified-to-certified migration orient discovery; the form of the $h$ score and multi-scale universes still need to be specified.' },
       },
     ],
   },
@@ -286,7 +286,7 @@ const ROOTS: RootTree[] = [
             level: 3,
             kind: 'code',
             tag: 'ledger',
-            text: 'certified_bits.py owns the certified-$g$ leaf: residuals, stability/refusal, ambient_entropy_above, zero credit, and one diagnostic envelope. The relative-$h$ leaf is only a declared seam at this boundary; no frontier-relative aggregator ships yet.',
+            text: 'certified_bits.py owns the certified-$g$ leaf: residuals, stability/refusal, ambient_entropy_above, zero credit, and one diagnostic envelope. The data-only $h$ leaf is only a declared seam at this boundary; no $h$ score ships yet.',
           },
           {
             level: 4,
@@ -351,6 +351,12 @@ const ROOTS: RootTree[] = [
             kind: 'add',
             tag: 'rungs are operators',
             text: 'The rungs are themselves operators: solvers, earlier submissions, and in discovery settings, experiments. When the law is unknown, agreeing on the overlap also means staying consistent with the converged sub-laws at smaller scales.',
+          },
+          {
+            level: 2,
+            kind: 'add',
+            tag: 'who promotes a law',
+            text: 'A proposed law joins the trusted ground — an $h$ becoming a $g$ — by meeting the same criteria: it converges under refinement, agrees with established ground on the overlap, and its derived functional self-verifies. Anyone can submit one, and the criteria promote it, not the maintainer. The field moves the boundary, not whoever keeps the repository.',
           },
           {
             level: 3,
@@ -427,7 +433,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'one measure, two regimes',
-            text: 'Validated bits come off one ledger whatever the source: certified against the law where there is one ($g$), frontier-relative against the best extractor where there is not ($h$). Both are the same object — the spectrum of the information matrix, whose independent directions count the bits and whose additivity across observations discounts redundancy on its own, so datasets combine without a hand-picked weighting. The inverse-renderer benchmark already does the certified case per mode.',
+            text: 'Validated bits come off one ledger whatever the source: certified against the law where there is one ($g$), and where there is not ($h$) an absolute count of how much of the real data a model accounts for — uncertified, so a ratcheting lower bound that climbs toward the certified value as the law is discovered, not a ranking against other models. Both regimes count generalizing information in the same bit unit and independent information adds, so datasets combine without a hand-picked weighting; the form of the $h$ estimate is left open. Moving the $g$/$h$ boundary converts bits between certified and uncertified for the same information — it does not manufacture bits, so there is nothing to be gained by elaborating the known law to swallow data it does not generalize. The inverse-renderer already does the certified case per mode, an information-spectrum count whose additivity discounts redundancy on its own.',
           },
           {
             level: 2,
@@ -483,7 +489,7 @@ const EDGES: CouplingEdge[] = [
     roots: ['U', 'R'],
     title: 'Grounding',
     warn: true,
-    body: 'Grounding is really two questions wearing one name: does the universe have a law (Universe), and is an answer checked by an exact verifier or by convergence (Refinement)? So a contract can just record whether there is a law and let the verifier-or-convergence part fall out of refinement, instead of declaring “grounding” outright. And where there is no law yet, correctness does not vanish — it goes relative: an answer is scored by how much better it predicts the real data than the best model so far. Known-law and no-law are the two ends of one dial — how large a family you certify against (a universal family $\\to$ absolute bits, the current frontier $\\to$ relative bits) — so the same ledger measures both.',
+    body: 'Grounding is really two questions wearing one name: does the universe have a law (Universe), and is an answer checked by an exact verifier or by convergence (Refinement)? So a contract can just record whether there is a law and let the verifier-or-convergence part fall out of refinement, instead of declaring “grounding” outright. And where there is no law yet, correctness does not vanish — it becomes an absolute measure of how much of the real data a model accounts for, just uncertified: a lower bound nobody can yet prove optimal, which tightens as the law is discovered. Known-law and no-law are the two ends of one dial — certified versus uncertified — so the same ledger measures both, and how useful a known law is shows up as the share of the total bits it can certify.',
   },
   {
     id: 'edge-score',
@@ -539,7 +545,7 @@ const STEPS: RoadmapStep[] = [
     id: 'discovery',
     title: 'Readout and unknown-law universes (reserved)',
     outcome:
-      'A readout-valued, convergence-grounded task, plus the $g + h$ ledger: frontier-relative scoring on the data-only part $h$, aggregated with certified bits on $g$ through the partition tree, and the scaffolding for unknown-law and multi-scale universes. Parked until the consolidated certified spine is solid.',
+      'A readout-valued, convergence-grounded task, plus the $g + h$ ledger: an absolute but uncertified score on the data-only part $h$ (its form left open), aggregated with certified $g$ bits through the partition tree, with a law promoted from $h$ into $g$ by the trusted-ground criteria rather than by the maintainer, and the scaffolding for unknown-law and multi-scale universes. Parked until the consolidated certified spine is solid.',
   },
 ];
 
