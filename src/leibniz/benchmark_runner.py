@@ -71,6 +71,10 @@ from leibniz.observation_generation import (
     StateSpaceVolumeRequest,
     StateSpaceVolumeValue,
 )
+from leibniz.partition_score import (
+    adversarial_partition_competence_integral,
+    partition_samples_from_generated,
+)
 from leibniz.program_graphs import LoadedProgramGraph, ProgramGraphError, load_program_graph
 from leibniz.records import RecordExtractor
 from leibniz.state_space import (
@@ -527,6 +531,8 @@ def _evaluation_sampled_competence_record(
     record = sampled_competence_curriculum_record(points)
     if frontier_point.get("competence_value_kind") == "validated-bits":
         record["competence_value_kind"] = "validated-bits"
+    if "partition_score" in frontier_point:
+        record["partition_score"] = frontier_point["partition_score"]
     return record
 
 
@@ -555,6 +561,31 @@ def _attach_competence_diagnostics(
                 copied_points.append(dict(cast(Mapping[str, object], item)))
         if copied_points:
             record["time_points"] = copied_points
+
+
+def _attach_partition_score(
+    record: dict[str, object],
+    *,
+    batch: GeneratedSampleSet,
+    competence: tuple[float, ...],
+) -> None:
+    if batch.region is None:
+        return
+    score = adversarial_partition_competence_integral(
+        root_region=batch.region,
+        samples=partition_samples_from_generated(
+            batch.samples,
+            {
+                sample.index: sample_competence
+                for sample, sample_competence in zip(
+                    batch.samples,
+                    competence,
+                    strict=True,
+                )
+            },
+        ),
+    )
+    record["partition_score"] = score.to_record()
 
 
 def _rung_volume_request(rung: _CurriculumRung) -> StateSpaceVolumeRequest:
@@ -1442,6 +1473,11 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             evaluation_results[evaluation_frontier_index].sampling_protocol.to_record()
         )
         final_sampled_competence["sampling_seed"] = frontier_rung.seed
+        _attach_partition_score(
+            final_sampled_competence,
+            batch=final_scored_batch,
+            competence=final_accepted_mass,
+        )
         sampled_competence = _evaluation_sampled_competence_record(
             benchmark_id=benchmark_id,
             evaluation_results=evaluation_results,

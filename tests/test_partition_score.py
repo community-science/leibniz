@@ -164,6 +164,47 @@ def test_adversarial_partition_does_not_split_unstructured_noise() -> None:
     assert math.isclose(score.value, 0.5)
 
 
+def test_adversarial_partition_runs_on_real_digits_tree_and_ladder() -> None:
+    generator = load_generator(Path("src/leibniz/benchmarks/digits"))
+    batch = generator(
+        seed=31,
+        shape=32,
+        include_metadata=True,
+        volume_request=StateSpaceVolumeRequest(minimum=3.0, maximum=4.0),
+        sample_indices=tuple(range(32)),
+    )
+    assert batch.region is not None
+    samples = partition_samples_from_generated(
+        batch.samples,
+        {
+            sample.index: (
+                0.0
+                if sample.region_component_index is not None
+                and sample.region_component_index < 2
+                else 1.0
+            )
+            for sample in batch.samples
+        },
+    )
+
+    score = adversarial_partition_competence_integral(
+        root_region=batch.region,
+        samples=samples,
+    )
+
+    assert len(score.refinement_ladder) > 1
+    assert len(score.root.leaves()) > 1
+    assert math.isclose(score.value, 6 / 8)
+    child_regions = [child.estimate.region for child in score.root.children]
+    assert child_regions
+    assert all(region.measure_estimate is not None for region in child_regions)
+    assert all(
+        component.measure_estimate is not None
+        for region in child_regions
+        for component in region.components
+    )
+
+
 def _grid_samples(root: StateSpaceRegion) -> tuple[PartitionSample, ...]:
     samples: list[PartitionSample] = []
     index = 0

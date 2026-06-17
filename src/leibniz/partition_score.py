@@ -13,6 +13,7 @@ from leibniz.state_space import (
     ContinuousAxisRegion,
     DiscreteAxisRegion,
     IntegerRangeDomain,
+    MeasureEstimate,
     ProductRegion,
     RealGridDomain,
     StateSpaceError,
@@ -452,6 +453,11 @@ def _region_from_components(
     components: tuple[ProductRegion, ...],
 ) -> StateSpaceRegion:
     volume = sum(component.volume for component in components)
+    estimate = _summed_measure_estimate(
+        method_id=f"{region_id}.component-measure-sum",
+        intervals=tuple(_product_measure_interval(component) for component in components),
+        force_estimated=any(component.measure_estimate is not None for component in components),
+    )
     return StateSpaceRegion(
         id=region_id,
         ambient=parent.ambient,
@@ -459,6 +465,7 @@ def _region_from_components(
         union_rule=parent.union_rule,
         volume=volume,
         log2_volume=math.log2(volume),
+        measure_estimate=estimate,
     )
 
 
@@ -499,8 +506,16 @@ def _product_with_axis_region(
         axis_region if index == axis_index else existing
         for index, existing in enumerate(product.axis_regions)
     )
-    volume = math.prod(
-        region.count for region in axis_regions if isinstance(region, DiscreteAxisRegion)
+    volume = _scaled_product_volume(
+        product=product,
+        original_axis=product.axis_regions[axis_index],
+        replacement_axis=axis_region,
+    )
+    estimate = _scaled_product_measure_estimate(
+        product=product,
+        original_axis=product.axis_regions[axis_index],
+        replacement_axis=axis_region,
+        volume=volume,
     )
     return ProductRegion(
         axis_regions=axis_regions,
@@ -509,7 +524,92 @@ def _product_with_axis_region(
         log2_volume=math.log2(volume),
         stratum_id=product.stratum_id,
         stratum_target=product.stratum_target,
+        measure_estimate=estimate,
     )
+
+
+def _scaled_product_measure_estimate(
+    *,
+    product: ProductRegion,
+    original_axis: AxisRegion,
+    replacement_axis: AxisRegion,
+    volume: int,
+) -> MeasureEstimate | None:
+    if product.measure_estimate is None:
+        return None
+    original_lower, original_upper = _axis_region_measure_interval(original_axis)
+    replacement_lower, replacement_upper = _axis_region_measure_interval(replacement_axis)
+    lower = _log2_measure_ratio(replacement_lower, original_upper)
+    upper = _log2_measure_ratio(replacement_upper, original_lower)
+    product_lower, product_upper = _product_measure_interval(product)
+    return MeasureEstimate(
+        kind="estimated",
+        method_id=f"{product.measure_estimate.method_id}.axis-split",
+        log2_lower=product_lower + lower,
+        log2_upper=product_upper + upper,
+    )
+
+
+def _scaled_product_volume(
+    *,
+    product: ProductRegion,
+    original_axis: AxisRegion,
+    replacement_axis: AxisRegion,
+) -> int:
+    if isinstance(original_axis, DiscreteAxisRegion) and isinstance(
+        replacement_axis,
+        DiscreteAxisRegion,
+    ):
+        scaled = product.volume * replacement_axis.count / original_axis.count
+        return max(1, round(scaled))
+    return product.volume
+
+
+def _summed_measure_estimate(
+    *,
+    method_id: str,
+    intervals: tuple[tuple[float, float], ...],
+    force_estimated: bool = False,
+) -> MeasureEstimate | None:
+    if not force_estimated and all(
+        math.isclose(lower, upper, rel_tol=0.0, abs_tol=1e-12)
+        for lower, upper in intervals
+    ):
+        return None
+    lower = math.log2(math.fsum(2**interval[0] for interval in intervals))
+    upper = math.log2(math.fsum(2**interval[1] for interval in intervals))
+    return MeasureEstimate(
+        kind="estimated",
+        method_id=method_id,
+        log2_lower=lower,
+        log2_upper=upper,
+    )
+
+
+def _product_measure_interval(product: ProductRegion) -> tuple[float, float]:
+    if product.measure_estimate is None:
+        return (product.log2_volume, product.log2_volume)
+    assert product.measure_estimate.log2_lower is not None
+    assert product.measure_estimate.log2_upper is not None
+    return (
+        float(product.measure_estimate.log2_lower),
+        float(product.measure_estimate.log2_upper),
+    )
+
+
+def _axis_region_measure_interval(axis_region: AxisRegion) -> tuple[float, float]:
+    if isinstance(axis_region, DiscreteAxisRegion):
+        return (axis_region.log2_count, axis_region.log2_count)
+    assert axis_region.measure_estimate.log2_lower is not None
+    assert axis_region.measure_estimate.log2_upper is not None
+    return (
+        float(axis_region.measure_estimate.log2_lower),
+        float(axis_region.measure_estimate.log2_upper),
+    )
+
+
+def _log2_measure_ratio(numerator_log2: float, denominator_log2: float) -> float:
+    return numerator_log2 - denominator_log2
 
 
 def _integral_for_nodes(nodes: Sequence[PartitionScoreNode]) -> tuple[float, float]:
