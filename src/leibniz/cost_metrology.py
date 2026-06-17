@@ -1237,7 +1237,7 @@ def normalize_tensor_dtype(dtype: str) -> DeviceDType | None:
     """Map tensor runtime dtype strings into the declared device-profile dtype set."""
 
     _require_nonempty_string(dtype, "tensor dtype")
-    normalized = dtype.removeprefix("torch.").lower()
+    normalized = dtype.rsplit(".", 1)[-1].lower()
     if normalized in {"float64", "double", "complex128"}:
         return "fp64"
     if normalized in {"float32", "float", "complex64"}:
@@ -1280,7 +1280,7 @@ def _specs_bytes(specs: Iterable[TensorValueSpec]) -> int:
 
 
 def _dtype_size_bytes(dtype: str) -> int:
-    normalized = dtype.removeprefix("torch.").lower()
+    normalized = dtype.rsplit(".", 1)[-1].lower()
     if normalized in {"complex128"}:
         return 16
     if normalized in {"float64", "double", "complex64", "int64", "long"}:
