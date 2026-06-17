@@ -25,6 +25,7 @@ __all__ = [
     "CostOperationTraceRecord",
     "DeviceCostProfile",
     "DeviceDType",
+    "EnergyCostBreakdown",
     "MovementCostRecord",
     "OperationClass",
     "OperationCostRecord",
@@ -32,9 +33,12 @@ __all__ = [
     "UnmodeledOperationRecord",
     "estimate_program_cost",
     "estimate_operation_stream_cost",
+    "device_cost_profile",
+    "device_cost_profiles",
     "operation_class_for_name",
     "measure_program_cost",
     "normalize_tensor_dtype",
+    "price_cost_measurement_energy",
 ]
 
 _tensor_runtime_cost_model_id = "leibniz.cost-model.tensor-runtime@0.1.0"
@@ -188,6 +192,126 @@ class DeviceCostProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class EnergyCostBreakdown:
+    """Energy price of a machine-independent cost measurement under one profile."""
+
+    profile_id: str
+    compute_joules: float
+    bytes_moved_joules: float
+    bytes_resident_joules: float
+    total_joules: float
+    coefficient_overrides: Mapping[str, float] | None = None
+
+    def __post_init__(self) -> None:
+        _require_nonempty_string(self.profile_id, "energy profile_id")
+        _require_finite_nonnegative_float(self.compute_joules, "compute_joules")
+        _require_finite_nonnegative_float(self.bytes_moved_joules, "bytes_moved_joules")
+        _require_finite_nonnegative_float(
+            self.bytes_resident_joules,
+            "bytes_resident_joules",
+        )
+        _require_finite_nonnegative_float(self.total_joules, "total_joules")
+
+    def to_record(self) -> dict[str, object]:
+        record: dict[str, object] = {
+            "profile_id": self.profile_id,
+            "compute_joules": self.compute_joules,
+            "bytes_moved_joules": self.bytes_moved_joules,
+            "bytes_resident_joules": self.bytes_resident_joules,
+            "total_joules": self.total_joules,
+            "residency_model": "per-evaluation-footprint",
+            "residency_duration_deferred": True,
+        }
+        if self.coefficient_overrides:
+            record["coefficient_overrides"] = dict(self.coefficient_overrides)
+        return record
+
+
+_default_device_cost_profile_id = "cost-model.device.nvidia-a100@0.1.0"
+
+
+def device_cost_profiles() -> Mapping[str, DeviceCostProfile]:
+    """Return the bundled declared device cost profiles."""
+
+    return _device_cost_profiles
+
+
+def device_cost_profile(profile_id: str = _default_device_cost_profile_id) -> DeviceCostProfile:
+    """Return a bundled declared device cost profile by id."""
+
+    try:
+        return _device_cost_profiles[profile_id]
+    except KeyError as error:
+        raise CostMetrologyError(f"unknown device cost profile: {profile_id}") from error
+
+
+def price_cost_measurement_energy(
+    measurement: CostMeasurement,
+    *,
+    profile: DeviceCostProfile | str = _default_device_cost_profile_id,
+    compute_energy_overrides: Mapping[tuple[OperationClass, DeviceDType], float] | None = None,
+    bytes_moved_energy_joules: float | None = None,
+    bytes_resident_energy_joules: float | None = None,
+) -> EnergyCostBreakdown:
+    """Price invariant cost counts under a declared device profile."""
+
+    resolved_profile = device_cost_profile(profile) if isinstance(profile, str) else profile
+    compute_table = dict(resolved_profile.compute_energy_joules)
+    override_record: dict[str, float] = {}
+    if compute_energy_overrides:
+        for key, value in compute_energy_overrides.items():
+            operation_class, dtype = key
+            if operation_class not in _operation_classes or dtype not in _device_dtypes:
+                raise CostMetrologyError("compute energy override key is not in the taxonomy")
+            _require_finite_nonnegative_float(value, f"override.{operation_class}.{dtype}")
+            compute_table[key] = value
+            override_record[f"compute.{operation_class}.{dtype}"] = float(value)
+    moved_coefficient = (
+        resolved_profile.bytes_moved_energy_joules
+        if bytes_moved_energy_joules is None
+        else bytes_moved_energy_joules
+    )
+    resident_coefficient = (
+        resolved_profile.bytes_resident_energy_joules
+        if bytes_resident_energy_joules is None
+        else bytes_resident_energy_joules
+    )
+    _require_finite_nonnegative_float(moved_coefficient, "bytes_moved_energy_joules")
+    _require_finite_nonnegative_float(resident_coefficient, "bytes_resident_energy_joules")
+    if bytes_moved_energy_joules is not None:
+        override_record["bytes_moved"] = float(bytes_moved_energy_joules)
+    if bytes_resident_energy_joules is not None:
+        override_record["bytes_resident"] = float(bytes_resident_energy_joules)
+
+    compute_joules = 0.0
+    for record in measurement.per_op:
+        if record.abstract_flops == 0:
+            continue
+        if record.operation_class is None or record.dtype is None:
+            raise CostMetrologyError(
+                f"operation {record.name} is missing operation_class or dtype"
+            )
+        try:
+            coefficient = compute_table[(record.operation_class, record.dtype)]
+        except KeyError as error:
+            raise CostMetrologyError(
+                "profile is missing compute coefficient "
+                f"for {record.operation_class}/{record.dtype}"
+            ) from error
+        compute_joules += float(record.abstract_flops) * coefficient
+    moved_joules = float(measurement.bytes_moved) * moved_coefficient
+    resident_joules = float(measurement.bytes_resident) * resident_coefficient
+    return EnergyCostBreakdown(
+        profile_id=resolved_profile.profile_id,
+        compute_joules=compute_joules,
+        bytes_moved_joules=moved_joules,
+        bytes_resident_joules=resident_joules,
+        total_joules=compute_joules + moved_joules + resident_joules,
+        coefficient_overrides=override_record or None,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class TensorValueSpec:
     """Shape and dtype for a tensor value observed in an op stream."""
 
@@ -232,12 +356,18 @@ class OperationCostRecord:
     calls: int
     abstract_flops: int
     output_elements: int
+    operation_class: OperationClass | None = None
+    dtype: DeviceDType | None = None
 
     def __post_init__(self) -> None:
         _require_nonempty_string(self.name, "operation name")
         _require_nonnegative_int(self.calls, "operation calls")
         _require_nonnegative_int(self.abstract_flops, "operation abstract_flops")
         _require_nonnegative_int(self.output_elements, "operation output_elements")
+        if self.operation_class is not None and self.operation_class not in _operation_classes:
+            raise CostMetrologyError("operation_class must be a known operation class")
+        if self.dtype is not None and self.dtype not in _device_dtypes:
+            raise CostMetrologyError("operation dtype must be a known device dtype")
 
     @classmethod
     def from_record(cls, record: object) -> Self:
@@ -250,15 +380,33 @@ class OperationCostRecord:
                 mapping.get("output_elements"),
                 "operation output_elements",
             ),
+            operation_class=(
+                None
+                if mapping.get("operation_class") is None
+                else _record_operation_class(
+                    mapping.get("operation_class"),
+                    "operation operation_class",
+                )
+            ),
+            dtype=(
+                None
+                if mapping.get("dtype") is None
+                else _record_device_dtype(mapping.get("dtype"), "operation dtype")
+            ),
         )
 
     def to_record(self) -> dict[str, object]:
-        return {
+        record: dict[str, object] = {
             "name": self.name,
             "calls": self.calls,
             "abstract_flops": self.abstract_flops,
             "output_elements": self.output_elements,
         }
+        if self.operation_class is not None:
+            record["operation_class"] = self.operation_class
+        if self.dtype is not None:
+            record["dtype"] = self.dtype
+        return record
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,11 +416,13 @@ class MovementCostRecord:
     name: str
     calls: int
     moved_elements: int
+    bytes_moved: int = 0
 
     def __post_init__(self) -> None:
         _require_nonempty_string(self.name, "movement operation name")
         _require_nonnegative_int(self.calls, "movement operation calls")
         _require_nonnegative_int(self.moved_elements, "movement operation moved_elements")
+        _require_nonnegative_int(self.bytes_moved, "movement operation bytes_moved")
 
     @classmethod
     def from_record(cls, record: object) -> Self:
@@ -284,6 +434,7 @@ class MovementCostRecord:
                 mapping.get("moved_elements"),
                 "movement operation moved_elements",
             ),
+            bytes_moved=_record_int(mapping.get("bytes_moved", 0), "movement bytes_moved"),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -291,6 +442,7 @@ class MovementCostRecord:
             "name": self.name,
             "calls": self.calls,
             "moved_elements": self.moved_elements,
+            "bytes_moved": self.bytes_moved,
         }
 
 
@@ -378,6 +530,7 @@ class CostMeasurement:
     execution_mode: _CostExecutionMode = "measured"
     operation_stream_source: str = "runtime-executed"
     operations_executed: bool = True
+    bytes_moved: int = 0
     bytes_resident: int = 0
     roofline: Mapping[str, object] | None = None
 
@@ -391,6 +544,7 @@ class CostMeasurement:
         _require_nonempty_string(self.cost_model_id, "cost_model_id")
         _require_nonnegative_int(self.abstract_flops, "abstract_flops")
         _require_nonnegative_int(self.moved_elements, "moved_elements")
+        _require_nonnegative_int(self.bytes_moved, "bytes_moved")
         _require_nonnegative_int(self.operation_count, "operation_count")
         _require_nonnegative_int(self.bytes_resident, "bytes_resident")
         _require_finite_nonnegative_float(self.wall_seconds, "wall_seconds")
@@ -411,6 +565,8 @@ class CostMeasurement:
             raise CostMetrologyError("abstract_flops must equal summed per_op abstract_flops")
         if sum(record.moved_elements for record in self.movement) != self.moved_elements:
             raise CostMetrologyError("moved_elements must equal summed movement moved_elements")
+        if sum(record.bytes_moved for record in self.movement) != self.bytes_moved:
+            raise CostMetrologyError("bytes_moved must equal summed movement bytes_moved")
         if self.operation_trace and len(self.operation_trace) != self.operation_count:
             raise CostMetrologyError("operation_count must match operation_trace length")
 
@@ -460,6 +616,7 @@ class CostMeasurement:
                 mapping.get("operations_executed", True),
                 "operations_executed",
             ),
+            bytes_moved=_record_int(mapping.get("bytes_moved", 0), "bytes_moved"),
             bytes_resident=_record_int(mapping.get("bytes_resident", 0), "bytes_resident"),
             roofline=cast(Mapping[str, object] | None, roofline),
         )
@@ -479,6 +636,7 @@ class CostMeasurement:
             "execution_mode": self.execution_mode,
             "operation_stream_source": self.operation_stream_source,
             "operations_executed": self.operations_executed,
+            "bytes_moved": self.bytes_moved,
             "bytes_resident": self.bytes_resident,
         }
         if self.roofline is not None:
@@ -576,10 +734,12 @@ class CostMeter:
         *,
         strict: bool = False,
         roofline: Mapping[str, object] | None = None,
+        device_profile: DeviceCostProfile | str | None = None,
     ) -> None:
         self._runtime = runtime
         self._strict = strict
         self._roofline = roofline
+        self._device_profile = device_profile
         self._capture: Any | None = None
         self._active = False
         self._started_at = 0.0
@@ -609,7 +769,7 @@ class CostMeter:
         capture = self._capture
         if capture is None:
             raise CostMetrologyError("cost meter has not captured any operations")
-        return _measurement_from_operation_stream(
+        measurement = _measurement_from_operation_stream(
             runtime=self._runtime,
             operations=capture.records(),
             wall_seconds=self._wall_seconds
@@ -621,6 +781,7 @@ class CostMeter:
             operation_stream_source="runtime-executed",
             operations_executed=True,
         )
+        return _measurement_with_energy_profile(measurement, self._device_profile)
 
 
 def measure_program_cost(
@@ -630,6 +791,7 @@ def measure_program_cost(
     *,
     strict: bool = False,
     roofline: Mapping[str, object] | None = None,
+    device_profile: DeviceCostProfile | str | None = None,
 ) -> CostMeasurement:
     """Measure one execution of a program under the declared tensor cost model."""
 
@@ -640,7 +802,7 @@ def measure_program_cost(
     started = time.perf_counter()
     operations = tensor_runtime_capture_operations(runtime, callback)
     wall_seconds = time.perf_counter() - started
-    return _measurement_from_operation_stream(
+    measurement = _measurement_from_operation_stream(
         runtime=runtime,
         operations=operations,
         wall_seconds=wall_seconds,
@@ -650,6 +812,7 @@ def measure_program_cost(
         operation_stream_source="runtime-executed",
         operations_executed=True,
     )
+    return _measurement_with_energy_profile(measurement, device_profile)
 
 
 def estimate_operation_stream_cost(
@@ -658,11 +821,12 @@ def estimate_operation_stream_cost(
     *,
     strict: bool = False,
     roofline: Mapping[str, object] | None = None,
+    device_profile: DeviceCostProfile | str | None = None,
     operation_stream_source: str = "runtime-dry-run",
 ) -> CostMeasurement:
     """Estimate cost for a projected tensor-runtime operation stream."""
 
-    return _measurement_from_operation_stream(
+    measurement = _measurement_from_operation_stream(
         runtime=runtime,
         operations=tuple(operations),
         wall_seconds=0.0,
@@ -672,6 +836,7 @@ def estimate_operation_stream_cost(
         operation_stream_source=operation_stream_source,
         operations_executed=False,
     )
+    return _measurement_with_energy_profile(measurement, device_profile)
 
 
 def estimate_program_cost(
@@ -681,6 +846,7 @@ def estimate_program_cost(
     *,
     strict: bool = False,
     roofline: Mapping[str, object] | None = None,
+    device_profile: DeviceCostProfile | str | None = None,
     operation_stream_source: str = "runtime-dry-run",
 ) -> CostMeasurement:
     """Estimate a program's cost from a dry-run tensor-runtime operation stream."""
@@ -695,8 +861,23 @@ def estimate_program_cost(
         tensor_runtime_project_operations(runtime, callback),
         strict=strict,
         roofline=roofline,
+        device_profile=device_profile,
         operation_stream_source=operation_stream_source,
     )
+
+
+def _measurement_with_energy_profile(
+    measurement: CostMeasurement,
+    profile: DeviceCostProfile | str | None,
+) -> CostMeasurement:
+    if profile is None:
+        return measurement
+    resolved_profile = device_cost_profile(profile) if isinstance(profile, str) else profile
+    energy = price_cost_measurement_energy(measurement, profile=resolved_profile)
+    roofline = dict(measurement.roofline or {})
+    roofline["device_cost_profile"] = resolved_profile.to_record()
+    roofline["energy"] = energy.to_record()
+    return replace(measurement, roofline=roofline)
 
 
 def _measurement_from_operation_stream(
@@ -710,7 +891,7 @@ def _measurement_from_operation_stream(
     operation_stream_source: str,
     operations_executed: bool,
 ) -> CostMeasurement:
-    per_op: dict[str, _OperationAccumulator] = {}
+    per_op: dict[tuple[str, OperationClass | None, DeviceDType | None], _OperationAccumulator] = {}
     movement: dict[str, _MovementAccumulator] = {}
     unmodeled: dict[str, _UnmodeledAccumulator] = {}
     operation_trace: list[CostOperationTraceRecord] = []
@@ -729,6 +910,7 @@ def _measurement_from_operation_stream(
             record = movement.setdefault(trace.name, _MovementAccumulator())
             record.calls += 1
             record.moved_elements += moved_elements
+            record.bytes_moved += _specs_bytes(trace.output_tensors or trace.input_tensors)
             continue
         abstract_flops = _abstract_flops(
             name=trace.name,
@@ -747,7 +929,9 @@ def _measurement_from_operation_stream(
             record.calls += 1
             record.output_elements += output_elements
             continue
-        record = per_op.setdefault(trace.name, _OperationAccumulator())
+        operation_class = operation_class_for_name(trace.name)
+        dtype = _operation_dtype(trace)
+        record = per_op.setdefault((trace.name, operation_class, dtype), _OperationAccumulator())
         record.calls += 1
         record.abstract_flops += abstract_flops
         record.output_elements += output_elements
@@ -760,15 +944,19 @@ def _measurement_from_operation_stream(
                 calls=record.calls,
                 abstract_flops=record.abstract_flops,
                 output_elements=record.output_elements,
+                operation_class=operation_class,
+                dtype=dtype,
             )
-            for name, record in sorted(per_op.items())
+            for (name, operation_class, dtype), record in sorted(per_op.items())
         ),
         moved_elements=sum(record.moved_elements for record in movement.values()),
+        bytes_moved=sum(record.bytes_moved for record in movement.values()),
         movement=tuple(
             MovementCostRecord(
                 name=name,
                 calls=record.calls,
                 moved_elements=record.moved_elements,
+                bytes_moved=record.bytes_moved,
             )
             for name, record in sorted(movement.items())
         ),
@@ -819,6 +1007,7 @@ class _OperationAccumulator:
 class _MovementAccumulator:
     calls: int = 0
     moved_elements: int = 0
+    bytes_moved: int = 0
 
 
 @dataclass(slots=True)
@@ -995,6 +1184,14 @@ def _movement_elements(
     if output_specs:
         return _specs_numel(output_specs)
     return _specs_numel(input_specs)
+
+
+def _operation_dtype(trace: CostOperationTraceRecord) -> DeviceDType | None:
+    for spec in (*trace.output_tensors, *trace.input_tensors):
+        dtype = normalize_tensor_dtype(spec.dtype)
+        if dtype is not None:
+            return dtype
+    return None
 
 
 def operation_class_for_name(name: str) -> OperationClass | None:
@@ -1190,6 +1387,35 @@ _movement_ops = frozenset(
 )
 
 
+def _compute_energy_table(
+    *,
+    dense_fp32: float,
+    unified_memory: bool = False,
+) -> dict[tuple[OperationClass, DeviceDType], float]:
+    dtype_scale = {
+        "fp64": 4.0,
+        "fp32": 1.0,
+        "tf32": 0.25,
+        "fp16": 0.125,
+        "bf16": 0.125,
+        "int8": 0.0625,
+    }
+    class_scale = {
+        "dense-matmul": 1.0,
+        "convolution": 1.15,
+        "elementwise": 4.0 if not unified_memory else 2.5,
+        "transcendental": 12.0,
+        "reduction": 3.0,
+        "fft": 5.0,
+        "data-movement": 0.0,
+    }
+    return {
+        (operation_class, dtype): dense_fp32 * class_scale[operation_class] * dtype_scale[dtype]
+        for operation_class in _operation_classes
+        for dtype in _device_dtypes
+    }
+
+
 def _record_mapping(record: object, field: str) -> Mapping[str, object]:
     if not isinstance(record, Mapping):
         raise CostMetrologyError(f"{field} must be an object")
@@ -1287,3 +1513,73 @@ def _require_finite_nonnegative_float(value: float, field: str) -> None:
         raise CostMetrologyError(f"{field} must be numeric")
     if not math.isfinite(float(value)) or value < 0.0:
         raise CostMetrologyError(f"{field} must be finite and nonnegative")
+
+
+_device_cost_profiles: Mapping[str, DeviceCostProfile] = {
+    profile.profile_id: profile
+    for profile in (
+        DeviceCostProfile(
+            profile_id="cost-model.device.nvidia-a100@0.1.0",
+            label="NVIDIA A100 reference",
+            version="0.1.0",
+            provenance=(
+                "Estimated from NVIDIA A100 public peak throughput, memory "
+                "bandwidth, and TDP specs.",
+                "https://www.nvidia.com/en-us/data-center/a100/",
+            ),
+            compute_energy_joules=_compute_energy_table(dense_fp32=2.05e-11),
+            bytes_moved_energy_joules=2.57e-10,
+            bytes_resident_energy_joules=2.57e-13,
+            notes=("Default reference profile for canonical score pricing.",),
+        ),
+        DeviceCostProfile(
+            profile_id="cost-model.device.nvidia-rtx-3080@0.1.0",
+            label="NVIDIA RTX 3080",
+            version="0.1.0",
+            provenance=(
+                "Estimated from NVIDIA GeForce RTX 3080 public throughput, "
+                "memory bandwidth, and board power specs.",
+                "https://www.nvidia.com/en-us/geforce/graphics-cards/30-series/rtx-3080/",
+            ),
+            compute_energy_joules=_compute_energy_table(dense_fp32=1.07e-11),
+            bytes_moved_energy_joules=4.21e-10,
+            bytes_resident_energy_joules=4.21e-13,
+        ),
+        DeviceCostProfile(
+            profile_id="cost-model.device.apple-m1@0.1.0",
+            label="Apple M1 unified-memory estimate",
+            version="0.1.0",
+            provenance=(
+                "Estimated from Apple M1 public GPU throughput and "
+                "unified-memory bandwidth disclosures.",
+                "https://www.apple.com/newsroom/2020/11/apple-unleashes-m1/",
+            ),
+            compute_energy_joules=_compute_energy_table(
+                dense_fp32=7.7e-12,
+                unified_memory=True,
+            ),
+            bytes_moved_energy_joules=2.93e-10,
+            bytes_resident_energy_joules=2.93e-13,
+            unified_memory=True,
+            notes=("Unified-memory profile; movement coefficient is coarse.",),
+        ),
+        DeviceCostProfile(
+            profile_id="cost-model.device.apple-m4@0.1.0",
+            label="Apple M4 unified-memory estimate",
+            version="0.1.0",
+            provenance=(
+                "Estimated from Apple M4 public neural/GPU performance and "
+                "memory-system disclosures.",
+                "https://www.apple.com/newsroom/2024/05/apple-introduces-m4-chip/",
+            ),
+            compute_energy_joules=_compute_energy_table(
+                dense_fp32=4.8e-12,
+                unified_memory=True,
+            ),
+            bytes_moved_energy_joules=1.83e-10,
+            bytes_resident_energy_joules=1.83e-13,
+            unified_memory=True,
+            notes=("Unified-memory profile; movement coefficient is coarse.",),
+        ),
+    )
+}
