@@ -45,27 +45,6 @@ _digits_axis_specs = (
     ("x_shear", -0.03, 0.03, 1),
 )
 
-_chess_mechanisms = (
-    "queen-adjacent-capture",
-    "queen-file-capture",
-    "queen-diagonal-capture",
-    "supported-queen-adjacent-capture",
-    "supported-queen-file-capture",
-    "supported-queen-diagonal-capture",
-)
-
-_chess_transforms = (
-    "identity",
-    "mirror-file",
-    "mirror-rank",
-    "rotate-180",
-    "transpose",
-    "anti-transpose",
-    "rotate-90",
-    "rotate-270",
-)
-
-
 def _metric_ambient() -> StateSpaceAmbient:
     return StateSpaceAmbient(
         field_domain_kind="lattice-2d",
@@ -84,7 +63,7 @@ def _exact_ambient() -> StateSpaceAmbient:
     return StateSpaceAmbient(
         field_domain_kind="lattice-2d",
         field_domain={"height": 8, "width": 8},
-        field_codomain_id="chess-piece-occupancy",
+        field_codomain_id="symbol-occupancy",
         distinguishability=Distinguishability(kind="exact"),
     )
 
@@ -197,9 +176,9 @@ def _singleton_axis_region(name: str, *, coordinate: int) -> DiscreteAxisRegion:
     )
 
 
-def _chess_region() -> StateSpaceRegion:
+def _exact_strata_region() -> StateSpaceRegion:
     spectator_axis = StateSpaceAxis(
-        id="spectator-occupancy", domain=BinaryVectorDomain(dimension=51)
+        id="spectator-occupancy", domain=BinaryVectorDomain(dimension=5)
     )
     spectator_region = DiscreteAxisRegion(
         axis=spectator_axis,
@@ -210,25 +189,24 @@ def _chess_region() -> StateSpaceRegion:
     components = tuple(
         ProductRegion(
             axis_regions=(
-                _singleton_axis_region("white-king-file", coordinate=2),
-                _singleton_axis_region("white-king-rank", coordinate=0),
+                _singleton_axis_region("anchor-file", coordinate=2),
+                _singleton_axis_region("anchor-rank", coordinate=0),
                 spectator_region,
             ),
             measure_rule="benchmark-computed-finite-count",
             volume=5,
             log2_volume=math.log2(5),
-            stratum_id=f"{mechanism}/{transform}",
+            stratum_id=f"exact-stratum-{index}",
         )
-        for mechanism in _chess_mechanisms
-        for transform in _chess_transforms
+        for index in range(6)
     )
     return StateSpaceRegion(
-        id="chess-mate-in-one",
+        id="exact-symbol-family",
         ambient=_exact_ambient(),
         components=components,
         union_rule="disjoint-union",
-        volume=240,
-        log2_volume=math.log2(240),
+        volume=30,
+        log2_volume=math.log2(30),
     )
 
 
@@ -263,10 +241,10 @@ def test_preset_region_selects_enumerated_cells() -> None:
     assert not axis_region.contains("preset-1")
 
 
-def test_chess_region_decomposes_over_mechanism_transform_strata() -> None:
-    region = _chess_region()
-    assert len(region.components) == 48
-    assert region.volume == 240
+def test_exact_region_decomposes_over_strata() -> None:
+    region = _exact_strata_region()
+    assert len(region.components) == 6
+    assert region.volume == 30
     component = region.components[0]
     axis_regions = cast(tuple[DiscreteAxisRegion, ...], component.axis_regions)
     box = math.prod(axis_region.count for axis_region in axis_regions)
@@ -548,7 +526,7 @@ def test_state_space_region_contains_requires_matching_strata_axes_and_ambient()
 
 @pytest.mark.parametrize(
     "build_region",
-    [_digits_grid_region, _truncated_window_region, _preset_region, _chess_region],
+    [_digits_grid_region, _truncated_window_region, _preset_region, _exact_strata_region],
 )
 def test_region_records_round_trip(build_region: Callable[[], StateSpaceRegion]) -> None:
     region = build_region()
@@ -1479,7 +1457,7 @@ def test_state_space_regions_disjoint_requires_all_pairs_and_shared_ambient() ->
     assert state_space_regions_are_disjoint(base, disjoint)
     assert not state_space_regions_are_disjoint(base, overlapping)
     with pytest.raises(StateSpaceError):
-        state_space_regions_are_disjoint(base, _chess_region())
+        state_space_regions_are_disjoint(base, _exact_strata_region())
 
 
 def test_region_filtration_reports_cumulative_volumes() -> None:
@@ -1595,7 +1573,7 @@ def test_region_filtration_rejects_mismatched_ambient_increments() -> None:
             id="mixed-ambient",
             increments=(
                 _digit_shell_region("digits-shell-0", lower=0, upper=0),
-                _chess_region(),
+                _exact_strata_region(),
             ),
             volume=250,
             log2_volume=math.log2(250),
@@ -1685,7 +1663,7 @@ def test_accessible_subspace_invariants() -> None:
         AccessibleSubspace(
             ladder_id="digits-canvas-ladder",
             per_configuration_capacity=_digits_grid_region(),
-            exclusions=(_chess_region(),),
+            exclusions=(_exact_strata_region(),),
             frontier_rationale="rationale",
         )
     with pytest.raises(StateSpaceError):

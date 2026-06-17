@@ -719,7 +719,7 @@ def test_volume_value_ids_are_core_contract() -> None:
         str(
             capture_generation_error(
                 lambda: StateSpaceVolumeRequest(
-                    measure_id="benchmarks.chess.valid-move-count",
+                    measure_id="examples.invalid.valid-move-count",
                     minimum=1.0,
                     maximum=1.0,
                 )
@@ -731,7 +731,7 @@ def test_volume_value_ids_are_core_contract() -> None:
         str(
             capture_generation_error(
                 lambda: StateSpaceVolumeValue(
-                    measure_id="benchmarks.chess.valid-move-count",
+                    measure_id="examples.invalid.valid-move-count",
                     value=1.0,
                 )
             )
