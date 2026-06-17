@@ -1713,6 +1713,9 @@ def _model_result_records(
             "measurement_count": sum(run.measurement_count for run in ordered_runs),
             "source_kinds": sorted({run.source_kind for run in ordered_runs}),
         }
+        capability_map = _capability_map_from_score_integral(record["score_integral"])
+        if capability_map is not None:
+            record["capability_map"] = capability_map
         if cost_integral is not None:
             record["cost_integral"] = cost_integral.to_record(
                 kind="compute-cost-integral"
@@ -3367,6 +3370,11 @@ def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
             _extract.mapping(record["cost_integral"], _field_path(prefix, "cost_integral")),
             _field_path(prefix, "cost_integral"),
         )
+    if "capability_map" in record:
+        _validate_capability_map(
+            _extract.mapping(record["capability_map"], _field_path(prefix, "capability_map")),
+            _field_path(prefix, "capability_map"),
+        )
     _require_sequence_fields(
         record,
         prefix,
@@ -3568,6 +3576,159 @@ def _validate_console_detail_view_model(record: Mapping[str, object], prefix: st
                 cells_are_strings = all(isinstance(value, str) and value for value in values)
                 if len(values) != len(columns) or not cells_are_strings:
                     raise LocalResultImportError("console_view_model table rows must match columns")
+
+
+def _capability_map_from_score_integral(
+    score_integral: object,
+) -> Mapping[str, object] | None:
+    integral = _extract.mapping(score_integral, "score_integral")
+    terms = [
+        _extract.mapping(term, f"score_integral.terms.{index}")
+        for index, term in enumerate(_as_sequence(integral.get("terms"), "score_integral.terms"))
+    ]
+    region_terms = tuple(term for term in terms if isinstance(term.get("region"), Mapping))
+    if not region_terms:
+        return None
+    children = tuple(
+        _capability_leaf_from_integral_term(term, index=index)
+        for index, term in enumerate(region_terms)
+    )
+    total_measure = math.fsum(
+        _as_nonnegative_number(child["measure"], "capability_map.root.children.measure")
+        for child in children
+    )
+    if total_measure <= 0.0:
+        return None
+    sample_count = sum(
+        int(child.get("sample_count", 0))
+        for child in children
+        if isinstance(child.get("sample_count"), int)
+    )
+    confidence_half_width = math.sqrt(
+        math.fsum(
+            (
+                _as_nonnegative_number(child["measure"], "capability_map.child.measure")
+                / total_measure
+                * _as_nonnegative_number(
+                    child["confidence_half_width"],
+                    "capability_map.child.confidence_half_width",
+                )
+            )
+            ** 2
+            for child in children
+        )
+    )
+    value = _as_nonnegative_number(integral.get("value"), "score_integral.value")
+    return {
+        "kind": "partition-capability-map-v1",
+        "value": value,
+        "confidence_half_width": confidence_half_width,
+        "confidence_method_id": "integral-term-propagated-confidence",
+        "sample_count": sample_count,
+        "total_measure": total_measure,
+        "leaf_count": len(children),
+        "refinement_ladder": [
+            {
+                "kind": "partition-refinement-step-v1",
+                "depth": 0,
+                "leaf_count": len(children),
+                "value": value,
+                "confidence_half_width": confidence_half_width,
+            }
+        ],
+        "root": {
+            "kind": "partition-capability-node-v1",
+            "label": "Capability map",
+            "measure": total_measure,
+            "sample_count": sample_count,
+            "competence": value,
+            "confidence_half_width": confidence_half_width,
+            "children": list(children),
+        },
+        "diagnostics": {
+            "sampling": "uniform-post-hoc-v1",
+            "adaptive_sampling": "deferred",
+            "source": "score-integral-region-terms",
+        },
+    }
+
+
+def _capability_leaf_from_integral_term(
+    term: Mapping[str, object],
+    *,
+    index: int,
+) -> Mapping[str, object]:
+    lower = _as_nonnegative_number(term.get("log2_volume_minimum"), "score_integral.term.lower")
+    upper = _as_nonnegative_number(term.get("log2_volume_maximum"), "score_integral.term.upper")
+    region = _extract.mapping(term.get("region"), "score_integral.term.region")
+    confidence_half_width = (
+        _as_nonnegative_number(
+            term.get("confidence_half_width"),
+            "score_integral.term.confidence_half_width",
+        )
+        if "confidence_half_width" in term
+        else 0.0
+    )
+    record: dict[str, object] = {
+        "kind": "partition-capability-node-v1",
+        "label": str(region.get("id") or f"term-{index}"),
+        "measure": upper - lower,
+        "sample_count": int(term["sample_count"]) if isinstance(term.get("sample_count"), int) else 0,
+        "competence": _as_nonnegative_number(
+            term.get("competence_density"),
+            "score_integral.term.competence_density",
+        ),
+        "confidence_half_width": confidence_half_width,
+        "region": dict(region),
+        "children": [],
+    }
+    return record
+
+
+def _validate_capability_map(record: Mapping[str, object], prefix: str) -> None:
+    if record.get("kind") != "partition-capability-map-v1":
+        raise LocalResultImportError(f"{prefix}.kind is invalid")
+    for field in ("value", "confidence_half_width", "sample_count", "total_measure", "leaf_count"):
+        _as_nonnegative_number(record.get(field), _field_path(prefix, field))
+    _extract.non_empty_string(
+        record.get("confidence_method_id"),
+        _field_path(prefix, "confidence_method_id"),
+    )
+    _validate_capability_node(
+        _extract.mapping(record.get("root"), _field_path(prefix, "root")),
+        _field_path(prefix, "root"),
+    )
+    ladder = _as_sequence(record.get("refinement_ladder"), _field_path(prefix, "refinement_ladder"))
+    for index, step in enumerate(ladder):
+        step_prefix = f"{prefix}.refinement_ladder.{index}"
+        step_record = _extract.mapping(step, step_prefix)
+        if step_record.get("kind") != "partition-refinement-step-v1":
+            raise LocalResultImportError(f"{step_prefix}.kind is invalid")
+        for field in ("depth", "leaf_count", "value", "confidence_half_width"):
+            _as_nonnegative_number(step_record.get(field), _field_path(step_prefix, field))
+        if "movement" in step_record:
+            _as_nonnegative_number(step_record["movement"], _field_path(step_prefix, "movement"))
+    if "diagnostics" in record:
+        _extract.mapping(record["diagnostics"], _field_path(prefix, "diagnostics"))
+
+
+def _validate_capability_node(record: Mapping[str, object], prefix: str) -> None:
+    if record.get("kind") != "partition-capability-node-v1":
+        raise LocalResultImportError(f"{prefix}.kind is invalid")
+    _extract.non_empty_string(record.get("label"), _field_path(prefix, "label"))
+    for field in ("measure", "sample_count", "competence", "confidence_half_width"):
+        _as_nonnegative_number(record.get(field), _field_path(prefix, field))
+    if "region" in record:
+        try:
+            state_space_region_from_record(record["region"])
+        except StateSpaceError as error:
+            raise LocalResultImportError(f"{prefix}.region: {error}") from error
+    children = _as_sequence(record.get("children"), _field_path(prefix, "children"))
+    for index, child in enumerate(children):
+        _validate_capability_node(
+            _extract.mapping(child, f"{prefix}.children.{index}"),
+            f"{prefix}.children.{index}",
+        )
 
 
 def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) -> None:

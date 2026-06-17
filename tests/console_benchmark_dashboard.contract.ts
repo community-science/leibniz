@@ -113,6 +113,47 @@ function modelResult({
     },
     measurement_count: measurementCount,
     model_key: modelKey,
+    capability_map: {
+      kind: 'partition-capability-map-v1',
+      value: score,
+      confidence_half_width: 0,
+      confidence_method_id: 'integral-term-propagated-confidence',
+      sample_count: measurementCount,
+      total_measure: score,
+      leaf_count: 1,
+      refinement_ladder: [
+        {
+          kind: 'partition-refinement-step-v1',
+          depth: 0,
+          leaf_count: 1,
+          value: score,
+          confidence_half_width: 0,
+        },
+      ],
+      root: {
+        kind: 'partition-capability-node-v1',
+        label: 'Capability map',
+        measure: score,
+        sample_count: measurementCount,
+        competence: score,
+        confidence_half_width: 0,
+        children: [
+          {
+            kind: 'partition-capability-node-v1',
+            label: 'test.region',
+            measure: score,
+            sample_count: measurementCount,
+            competence: 1,
+            confidence_half_width: 0,
+            region: fixtureRegion,
+            children: [],
+          },
+        ],
+      },
+      diagnostics: {
+        adaptive_sampling: 'deferred',
+      },
+    },
     points: [
       {
         competence_value_kind: 'validated-bits',
@@ -650,6 +691,16 @@ assertEqual(parsedPoint.predictability_boundary, 0.5, 'predictability boundary')
 assertEqual(parsedPoint.time_points?.[1]?.bits, 0.75, 'time point bits');
 assertEqual(parsedPoint.time_points?.[1]?.certified_epsilon, 0.03, 'time point epsilon');
 assertEqual(parsedPoint.time_points?.[1]?.evolution_scale, 0.3, 'time point scale');
+assertEqual(
+  parsedResultViews[0].benchmark_results[0]?.leaderboard[0]?.capability_map?.root.children[0]?.label,
+  'test.region',
+  'parser keeps capability map tree',
+);
+assertEqual(
+  parsedResultViews[0].benchmark_results[0]?.leaderboard[0]?.capability_map?.refinement_ladder[0]?.leaf_count,
+  1,
+  'parser keeps capability map ladder',
+);
 const parsedBenchmarkResult = parsedResultViews[0];
 if (parsedBenchmarkResult?.format !== 'leibniz.console.benchmark-results') {
   throw new Error('parsed benchmark result view must keep its discriminant');

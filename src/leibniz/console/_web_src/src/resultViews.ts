@@ -6,6 +6,9 @@ export {
 export type {
   BenchmarkResultRecord,
   BenchmarkResultViewRecord,
+  CapabilityMapNodeRecord,
+  CapabilityMapRecord,
+  CapabilityMapRefinementStepRecord,
   CompetencePointRecord,
   CostSummaryRecord,
   ModelResultRecord,

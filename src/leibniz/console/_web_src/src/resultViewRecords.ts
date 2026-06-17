@@ -127,6 +127,39 @@ export type StateSpaceIntegralRecord = {
   terms: StateSpaceIntegralTermRecord[];
 };
 
+export type CapabilityMapNodeRecord = {
+  kind: 'partition-capability-node-v1';
+  label: string;
+  measure: number;
+  sample_count: number;
+  competence: number;
+  confidence_half_width: number;
+  region?: StateSpaceRegionRecord;
+  children: CapabilityMapNodeRecord[];
+};
+
+export type CapabilityMapRefinementStepRecord = {
+  kind: 'partition-refinement-step-v1';
+  depth: number;
+  leaf_count: number;
+  value: number;
+  confidence_half_width: number;
+  movement?: number;
+};
+
+export type CapabilityMapRecord = {
+  kind: 'partition-capability-map-v1';
+  value: number;
+  confidence_half_width: number;
+  confidence_method_id: string;
+  sample_count: number;
+  total_measure: number;
+  leaf_count: number;
+  refinement_ladder: CapabilityMapRefinementStepRecord[];
+  root: CapabilityMapNodeRecord;
+  diagnostics?: Record<string, unknown>;
+};
+
 export type CostSummaryRecord = {
   component_count: number;
   parameter_count?: number;
@@ -146,6 +179,7 @@ export type ModelResultRecord = {
   benchmark_id: string;
   score: number;
   score_integral: StateSpaceIntegralRecord;
+  capability_map?: CapabilityMapRecord;
   cost_integral?: StateSpaceIntegralRecord;
   points: CompetencePointRecord[];
   cost_summary: CostSummaryRecord;
@@ -334,6 +368,7 @@ function parseModelResult(value: unknown, path: string): ModelResultRecord {
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
     score_integral: parseStateSpaceIntegral(record.score_integral, `${path}.score_integral`),
+    capability_map: optional(record.capability_map, `${path}.capability_map`, parseCapabilityMap),
     cost_integral: optional(record.cost_integral, `${path}.cost_integral`, parseStateSpaceIntegral),
     points: arrayOf(record.points, `${path}.points`, parseCompetencePoint),
     cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
@@ -396,6 +431,57 @@ function parseStateSpaceIntegralTerm(value: unknown, path: string): StateSpaceIn
     confidence_half_width: optionalNumber(record.confidence_half_width, `${path}.confidence_half_width`, transportError),
     confidence_method_id: optional(record.confidence_method_id, `${path}.confidence_method_id`, parseString),
     region: optional(record.region, `${path}.region`, parseStateSpaceRegionRecord),
+  };
+}
+
+function parseCapabilityMap(value: unknown, path: string): CapabilityMapRecord {
+  const record = requireRecord(value, path, transportError);
+  if (record.kind !== 'partition-capability-map-v1') {
+    throw transportError(`${path}.kind is invalid`);
+  }
+  return {
+    kind: requireString(record.kind, `${path}.kind`, transportError) as 'partition-capability-map-v1',
+    value: requireNumber(record.value, `${path}.value`, transportError),
+    confidence_half_width: requireNumber(record.confidence_half_width, `${path}.confidence_half_width`, transportError),
+    confidence_method_id: requireString(record.confidence_method_id, `${path}.confidence_method_id`, transportError),
+    sample_count: requireNumber(record.sample_count, `${path}.sample_count`, transportError),
+    total_measure: requireNumber(record.total_measure, `${path}.total_measure`, transportError),
+    leaf_count: requireNumber(record.leaf_count, `${path}.leaf_count`, transportError),
+    refinement_ladder: arrayOf(record.refinement_ladder, `${path}.refinement_ladder`, parseCapabilityMapRefinementStep),
+    root: parseCapabilityMapNode(record.root, `${path}.root`),
+    diagnostics: optional(record.diagnostics, `${path}.diagnostics`, parseRecordMetadata),
+  };
+}
+
+function parseCapabilityMapRefinementStep(value: unknown, path: string): CapabilityMapRefinementStepRecord {
+  const record = requireRecord(value, path, transportError);
+  if (record.kind !== 'partition-refinement-step-v1') {
+    throw transportError(`${path}.kind is invalid`);
+  }
+  return {
+    kind: requireString(record.kind, `${path}.kind`, transportError) as 'partition-refinement-step-v1',
+    depth: requireNumber(record.depth, `${path}.depth`, transportError),
+    leaf_count: requireNumber(record.leaf_count, `${path}.leaf_count`, transportError),
+    value: requireNumber(record.value, `${path}.value`, transportError),
+    confidence_half_width: requireNumber(record.confidence_half_width, `${path}.confidence_half_width`, transportError),
+    movement: optionalNumber(record.movement, `${path}.movement`, transportError),
+  };
+}
+
+function parseCapabilityMapNode(value: unknown, path: string): CapabilityMapNodeRecord {
+  const record = requireRecord(value, path, transportError);
+  if (record.kind !== 'partition-capability-node-v1') {
+    throw transportError(`${path}.kind is invalid`);
+  }
+  return {
+    kind: requireString(record.kind, `${path}.kind`, transportError) as 'partition-capability-node-v1',
+    label: requireString(record.label, `${path}.label`, transportError),
+    measure: requireNumber(record.measure, `${path}.measure`, transportError),
+    sample_count: requireNumber(record.sample_count, `${path}.sample_count`, transportError),
+    competence: requireNumber(record.competence, `${path}.competence`, transportError),
+    confidence_half_width: requireNumber(record.confidence_half_width, `${path}.confidence_half_width`, transportError),
+    region: optional(record.region, `${path}.region`, parseStateSpaceRegionRecord),
+    children: arrayOf(record.children, `${path}.children`, parseCapabilityMapNode),
   };
 }
 
