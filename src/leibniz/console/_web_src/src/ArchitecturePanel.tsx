@@ -321,7 +321,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'the partition tree',
-            text: 'On the problem partition, the score is a tree of regions. Each node is a state-space region, each leaf carries the ledger competence measured from samples that landed there, and the single score is $\\sum_r \\mu(r)c(r) / \\sum_r \\mu(r)$: the measure-weighted competence integral over the leaves.',
+            text: 'On the problem partition, the score is a tree of regions. Each node is a state-space region, each leaf carries the ledger competence measured from samples that landed there, and the reported Score is the extensive validated-bit integral $\\sum_r b(r)c(r)$ over the leaves. Here $b(r)$ is the leaf share of the additive ambient entropy interval, so independent territories add; the normalized mean competence is retained only as a capability view.',
           },
           {
             level: 3,
@@ -333,7 +333,7 @@ const ROOTS: RootTree[] = [
             level: 3,
             kind: 'add',
             tag: 'convergent value',
-            text: 'The record carries the refinement ladder: each depth contracts the current leaves back to the same measure-weighted integral and records the movement from the previous rung. The reported value is the converged leaf contraction with its propagated sampling uncertainty, not a score stopped by a hand-tuned minimum region size.',
+            text: 'The record carries the refinement ladder: each depth contracts the current leaves back to the same extensive validated-bit integral and records the movement from the previous rung. The reported value is the converged leaf contraction with its propagated sampling uncertainty, not a score stopped by a hand-tuned minimum region size.',
           },
           {
             level: 3,
@@ -525,7 +525,7 @@ const EDGES: CouplingEdge[] = [
     id: 'edge-score',
     roots: ['U', 'R', 'D'],
     title: 'The score (triple point)',
-    body: 'Competence is the validated information a model resolves at the certified refinement precision: measured distance from Refinement, bits from Description length, integrated over the sampled state-space territory from Universe. The partition tree makes that handoff explicit: leaves are regions, color is competence, and the single number is their measure-weighted contraction.',
+    body: 'Competence is the validated information a model resolves at the certified refinement precision: measured distance from Refinement, bits from Description length, integrated over the sampled state-space territory from Universe. The partition tree makes that handoff explicit: leaves are regions, color is normalized competence, and the headline number is their extensive validated-bit contraction.',
   },
 ];
 

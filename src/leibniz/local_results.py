@@ -1668,7 +1668,7 @@ def _model_result_records(
             ordered_runs,
             key=lambda run: (run.score, -_storage_sort_value(run.cost_summary)),
         )
-        partition_score = _model_partition_score(ordered_runs, best_run=best_run)
+        partition_score = _required_model_partition_score(ordered_runs, best_run=best_run)
         score = (
             _partition_score_value(partition_score)
             if partition_score is not None
@@ -3587,6 +3587,27 @@ def _validate_console_detail_view_model(record: Mapping[str, object], prefix: st
                     raise LocalResultImportError("console_view_model table rows must match columns")
 
 
+def _required_model_partition_score(
+    runs: Sequence[_BenchmarkRunRecord],
+    *,
+    best_run: _BenchmarkRunRecord,
+) -> Mapping[str, object] | None:
+    partition_score = _model_partition_score(runs, best_run=best_run)
+    if partition_score is not None:
+        return partition_score
+    non_training_runs = tuple(
+        run
+        for run in runs
+        if run.sampled_competence is not None and run.source_kind != "local-training-estimate"
+    )
+    if non_training_runs:
+        run_ids = ", ".join(run.run_id for run in non_training_runs)
+        raise LocalResultImportError(
+            f"partition_score is required for scored sampled-competence run(s): {run_ids}"
+        )
+    return None
+
+
 def _model_partition_score(
     runs: Sequence[_BenchmarkRunRecord],
     *,
@@ -3645,6 +3666,18 @@ def _capability_map_from_partition_score(
         "total_measure": _as_nonnegative_number(
             partition_score.get("total_measure"),
             "sampled_competence.partition_score.total_measure",
+        ),
+        "score_width_bits": _as_nonnegative_number(
+            partition_score.get("score_width_bits"),
+            "sampled_competence.partition_score.score_width_bits",
+        ),
+        "mean_competence": _as_nonnegative_number(
+            partition_score.get("mean_competence"),
+            "sampled_competence.partition_score.mean_competence",
+        ),
+        "mean_competence_confidence_half_width": _as_nonnegative_number(
+            partition_score.get("mean_competence_confidence_half_width"),
+            "sampled_competence.partition_score.mean_competence_confidence_half_width",
         ),
         "leaf_count": _partition_node_leaf_count(root),
         "refinement_ladder": [
@@ -3738,7 +3771,16 @@ def _partition_node_leaf_count(node: Mapping[str, object]) -> int:
 def _validate_capability_map(record: Mapping[str, object], prefix: str) -> None:
     if record.get("kind") != "partition-capability-map-v1":
         raise LocalResultImportError(f"{prefix}.kind is invalid")
-    for field in ("value", "confidence_half_width", "sample_count", "total_measure", "leaf_count"):
+    for field in (
+        "value",
+        "confidence_half_width",
+        "sample_count",
+        "total_measure",
+        "score_width_bits",
+        "mean_competence",
+        "mean_competence_confidence_half_width",
+        "leaf_count",
+    ):
         _as_nonnegative_number(record.get(field), _field_path(prefix, field))
     _extract.non_empty_string(
         record.get("confidence_method_id"),

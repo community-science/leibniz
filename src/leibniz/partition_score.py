@@ -126,7 +126,7 @@ class PartitionRefinementStep:
 
 @dataclass(frozen=True, slots=True)
 class PartitionScore:
-    """A normalized measure-weighted competence integral over partition leaves."""
+    """An extensive competence integral over partition leaves."""
 
     root: PartitionScoreNode
     value: float
@@ -134,6 +134,9 @@ class PartitionScore:
     confidence_method_id: str
     sample_count: int
     total_measure: float
+    score_width_bits: float
+    mean_competence: float
+    mean_competence_confidence_half_width: float
     unassigned_sample_count: int = 0
     refinement_ladder: tuple[PartitionRefinementStep, ...] = ()
 
@@ -145,6 +148,11 @@ class PartitionScore:
             "confidence_method_id": self.confidence_method_id,
             "sample_count": self.sample_count,
             "total_measure": self.total_measure,
+            "score_width_bits": self.score_width_bits,
+            "mean_competence": self.mean_competence,
+            "mean_competence_confidence_half_width": (
+                self.mean_competence_confidence_half_width
+            ),
             "unassigned_sample_count": self.unassigned_sample_count,
             "refinement_ladder": [step.to_record() for step in self.refinement_ladder],
             "root": self.root.to_record(),
@@ -179,6 +187,7 @@ def fixed_partition_competence_integral(
     root_region: StateSpaceRegion,
     samples: Sequence[PartitionSample],
     partition: Sequence[StateSpaceRegion],
+    score_width_bits: float | None = None,
     confidence_z: float = 1.96,
 ) -> PartitionScore:
     """Estimate a competence integral over a caller-supplied state-space partition."""
@@ -214,7 +223,12 @@ def fixed_partition_competence_integral(
         if any(_sample_in_region(root_region, sample, region) for region in partition)
     }
     root_node = PartitionScoreNode(estimate=root_estimate, children=child_nodes)
-    value, confidence_half_width = _integral_for_nodes(child_nodes)
+    bit_width = _score_width_bits(root_region, score_width_bits)
+    value, confidence_half_width = _integral_for_nodes(
+        child_nodes,
+        score_width_bits=bit_width,
+    )
+    mean_competence, mean_half_width = _mean_competence_for_nodes(child_nodes)
     return PartitionScore(
         root=root_node,
         value=value,
@@ -222,6 +236,9 @@ def fixed_partition_competence_integral(
         confidence_method_id="normal-sample-mean-1.96se",
         sample_count=len(samples),
         total_measure=total_measure,
+        score_width_bits=bit_width,
+        mean_competence=mean_competence,
+        mean_competence_confidence_half_width=mean_half_width,
         unassigned_sample_count=len(samples) - len(assigned),
     )
 
@@ -230,6 +247,7 @@ def adversarial_partition_competence_integral(
     *,
     root_region: StateSpaceRegion,
     samples: Sequence[PartitionSample],
+    score_width_bits: float | None = None,
     confidence_z: float = 1.96,
 ) -> PartitionScore:
     """Refine a partition while child disparity exceeds measured sampling noise."""
@@ -241,13 +259,18 @@ def adversarial_partition_competence_integral(
         confidence_z=confidence_z,
     )
     leaves = root_node.leaves()
-    value, confidence_half_width = _integral_for_nodes(leaves)
+    bit_width = _score_width_bits(root_region, score_width_bits)
+    value, confidence_half_width = _integral_for_nodes(
+        leaves,
+        score_width_bits=bit_width,
+    )
+    mean_competence, mean_half_width = _mean_competence_for_nodes(leaves)
     assigned = {
         sample.sample_index
         for sample in samples
         if _sample_in_region(root_region, sample, root_region)
     }
-    ladder = _refinement_ladder(root_node)
+    ladder = _refinement_ladder(root_node, score_width_bits=bit_width)
     return PartitionScore(
         root=root_node,
         value=value,
@@ -255,6 +278,9 @@ def adversarial_partition_competence_integral(
         confidence_method_id="normal-sample-mean-1.96se",
         sample_count=len(samples),
         total_measure=math.fsum(leaf.estimate.measure for leaf in leaves),
+        score_width_bits=bit_width,
+        mean_competence=mean_competence,
+        mean_competence_confidence_half_width=mean_half_width,
         unassigned_sample_count=len(samples) - len(assigned),
         refinement_ladder=ladder,
     )
@@ -612,7 +638,14 @@ def _log2_measure_ratio(numerator_log2: float, denominator_log2: float) -> float
     return numerator_log2 - denominator_log2
 
 
-def _integral_for_nodes(nodes: Sequence[PartitionScoreNode]) -> tuple[float, float]:
+def _score_width_bits(root_region: StateSpaceRegion, requested: float | None) -> float:
+    value = root_region.log2_volume if requested is None else requested
+    if type(value) not in (int, float) or not math.isfinite(float(value)) or float(value) < 0.0:
+        raise ValueError("score_width_bits must be finite and nonnegative")
+    return float(value)
+
+
+def _mean_competence_for_nodes(nodes: Sequence[PartitionScoreNode]) -> tuple[float, float]:
     total_measure = math.fsum(node.estimate.measure for node in nodes)
     if total_measure <= 0.0:
         raise ValueError("partition measure must be positive")
@@ -629,13 +662,32 @@ def _integral_for_nodes(nodes: Sequence[PartitionScoreNode]) -> tuple[float, flo
     return (value, confidence_half_width)
 
 
-def _refinement_ladder(root: PartitionScoreNode) -> tuple[PartitionRefinementStep, ...]:
+def _integral_for_nodes(
+    nodes: Sequence[PartitionScoreNode],
+    *,
+    score_width_bits: float,
+) -> tuple[float, float]:
+    mean, mean_confidence_half_width = _mean_competence_for_nodes(nodes)
+    return (
+        score_width_bits * mean,
+        score_width_bits * mean_confidence_half_width,
+    )
+
+
+def _refinement_ladder(
+    root: PartitionScoreNode,
+    *,
+    score_width_bits: float,
+) -> tuple[PartitionRefinementStep, ...]:
     max_depth = _node_depth(root)
     steps: list[PartitionRefinementStep] = []
     previous_value: float | None = None
     for depth in range(max_depth + 1):
         nodes = _nodes_at_depth(root, depth)
-        value, confidence_half_width = _integral_for_nodes(nodes)
+        value, confidence_half_width = _integral_for_nodes(
+            nodes,
+            score_width_bits=score_width_bits,
+        )
         movement = None if previous_value is None else abs(value - previous_value)
         steps.append(
             PartitionRefinementStep(

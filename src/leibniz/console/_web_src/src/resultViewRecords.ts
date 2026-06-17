@@ -154,6 +154,9 @@ export type CapabilityMapRecord = {
   confidence_method_id: string;
   sample_count: number;
   total_measure: number;
+  score_width_bits?: number;
+  mean_competence?: number;
+  mean_competence_confidence_half_width?: number;
   leaf_count: number;
   refinement_ladder: CapabilityMapRefinementStepRecord[];
   root: CapabilityMapNodeRecord;
@@ -446,6 +449,13 @@ function parseCapabilityMap(value: unknown, path: string): CapabilityMapRecord {
     confidence_method_id: requireString(record.confidence_method_id, `${path}.confidence_method_id`, transportError),
     sample_count: requireNumber(record.sample_count, `${path}.sample_count`, transportError),
     total_measure: requireNumber(record.total_measure, `${path}.total_measure`, transportError),
+    score_width_bits: optionalNumber(record.score_width_bits, `${path}.score_width_bits`, transportError),
+    mean_competence: optionalNumber(record.mean_competence, `${path}.mean_competence`, transportError),
+    mean_competence_confidence_half_width: optionalNumber(
+      record.mean_competence_confidence_half_width,
+      `${path}.mean_competence_confidence_half_width`,
+      transportError,
+    ),
     leaf_count: requireNumber(record.leaf_count, `${path}.leaf_count`, transportError),
     refinement_ladder: arrayOf(record.refinement_ladder, `${path}.refinement_ladder`, parseCapabilityMapRefinementStep),
     root: parseCapabilityMapNode(record.root, `${path}.root`),

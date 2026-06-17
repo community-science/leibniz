@@ -567,12 +567,18 @@ def _attach_partition_score(
     record: dict[str, object],
     *,
     batch: GeneratedSampleSet,
-    competence: tuple[float, ...],
+    accepted_mass: tuple[float, ...],
+    chance_mass: float,
 ) -> None:
     if batch.region is None:
         return
+    competence = tuple(
+        _competence_fraction(accepted_mass=value, chance_mass=chance_mass)
+        for value in accepted_mass
+    )
     score = adversarial_partition_competence_integral(
         root_region=batch.region,
+        score_width_bits=_batch_score_width_bits(batch),
         samples=partition_samples_from_generated(
             batch.samples,
             {
@@ -586,6 +592,13 @@ def _attach_partition_score(
         ),
     )
     record["partition_score"] = score.to_record()
+
+
+def _batch_score_width_bits(batch: GeneratedSampleSet) -> float:
+    request = batch.volume_request
+    if request is None:
+        return float(batch.log2_volume)
+    return max(0.0, float(request.maximum) - float(request.minimum))
 
 
 def _rung_volume_request(rung: _CurriculumRung) -> StateSpaceVolumeRequest:
@@ -1476,7 +1489,8 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         _attach_partition_score(
             final_sampled_competence,
             batch=final_scored_batch,
-            competence=final_accepted_mass,
+            accepted_mass=final_accepted_mass,
+            chance_mass=_target_contract_chance_mass(target_contract),
         )
         sampled_competence = _evaluation_sampled_competence_record(
             benchmark_id=benchmark_id,
