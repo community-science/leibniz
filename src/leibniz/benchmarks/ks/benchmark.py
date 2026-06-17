@@ -10,7 +10,11 @@ from typing import Any, cast
 
 from leibniz.benchmark_implementations import RawBenchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
-from leibniz.certified_precision import residual_certified_epsilon
+from leibniz.certified_bits import (
+    AmbientEntropy,
+    CertificationStability,
+    evaluate_certified_bits,
+)
 from leibniz.field_evolution import field_stepper_trajectory
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.observation_generation import (
@@ -746,97 +750,125 @@ def _ks_ladder_prefix_certified_bits(
     ladder: tuple[Any, ...],
     horizon: float,
 ) -> tuple[Any, tuple[Mapping[str, object], ...]]:
-    residual_norms = tuple(
-        _per_sample_residual_norm(trajectory, horizon=horizon) for trajectory in ladder
-    )
-    amplifications = tuple(
-        _per_sample_law_amplification(trajectory, horizon=horizon) for trajectory in ladder
-    )
     finest = ladder[-1]
-    finest_residual = residual_norms[-1]
-    finest_amplification = amplifications[-1]
-    certified_epsilon = residual_certified_epsilon(
-        finest_residual,
-        finest_amplification * float(horizon),
+    evaluation = evaluate_certified_bits(
+        _KSDynamicalAmplificationEstimator(
+            runtime=runtime,
+            ladder=ladder,
+            horizon=horizon,
+        ),
+        sample_count=int(finest.shape[0]),
+        value_factory=finest.new_tensor,
     )
-    entropy = _ambient_evolution_entropy(
-        runtime=runtime,
-        trajectory=finest,
-        precision=certified_epsilon,
+    return evaluation.values, tuple(
+        _ks_certified_diagnostic_record(record) for record in evaluation.diagnostics
     )
-    amplification_stability = _amplification_stability_ratio(
-        runtime=runtime,
-        amplifications=amplifications,
-    )
-    amplification_growing = _amplification_grows_under_refinement(
-        runtime=runtime,
-        amplifications=amplifications,
-    )
-    values: list[float] = []
-    diagnostics: list[Mapping[str, object]] = []
-    for sample_index in range(int(finest.shape[0])):
-        residual_values = tuple(float(norm[sample_index]) for norm in residual_norms)
-        epsilon = float(certified_epsilon[sample_index])
-        signal = float(entropy.signal[sample_index])
-        sample_bits = float(entropy.bits[sample_index])
-        refused = bool(amplification_growing[sample_index])
-        if not math.isfinite(signal) or epsilon >= signal or refused:
-            sample_bits = 0.0
-        values.append(sample_bits)
-        diagnostics.append(
-            _ks_certified_diagnostic_record(
-                sample_index=sample_index,
-                residual_values=residual_values,
-                amplification_values=tuple(
-                    float(amplification[sample_index]) for amplification in amplifications
-                ),
-                amplification_stability=float(amplification_stability[sample_index]),
-                certification_refused=refused,
-                certified_epsilon=epsilon,
-                signal=signal,
-                resolved_mode_count=int(entropy.resolved_mode_count[sample_index]),
-                ambient_entropy_bits=sample_bits,
-                bits=sample_bits,
-            )
+
+
+@dataclass(frozen=True, slots=True)
+class _KSDynamicalAmplificationEstimator:
+    runtime: TensorRuntime
+    ladder: tuple[Any, ...]
+    horizon: float
+    kind: str = "ks-log-norm-upper-bound"
+    structural_type: str = "dynamical-amplification"
+
+    def residuals(self) -> tuple[Any, ...]:
+        return tuple(
+            _per_sample_residual_norm(trajectory, horizon=self.horizon)
+            for trajectory in self.ladder
         )
-    return finest.new_tensor(values), tuple(diagnostics)
+
+    def stability(self) -> CertificationStability:
+        amplifications = self._amplifications()
+        amplification_stability = _amplification_stability_ratio(
+            runtime=self.runtime,
+            amplifications=amplifications,
+        )
+        amplification_growing = _amplification_grows_under_refinement(
+            runtime=self.runtime,
+            amplifications=amplifications,
+        )
+        return CertificationStability(
+            factor=amplifications[-1] * float(self.horizon),
+            refused=amplification_growing,
+            diagnostics=tuple(
+                {
+                    "law_amplification": float(amplifications[-1][sample_index]),
+                    "law_amplification_ladder": [
+                        float(amplification[sample_index])
+                        for amplification in amplifications
+                    ],
+                    "law_amplification_stability": float(
+                        amplification_stability[sample_index]
+                    ),
+                    "law_amplification_estimator": self.kind,
+                    "law_amplification_log_cap": _law_amplification_log_cap,
+                    "law_amplification_refusal_ratio": _law_amplification_refusal_ratio,
+                    "certification_refinement_factors": list(
+                        _certification_refinement_factors
+                    ),
+                }
+                for sample_index in range(int(self.ladder[-1].shape[0]))
+            ),
+            refused_status="refused-amplification-growing",
+        )
+
+    def ambient_entropy_above(self, precision: Any) -> AmbientEntropy:
+        entropy = _ambient_evolution_entropy(
+            runtime=self.runtime,
+            trajectory=self.ladder[-1],
+            precision=precision,
+        )
+        return AmbientEntropy(
+            bits=entropy.bits,
+            signal=entropy.signal,
+            diagnostics=tuple(
+                {
+                    "evolution_scale": float(entropy.signal[sample_index]),
+                    "resolved_mode_count": int(
+                        entropy.resolved_mode_count[sample_index]
+                    ),
+                    "ambient_evolution_entropy_bits": float(
+                        entropy.bits[sample_index]
+                    ),
+                }
+                for sample_index in range(int(self.ladder[-1].shape[0]))
+            ),
+        )
+
+    def _amplifications(self) -> tuple[Any, ...]:
+        return tuple(
+            _per_sample_law_amplification(trajectory, horizon=self.horizon)
+            for trajectory in self.ladder
+        )
 
 
-def _ks_certified_diagnostic_record(
-    *,
-    sample_index: int,
-    residual_values: tuple[float, ...],
-    amplification_values: tuple[float, ...],
-    amplification_stability: float,
-    certification_refused: bool,
-    certified_epsilon: float,
-    signal: float,
-    resolved_mode_count: int,
-    ambient_entropy_bits: float,
-    bits: float,
-) -> Mapping[str, object]:
+def _ks_certified_diagnostic_record(record: Mapping[str, object]) -> Mapping[str, object]:
+    stability = cast(Mapping[str, object], record["stability"])
+    entropy = cast(Mapping[str, object], record["ambient_entropy"])
     return {
         "kind": "ks-ambient-certified-diagnostics",
-        "sample_index": sample_index,
-        "residual_norms": list(residual_values),
-        "residual_norm": residual_values[-1],
-        "law_amplification": amplification_values[-1],
-        "law_amplification_ladder": list(amplification_values),
-        "law_amplification_stability": amplification_stability,
-        "law_amplification_estimator": "ks-log-norm-upper-bound",
-        "law_amplification_log_cap": _law_amplification_log_cap,
-        "law_amplification_refusal_ratio": _law_amplification_refusal_ratio,
-        "certification_refinement_factors": list(_certification_refinement_factors),
-        "certification_status": (
-            "refused-amplification-growing"
-            if certification_refused
-            else "certified"
-        ),
-        "certified_epsilon": certified_epsilon,
-        "evolution_scale": signal,
-        "ambient_evolution_entropy_bits": ambient_entropy_bits,
-        "resolved_mode_count": resolved_mode_count,
-        "bits": bits,
+        "sample_index": record["sample_index"],
+        "residual_norms": record["residual_norms"],
+        "residual_norm": record["residual_norm"],
+        "law_amplification": stability["law_amplification"],
+        "law_amplification_ladder": stability["law_amplification_ladder"],
+        "law_amplification_stability": stability["law_amplification_stability"],
+        "law_amplification_estimator": stability["law_amplification_estimator"],
+        "law_amplification_log_cap": stability["law_amplification_log_cap"],
+        "law_amplification_refusal_ratio": stability[
+            "law_amplification_refusal_ratio"
+        ],
+        "certification_refinement_factors": stability[
+            "certification_refinement_factors"
+        ],
+        "certification_status": record["certification_status"],
+        "certified_epsilon": record["certified_epsilon"],
+        "evolution_scale": entropy["evolution_scale"],
+        "ambient_evolution_entropy_bits": record["bits"],
+        "resolved_mode_count": entropy["resolved_mode_count"],
+        "bits": record["bits"],
     }
 
 
