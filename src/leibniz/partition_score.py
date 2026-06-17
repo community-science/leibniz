@@ -9,7 +9,12 @@ from typing import cast
 
 from leibniz.observation_generation import GeneratedSample
 from leibniz.state_space import (
+    AxisRegion,
+    ContinuousAxisRegion,
+    DiscreteAxisRegion,
+    IntegerRangeDomain,
     ProductRegion,
+    RealGridDomain,
     StateSpaceError,
     StateSpaceRegion,
     state_space_region_contains,
@@ -18,9 +23,11 @@ from leibniz.state_space import (
 
 __all__ = [
     "PartitionCompetenceEstimate",
+    "PartitionRefinementStep",
     "PartitionSample",
     "PartitionScore",
     "PartitionScoreNode",
+    "adversarial_partition_competence_integral",
     "fixed_partition_competence_integral",
     "partition_samples_from_generated",
 ]
@@ -94,6 +101,29 @@ class PartitionScoreNode:
 
 
 @dataclass(frozen=True, slots=True)
+class PartitionRefinementStep:
+    """One value on the partition-refinement convergence ladder."""
+
+    depth: int
+    leaf_count: int
+    value: float
+    confidence_half_width: float
+    movement: float | None = None
+
+    def to_record(self) -> dict[str, object]:
+        record: dict[str, object] = {
+            "kind": "partition-refinement-step-v1",
+            "depth": self.depth,
+            "leaf_count": self.leaf_count,
+            "value": self.value,
+            "confidence_half_width": self.confidence_half_width,
+        }
+        if self.movement is not None:
+            record["movement"] = self.movement
+        return record
+
+
+@dataclass(frozen=True, slots=True)
 class PartitionScore:
     """A normalized measure-weighted competence integral over partition leaves."""
 
@@ -104,6 +134,7 @@ class PartitionScore:
     sample_count: int
     total_measure: float
     unassigned_sample_count: int = 0
+    refinement_ladder: tuple[PartitionRefinementStep, ...] = ()
 
     def to_record(self) -> dict[str, object]:
         return {
@@ -114,6 +145,7 @@ class PartitionScore:
             "sample_count": self.sample_count,
             "total_measure": self.total_measure,
             "unassigned_sample_count": self.unassigned_sample_count,
+            "refinement_ladder": [step.to_record() for step in self.refinement_ladder],
             "root": self.root.to_record(),
         }
 
@@ -175,29 +207,55 @@ def fixed_partition_competence_integral(
     total_measure = math.fsum(child.estimate.measure for child in child_nodes)
     if total_measure <= 0.0:
         raise ValueError("partition measure must be positive")
-    value = math.fsum(
-        child.estimate.measure * child.estimate.competence for child in child_nodes
-    ) / total_measure
-    confidence_half_width = math.sqrt(
-        math.fsum(
-            ((child.estimate.measure / total_measure) * child.estimate.confidence_half_width)
-            ** 2
-            for child in child_nodes
-        )
-    )
     assigned = {
         sample.sample_index
         for sample in samples
         if any(_sample_in_region(root_region, sample, region) for region in partition)
     }
+    root_node = PartitionScoreNode(estimate=root_estimate, children=child_nodes)
+    value, confidence_half_width = _integral_for_nodes(child_nodes)
     return PartitionScore(
-        root=PartitionScoreNode(estimate=root_estimate, children=child_nodes),
+        root=root_node,
         value=value,
         confidence_half_width=confidence_half_width,
         confidence_method_id="normal-sample-mean-1.96se",
         sample_count=len(samples),
         total_measure=total_measure,
         unassigned_sample_count=len(samples) - len(assigned),
+    )
+
+
+def adversarial_partition_competence_integral(
+    *,
+    root_region: StateSpaceRegion,
+    samples: Sequence[PartitionSample],
+    confidence_z: float = 1.96,
+) -> PartitionScore:
+    """Refine a partition while child disparity exceeds measured sampling noise."""
+
+    root_node = _adversarial_node(
+        root_region=root_region,
+        region=root_region,
+        samples=samples,
+        confidence_z=confidence_z,
+    )
+    leaves = root_node.leaves()
+    value, confidence_half_width = _integral_for_nodes(leaves)
+    assigned = {
+        sample.sample_index
+        for sample in samples
+        if _sample_in_region(root_region, sample, root_region)
+    }
+    ladder = _refinement_ladder(root_node)
+    return PartitionScore(
+        root=root_node,
+        value=value,
+        confidence_half_width=confidence_half_width,
+        confidence_method_id="normal-sample-mean-1.96se",
+        sample_count=len(samples),
+        total_measure=math.fsum(leaf.estimate.measure for leaf in leaves),
+        unassigned_sample_count=len(samples) - len(assigned),
+        refinement_ladder=ladder,
     )
 
 
@@ -248,6 +306,255 @@ def _estimate_region(
         confidence_half_width=half_width,
         confidence_method_id="normal-sample-mean-1.96se",
     )
+
+
+def _adversarial_node(
+    *,
+    root_region: StateSpaceRegion,
+    region: StateSpaceRegion,
+    samples: Sequence[PartitionSample],
+    confidence_z: float,
+) -> PartitionScoreNode:
+    estimate = _estimate_region(
+        root_region=root_region,
+        region=region,
+        samples=samples,
+        confidence_z=confidence_z,
+        allow_empty=False,
+    )
+    split = _best_significant_split(
+        root_region=root_region,
+        region=region,
+        samples=samples,
+        confidence_z=confidence_z,
+    )
+    if split is None:
+        return PartitionScoreNode(estimate=estimate)
+    left, right = split
+    return PartitionScoreNode(
+        estimate=estimate,
+        children=(
+            _adversarial_node(
+                root_region=root_region,
+                region=left,
+                samples=samples,
+                confidence_z=confidence_z,
+            ),
+            _adversarial_node(
+                root_region=root_region,
+                region=right,
+                samples=samples,
+                confidence_z=confidence_z,
+            ),
+        ),
+    )
+
+
+def _best_significant_split(
+    *,
+    root_region: StateSpaceRegion,
+    region: StateSpaceRegion,
+    samples: Sequence[PartitionSample],
+    confidence_z: float,
+) -> tuple[StateSpaceRegion, StateSpaceRegion] | None:
+    best: tuple[float, tuple[StateSpaceRegion, StateSpaceRegion]] | None = None
+    for left, right in _candidate_splits(region):
+        left_estimate = _estimate_region(
+            root_region=root_region,
+            region=left,
+            samples=samples,
+            confidence_z=confidence_z,
+            allow_empty=True,
+        )
+        right_estimate = _estimate_region(
+            root_region=root_region,
+            region=right,
+            samples=samples,
+            confidence_z=confidence_z,
+            allow_empty=True,
+        )
+        if left_estimate.sample_count == 0 or right_estimate.sample_count == 0:
+            continue
+        disparity = abs(left_estimate.competence - right_estimate.competence)
+        noise = _measured_split_noise(left_estimate, right_estimate)
+        excess = disparity - noise
+        if excess <= 0.0:
+            continue
+        if best is None or excess > best[0]:
+            best = (excess, (left, right))
+    if best is None:
+        return None
+    return best[1]
+
+
+def _measured_split_noise(
+    left: PartitionCompetenceEstimate,
+    right: PartitionCompetenceEstimate,
+) -> float:
+    if left.sample_count < 2 or right.sample_count < 2:
+        return math.inf
+    return math.sqrt(left.confidence_half_width**2 + right.confidence_half_width**2)
+
+
+def _candidate_splits(
+    region: StateSpaceRegion,
+) -> tuple[tuple[StateSpaceRegion, StateSpaceRegion], ...]:
+    candidates: list[tuple[StateSpaceRegion, StateSpaceRegion]] = []
+    if len(region.components) > 1:
+        for index in range(len(region.components)):
+            left_components = (region.components[index],)
+            right_components = (
+                region.components[:index] + region.components[index + 1 :]
+            )
+            candidates.append(
+                (
+                    _region_from_components(region, f"{region.id}.component-{index}", left_components),
+                    _region_from_components(region, f"{region.id}.not-component-{index}", right_components),
+                )
+            )
+    if len(region.components) == 1:
+        component = region.components[0]
+        for axis_index, axis_region in enumerate(component.axis_regions):
+            axis_split = _split_axis_region(axis_region)
+            if axis_split is None:
+                continue
+            left_axis, right_axis = axis_split
+            left_component = _product_with_axis_region(component, axis_index, left_axis)
+            right_component = _product_with_axis_region(component, axis_index, right_axis)
+            candidates.append(
+                (
+                    _region_from_components(
+                        region,
+                        f"{region.id}.{left_axis.axis_id}-low",
+                        (left_component,),
+                    ),
+                    _region_from_components(
+                        region,
+                        f"{region.id}.{right_axis.axis_id}-high",
+                        (right_component,),
+                    ),
+                )
+            )
+    return tuple(candidates)
+
+
+def _region_from_components(
+    parent: StateSpaceRegion,
+    region_id: str,
+    components: tuple[ProductRegion, ...],
+) -> StateSpaceRegion:
+    volume = sum(component.volume for component in components)
+    return StateSpaceRegion(
+        id=region_id,
+        ambient=parent.ambient,
+        components=components,
+        union_rule=parent.union_rule,
+        volume=volume,
+        log2_volume=math.log2(volume),
+    )
+
+
+def _split_axis_region(axis_region: AxisRegion) -> tuple[AxisRegion, AxisRegion] | None:
+    if isinstance(axis_region, ContinuousAxisRegion):
+        return None
+    domain = axis_region.axis.domain
+    if not isinstance(domain, IntegerRangeDomain | RealGridDomain):
+        return None
+    lower, upper = cast(tuple[int, int], axis_region.coordinate_region)
+    if lower >= upper:
+        return None
+    midpoint = (lower + upper) // 2
+    left_count = midpoint - lower + 1
+    right_count = upper - midpoint
+    return (
+        DiscreteAxisRegion(
+            axis=axis_region.axis,
+            coordinate_region=(lower, midpoint),
+            count=left_count,
+            log2_count=math.log2(left_count),
+        ),
+        DiscreteAxisRegion(
+            axis=axis_region.axis,
+            coordinate_region=(midpoint + 1, upper),
+            count=right_count,
+            log2_count=math.log2(right_count),
+        ),
+    )
+
+
+def _product_with_axis_region(
+    product: ProductRegion,
+    axis_index: int,
+    axis_region: AxisRegion,
+) -> ProductRegion:
+    axis_regions = tuple(
+        axis_region if index == axis_index else existing
+        for index, existing in enumerate(product.axis_regions)
+    )
+    volume = math.prod(
+        region.count for region in axis_regions if isinstance(region, DiscreteAxisRegion)
+    )
+    return ProductRegion(
+        axis_regions=axis_regions,
+        measure_rule=product.measure_rule,
+        volume=volume,
+        log2_volume=math.log2(volume),
+        stratum_id=product.stratum_id,
+        stratum_target=product.stratum_target,
+    )
+
+
+def _integral_for_nodes(nodes: Sequence[PartitionScoreNode]) -> tuple[float, float]:
+    total_measure = math.fsum(node.estimate.measure for node in nodes)
+    if total_measure <= 0.0:
+        raise ValueError("partition measure must be positive")
+    value = math.fsum(
+        node.estimate.measure * node.estimate.competence for node in nodes
+    ) / total_measure
+    confidence_half_width = math.sqrt(
+        math.fsum(
+            ((node.estimate.measure / total_measure) * node.estimate.confidence_half_width)
+            ** 2
+            for node in nodes
+        )
+    )
+    return (value, confidence_half_width)
+
+
+def _refinement_ladder(root: PartitionScoreNode) -> tuple[PartitionRefinementStep, ...]:
+    max_depth = _node_depth(root)
+    steps: list[PartitionRefinementStep] = []
+    previous_value: float | None = None
+    for depth in range(max_depth + 1):
+        nodes = _nodes_at_depth(root, depth)
+        value, confidence_half_width = _integral_for_nodes(nodes)
+        movement = None if previous_value is None else abs(value - previous_value)
+        steps.append(
+            PartitionRefinementStep(
+                depth=depth,
+                leaf_count=len(nodes),
+                value=value,
+                confidence_half_width=confidence_half_width,
+                movement=movement,
+            )
+        )
+        previous_value = value
+    return tuple(steps)
+
+
+def _node_depth(node: PartitionScoreNode) -> int:
+    if not node.children:
+        return 0
+    return 1 + max(_node_depth(child) for child in node.children)
+
+
+def _nodes_at_depth(
+    node: PartitionScoreNode,
+    depth: int,
+) -> tuple[PartitionScoreNode, ...]:
+    if depth <= 0 or not node.children:
+        return (node,)
+    return tuple(child_node for child in node.children for child_node in _nodes_at_depth(child, depth - 1))
 
 
 def _sample_mean_half_width(values: Sequence[float], *, confidence_z: float) -> float:

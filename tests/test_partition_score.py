@@ -4,6 +4,7 @@ from pathlib import Path
 from leibniz.observation_generation import StateSpaceVolumeRequest, load_generator
 from leibniz.partition_score import (
     PartitionSample,
+    adversarial_partition_competence_integral,
     fixed_partition_competence_integral,
     partition_samples_from_generated,
 )
@@ -115,6 +116,54 @@ def test_fixed_partition_accepts_inverse_digits_natural_components() -> None:
     assert math.isclose(score.value, expected)
 
 
+def test_adversarial_partition_isolates_planted_failure_pocket() -> None:
+    root = _line_region("line.root", lower=0, upper=15)
+    samples = _line_samples(root, repetitions=4, pocket=range(0, 2))
+
+    score = adversarial_partition_competence_integral(
+        root_region=root,
+        samples=samples,
+    )
+
+    leaves = score.root.leaves()
+    pocket_leaves = [
+        leaf
+        for leaf in leaves
+        if leaf.estimate.region.volume == 2
+        and math.isclose(leaf.estimate.competence, 0.0)
+    ]
+    assert len(pocket_leaves) == 1
+    assert math.isclose(score.value, 14 / 16)
+    assert len(score.refinement_ladder) >= 2
+    assert score.refinement_ladder[-1].movement == 0.0
+
+
+def test_adversarial_partition_does_not_split_unstructured_noise() -> None:
+    root = _line_region("line.root", lower=0, upper=15)
+    samples: list[PartitionSample] = []
+    index = 0
+    for coordinate in range(16):
+        for competence in (0.0, 1.0, 0.0, 1.0):
+            samples.append(
+                PartitionSample(
+                    sample_index=index,
+                    competence=competence,
+                    region_component_index=0,
+                    axis_coordinates={"x": coordinate},
+                )
+            )
+            index += 1
+
+    score = adversarial_partition_competence_integral(
+        root_region=root,
+        samples=tuple(samples),
+    )
+
+    assert score.root.children == ()
+    assert len(score.refinement_ladder) == 1
+    assert math.isclose(score.value, 0.5)
+
+
 def _grid_samples(root: StateSpaceRegion) -> tuple[PartitionSample, ...]:
     samples: list[PartitionSample] = []
     index = 0
@@ -131,6 +180,57 @@ def _grid_samples(root: StateSpaceRegion) -> tuple[PartitionSample, ...]:
             index += 1
     assert all(root.contains(sample.region_component_index, sample.axis_coordinates) for sample in samples)
     return tuple(samples)
+
+
+def _line_samples(
+    root: StateSpaceRegion,
+    *,
+    repetitions: int,
+    pocket: range,
+) -> tuple[PartitionSample, ...]:
+    samples: list[PartitionSample] = []
+    index = 0
+    for coordinate in range(16):
+        for _ in range(repetitions):
+            competence = 0.0 if coordinate in pocket else 1.0
+            samples.append(
+                PartitionSample(
+                    sample_index=index,
+                    competence=competence,
+                    region_component_index=0,
+                    axis_coordinates={"x": coordinate},
+                )
+            )
+            index += 1
+    assert all(root.contains(sample.region_component_index, sample.axis_coordinates) for sample in samples)
+    return tuple(samples)
+
+
+def _line_region(region_id: str, *, lower: int, upper: int) -> StateSpaceRegion:
+    axis = StateSpaceAxis(id="x", domain=IntegerRangeDomain(lower=0, upper=15))
+    count = upper - lower + 1
+    return StateSpaceRegion(
+        id=region_id,
+        ambient=_grid_ambient(),
+        components=(
+            ProductRegion(
+                axis_regions=(
+                    DiscreteAxisRegion(
+                        axis=axis,
+                        coordinate_region=(lower, upper),
+                        count=count,
+                        log2_count=math.log2(count),
+                    ),
+                ),
+                measure_rule="product-of-counts",
+                volume=count,
+                log2_volume=math.log2(count),
+            ),
+        ),
+        union_rule="disjoint-union",
+        volume=count,
+        log2_volume=math.log2(count),
+    )
 
 
 def _grid_region(
