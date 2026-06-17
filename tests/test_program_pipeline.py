@@ -295,6 +295,20 @@ def test_program_checkpoint_evaluation_materializes_ks_result_view(tmp_path: Pat
             learning_rate=1e-3,
         )
     )
+    training_record = load_object_document(
+        training_summary.training_summary_path.read_bytes(),
+        description="training summary",
+    )
+    training_estimate = cast(dict[str, object], training_record["training_estimate"])
+    training_sampled_competence = cast(
+        dict[str, object],
+        training_estimate["sampled_competence"],
+    )
+    training_partition_score = cast(
+        dict[str, object],
+        training_sampled_competence["partition_score"],
+    )
+    assert training_estimate["score"] == training_partition_score["value"]
     evaluation_summary = evaluate_benchmark_checkpoint(
         BenchmarkEvaluationPlan(
             checkpoint_artifact_path=_selected_checkpoint_artifact_path(
@@ -326,6 +340,15 @@ def test_program_checkpoint_evaluation_materializes_ks_result_view(tmp_path: Pat
     assert math.isfinite(cast(float, point["predictability_boundary"]))
     assert "program_digest" in leaderboard[0]
     assert "program_graph" in plot_runs[0]
+    sampled_competence = cast(dict[str, object], plot_runs[0]["sampled_competence"])
+    partition_score = cast(dict[str, object], sampled_competence["partition_score"])
+    capability_map = cast(dict[str, object], leaderboard[0]["capability_map"])
+    assert leaderboard[0]["score"] == partition_score["value"]
+    assert capability_map["value"] == partition_score["value"]
+    assert cast(float, capability_map["score_width_bits"]) > 0.0
+    assert cast(float, capability_map["mean_competence"]) >= 0.0
+    assert cast(int, capability_map["leaf_count"]) >= 1
+    assert cast(list[dict[str, object]], capability_map["refinement_ladder"])
     sections = cast(
         list[dict[str, object]],
         cast(dict[str, object], plot_runs[0]["console_view_model"])["detail_sections"],
