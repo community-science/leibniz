@@ -57,6 +57,58 @@ def test_ks_submission_ladder_program_graphs_load_and_score() -> None:
     assert scores["partial"][0] >= scores["persistence"][0]
 
 
+def test_ks_learned_predictor_trains_against_label_free_residual() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    torch.manual_seed(353)
+    benchmark = load_benchmark(_ks_benchmark_root)
+    batch = cast(Any, benchmark.generator)(
+        seed=353,
+        shape=4,
+        sample_indices=(0, 1, 2, 3),
+        volume_request=StateSpaceVolumeRequest(0.0, 1.0),
+        runtime=runtime,
+    )
+    fields, targets = batch.require_tensors()
+    module = _load_program_module(
+        runtime=runtime,
+        program_path=_program_root / "ks_learned_residual.py",
+    )
+    loss_function = cast(Any, benchmark).build_training_loss(
+        runtime,
+        benchmark.target_contract,
+    )
+    optimizer = torch.optim.Adam(module.parameters(), lr=0.4)
+
+    initial_loss = _residual_training_loss(
+        runtime=runtime,
+        module=module,
+        fields=fields,
+        targets=targets,
+        loss_function=loss_function,
+    )
+    for _step in range(12):
+        optimizer.zero_grad()
+        loss = _residual_training_loss(
+            runtime=runtime,
+            module=module,
+            fields=fields,
+            targets=targets,
+            loss_function=loss_function,
+        )
+        loss.backward()
+        optimizer.step()
+    final_loss = _residual_training_loss(
+        runtime=runtime,
+        module=module,
+        fields=fields,
+        targets=targets,
+        loss_function=loss_function,
+    )
+
+    assert float(final_loss.detach()) < float(initial_loss.detach())
+
+
 def _score_program(
     *,
     runtime: Any,
@@ -67,8 +119,33 @@ def _score_program(
     targets: Any,
     program_path: Path,
 ) -> tuple[float, float]:
+    module = _load_program_module(runtime=runtime, program_path=program_path)
+    return _score_module(
+        runtime=runtime,
+        benchmark=benchmark,
+        competence=competence,
+        batch=batch,
+        fields=fields,
+        targets=targets,
+        module=module,
+    )
+
+
+def _load_program_module(*, runtime: Any, program_path: Path) -> Any:
     program = load_program_graph(program_path, runtime)
-    module = program.graph.build_module(runtime)
+    return program.graph.build_module(runtime)
+
+
+def _score_module(
+    *,
+    runtime: Any,
+    benchmark: Any,
+    competence: Any,
+    batch: Any,
+    fields: Any,
+    targets: Any,
+    module: Any,
+) -> tuple[float, float]:
     horizons = tuple(
         _ks_horizon * index / float(_ks_time_count - 1)
         for index in range(1, _ks_time_count)
@@ -104,3 +181,25 @@ def _score_program(
     mean_bits = math.fsum(float(value) for value in bits) / int(bits.shape[0])
     mean_boundary = math.fsum(boundaries) / len(boundaries)
     return (mean_bits, mean_boundary)
+
+
+def _residual_training_loss(
+    *,
+    runtime: Any,
+    module: Any,
+    fields: Any,
+    targets: Any,
+    loss_function: Any,
+) -> Any:
+    horizons = tuple(
+        _ks_horizon * index / float(_ks_time_count - 1)
+        for index in range(1, _ks_time_count)
+    )
+    trajectory = _field_valued_model_trajectory(
+        runtime=runtime,
+        module=module,
+        fields=fields,
+        labels=targets,
+        horizons=horizons,
+    )
+    return loss_function(trajectory, targets)
