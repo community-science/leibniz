@@ -442,6 +442,8 @@ def test_cost_measurement_exposes_public_cost_normalization_api() -> None:
                 calls=1,
                 abstract_flops=120,
                 output_elements=1,
+                operation_class="elementwise",
+                dtype="fp32",
             ),
         ),
         moved_elements=0,
@@ -456,7 +458,8 @@ def test_cost_measurement_exposes_public_cost_normalization_api() -> None:
     assert measurement.abstract_flops_per_item(5) == 24.0
     assert measurement.abstract_flops_per_byte(12) == 10.0
     assert measurement.abstract_flops_rate(2.5, item_count=5) == 60.0
-    assert measurement.bit_density(item_count=5) == 768.0
+    assert measurement.bit_density(item_count=5) == measurement.energy_joules_per_item(5)
+    assert measurement.bit_density(item_count=5) > 0.0
     assert CostMeasurement.abstract_flops_bit_density(2.5) == 80.0
     assert CostMeasurement.abstract_flops_per_item_value(120, 5) == 24.0
     assert CostMeasurement.abstract_flops_per_byte_value(48, 12) == 4.0
@@ -472,6 +475,39 @@ def test_cost_meter_context_manager_measures_existing_flow() -> None:
         torch.relu(values)
 
     assert meter.measurement().abstract_flops == 6
+
+
+def test_resident_table_penalizes_identical_predictions_on_bits_per_energy() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    table = torch.zeros((4096, 1), dtype=torch.float32, device=runtime.device)
+    index = torch.tensor([0], device=runtime.device)
+    seed = torch.zeros((1, 1), dtype=torch.float32, device=runtime.device)
+
+    def lookup_prediction(held_table: Any, row: Any) -> Any:
+        return torch.index_select(held_table, 0, row)
+
+    def computed_prediction(value: Any) -> Any:
+        return value + 0.0
+
+    assert torch.equal(lookup_prediction(table, index), computed_prediction(seed))
+    lookup_cost = measure_program_cost(
+        runtime,
+        lookup_prediction,
+        (table, index),
+        strict=True,
+    )
+    computed_cost = measure_program_cost(
+        runtime,
+        computed_prediction,
+        (seed,),
+        strict=True,
+    )
+    score_bits = 1.0
+
+    assert lookup_cost.bytes_resident > computed_cost.bytes_resident
+    assert lookup_cost.energy_joules() > computed_cost.energy_joules()
+    assert score_bits / lookup_cost.energy_joules() < score_bits / computed_cost.energy_joules()
 
 
 def test_measure_program_cost_is_device_independent_for_cuda() -> None:

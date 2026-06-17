@@ -287,16 +287,18 @@ def price_cost_measurement_energy(
     for record in measurement.per_op:
         if record.abstract_flops == 0:
             continue
-        if record.operation_class is None or record.dtype is None:
+        operation_class = record.operation_class or operation_class_for_name(record.name)
+        dtype = record.dtype or "fp32"
+        if operation_class is None:
             raise CostMetrologyError(
-                f"operation {record.name} is missing operation_class or dtype"
+                f"operation {record.name} is missing operation_class"
             )
         try:
-            coefficient = compute_table[(record.operation_class, record.dtype)]
+            coefficient = compute_table[(operation_class, dtype)]
         except KeyError as error:
             raise CostMetrologyError(
                 "profile is missing compute coefficient "
-                f"for {record.operation_class}/{record.dtype}"
+                f"for {operation_class}/{dtype}"
             ) from error
         compute_joules += float(record.abstract_flops) * coefficient
     moved_joules = float(measurement.bytes_moved) * moved_coefficient
@@ -678,7 +680,23 @@ class CostMeasurement:
     def bit_density(self, *, item_count: int = 1) -> float:
         """Return this measurement's declared bit-density cost unit."""
 
-        return self.abstract_flops_bit_density(self.abstract_flops_per_item(item_count))
+        return self.energy_joules_per_item(item_count)
+
+    def energy_joules(self) -> float:
+        """Return energy under the declared default profile, pricing if needed."""
+
+        roofline_energy = None if self.roofline is None else self.roofline.get("energy")
+        if isinstance(roofline_energy, Mapping):
+            energy_record = cast(Mapping[str, object], roofline_energy)
+            total = energy_record.get("total_joules")
+            if total is not None:
+                return _nonnegative_number(total, "roofline.energy.total_joules")
+        return price_cost_measurement_energy(self).total_joules
+
+    def energy_joules_per_item(self, item_count: int) -> float:
+        """Return default-profile energy normalized by item count."""
+
+        return self.energy_joules() / _positive_item_count(item_count)
 
     @classmethod
     def abstract_flops_bit_density(cls, abstract_flops: int | float) -> float:
@@ -734,7 +752,7 @@ class CostMeter:
         *,
         strict: bool = False,
         roofline: Mapping[str, object] | None = None,
-        device_profile: DeviceCostProfile | str | None = None,
+        device_profile: DeviceCostProfile | str | None = _default_device_cost_profile_id,
     ) -> None:
         self._runtime = runtime
         self._strict = strict
@@ -791,7 +809,7 @@ def measure_program_cost(
     *,
     strict: bool = False,
     roofline: Mapping[str, object] | None = None,
-    device_profile: DeviceCostProfile | str | None = None,
+    device_profile: DeviceCostProfile | str | None = _default_device_cost_profile_id,
 ) -> CostMeasurement:
     """Measure one execution of a program under the declared tensor cost model."""
 
@@ -821,7 +839,7 @@ def estimate_operation_stream_cost(
     *,
     strict: bool = False,
     roofline: Mapping[str, object] | None = None,
-    device_profile: DeviceCostProfile | str | None = None,
+    device_profile: DeviceCostProfile | str | None = _default_device_cost_profile_id,
     operation_stream_source: str = "runtime-dry-run",
 ) -> CostMeasurement:
     """Estimate cost for a projected tensor-runtime operation stream."""
@@ -846,7 +864,7 @@ def estimate_program_cost(
     *,
     strict: bool = False,
     roofline: Mapping[str, object] | None = None,
-    device_profile: DeviceCostProfile | str | None = None,
+    device_profile: DeviceCostProfile | str | None = _default_device_cost_profile_id,
     operation_stream_source: str = "runtime-dry-run",
 ) -> CostMeasurement:
     """Estimate a program's cost from a dry-run tensor-runtime operation stream."""

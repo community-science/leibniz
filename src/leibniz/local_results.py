@@ -1572,11 +1572,11 @@ def _generator_oracle_cost_reference_points(
             raise LocalResultImportError(
                 f"oracle_cost_reference_points.{index}.cost_measurement: {error}"
             ) from error
-        cost = float(cost_measurement.abstract_flops)
+        cost = float(cost_measurement.energy_joules())
         if cost <= 0:
             raise LocalResultImportError(
                 f"oracle_cost_reference_points.{index}.cost_measurement."
-                "abstract_flops must be positive"
+                "energy_joules must be positive"
             )
         metadata = _extract.mapping(
             point.get("metadata"),
@@ -1620,9 +1620,7 @@ def _integrated_reference_curve_points(
             point.get("cost_density"),
             "reference_curve.cost_density",
         )
-        cumulative_cost += (log2_volume - previous_log2_volume) * (
-            CostMeasurement.abstract_flops_bit_density(cost_density)
-        )
+        cumulative_cost += (log2_volume - previous_log2_volume) * cost_density
         integrated_points.append(
             {
                 "log2_volume": log2_volume,
@@ -2058,7 +2056,7 @@ def _cost_measurement_pair_from_record(
 
 
 def _cost_measurement_pair_ops_per_item(pair: tuple[CostMeasurement, int]) -> float:
-    return pair[0].abstract_flops_per_item(pair[1])
+    return pair[0].energy_joules_per_item(pair[1])
 
 
 def _summary_cost_measurement_ops_per_item(
