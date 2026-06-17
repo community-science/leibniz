@@ -34,6 +34,8 @@ import type {
 import { usePersistentState } from './persistentState.ts';
 import type {
   BenchmarkResultRecord,
+  CapabilityMapNodeRecord,
+  CapabilityMapRecord,
   ResultViewRecord,
   RunDetailSectionRecord,
   RunResultRecord,
@@ -582,7 +584,85 @@ function ModelMeasurementDetail({ model }: { model: BenchmarkModelCandidate }) {
           )}
         </>
       )}
+      <CapabilityMapPanel map={model.capability_map} />
     </section>
+  );
+}
+
+function CapabilityMapPanel({ map }: { map: CapabilityMapRecord | undefined }) {
+  if (map === undefined) {
+    return null;
+  }
+  const ladder = map.refinement_ladder;
+  return (
+    <section className="benchmark-capability-map" aria-label="Capability map">
+      <div className="benchmark-capability-map-heading">
+        <h5>Capability Map</h5>
+        <dl>
+          <div>
+            <dt>Score</dt>
+            <dd>{formatMetricNumber(map.value)}</dd>
+          </div>
+          <div>
+            <dt>Uncertainty</dt>
+            <dd>{formatMetricNumber(map.confidence_half_width)}</dd>
+          </div>
+          <div>
+            <dt>Leaves</dt>
+            <dd>{map.leaf_count.toLocaleString()}</dd>
+          </div>
+        </dl>
+      </div>
+      <div className="benchmark-capability-map-body">
+        <CapabilityMapNode node={map.root} depth={0} />
+      </div>
+      {ladder.length === 0 ? null : (
+        <div className="benchmark-capability-ladder" role="table" aria-label="Capability refinement ladder">
+          <div className="benchmark-capability-ladder-row header" role="row">
+            <span role="columnheader">Depth</span>
+            <span role="columnheader">Leaves</span>
+            <span role="columnheader">Score</span>
+            <span role="columnheader">Movement</span>
+          </div>
+          {ladder.map((step) => (
+            <div className="benchmark-capability-ladder-row" role="row" key={step.depth}>
+              <span role="cell">{step.depth.toLocaleString()}</span>
+              <span role="cell">{step.leaf_count.toLocaleString()}</span>
+              <span role="cell">{formatMetricNumber(step.value)}</span>
+              <span role="cell">
+                {step.movement === undefined ? 'baseline' : formatMetricNumber(step.movement)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CapabilityMapNode({
+  depth,
+  node,
+}: {
+  depth: number;
+  node: CapabilityMapNodeRecord;
+}) {
+  const competence = Math.max(0, Math.min(1, node.competence));
+  const background = `linear-gradient(90deg, rgba(174, 55, 62, ${0.2 + (1 - competence) * 0.35}), rgba(58, 132, 94, ${0.18 + competence * 0.42}))`;
+  return (
+    <div className="benchmark-capability-node-group">
+      <div
+        className="benchmark-capability-node"
+        style={{ background, marginLeft: `${depth * 1.25}rem` }}
+      >
+        <span>{node.label}</span>
+        <span>{formatMetricNumber(node.competence)}</span>
+        <span>{node.sample_count.toLocaleString()}</span>
+      </div>
+      {node.children.map((child) => (
+        <CapabilityMapNode depth={depth + 1} key={`${node.label}:${child.label}`} node={child} />
+      ))}
+    </div>
   );
 }
 

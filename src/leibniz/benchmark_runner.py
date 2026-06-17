@@ -71,6 +71,10 @@ from leibniz.observation_generation import (
     StateSpaceVolumeRequest,
     StateSpaceVolumeValue,
 )
+from leibniz.partition_score import (
+    adversarial_partition_competence_integral,
+    partition_samples_from_generated,
+)
 from leibniz.program_graphs import LoadedProgramGraph, ProgramGraphError, load_program_graph
 from leibniz.records import RecordExtractor
 from leibniz.state_space import (
@@ -527,6 +531,8 @@ def _evaluation_sampled_competence_record(
     record = sampled_competence_curriculum_record(points)
     if frontier_point.get("competence_value_kind") == "validated-bits":
         record["competence_value_kind"] = "validated-bits"
+    if "partition_score" in frontier_point:
+        record["partition_score"] = frontier_point["partition_score"]
     return record
 
 
@@ -555,6 +561,44 @@ def _attach_competence_diagnostics(
                 copied_points.append(dict(cast(Mapping[str, object], item)))
         if copied_points:
             record["time_points"] = copied_points
+
+
+def _attach_partition_score(
+    record: dict[str, object],
+    *,
+    batch: GeneratedSampleSet,
+    accepted_mass: tuple[float, ...],
+    chance_mass: float,
+) -> None:
+    if batch.region is None:
+        return
+    competence = tuple(
+        _competence_fraction(accepted_mass=value, chance_mass=chance_mass)
+        for value in accepted_mass
+    )
+    score = adversarial_partition_competence_integral(
+        root_region=batch.region,
+        score_width_bits=_batch_score_width_bits(batch),
+        samples=partition_samples_from_generated(
+            batch.samples,
+            {
+                sample.index: sample_competence
+                for sample, sample_competence in zip(
+                    batch.samples,
+                    competence,
+                    strict=True,
+                )
+            },
+        ),
+    )
+    record["partition_score"] = score.to_record()
+
+
+def _batch_score_width_bits(batch: GeneratedSampleSet) -> float:
+    request = batch.volume_request
+    if request is None:
+        return float(batch.log2_volume)
+    return max(0.0, float(request.maximum) - float(request.minimum))
 
 
 def _rung_volume_request(rung: _CurriculumRung) -> StateSpaceVolumeRequest:
@@ -1442,6 +1486,12 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             evaluation_results[evaluation_frontier_index].sampling_protocol.to_record()
         )
         final_sampled_competence["sampling_seed"] = frontier_rung.seed
+        _attach_partition_score(
+            final_sampled_competence,
+            batch=final_scored_batch,
+            accepted_mass=final_accepted_mass,
+            chance_mass=_target_contract_chance_mass(target_contract),
+        )
         sampled_competence = _evaluation_sampled_competence_record(
             benchmark_id=benchmark_id,
             evaluation_results=evaluation_results,
@@ -4252,6 +4302,13 @@ def _training_gate_score_estimate(
         volume_axis=None,
         bounded_mass=target_contract.kind != "field-valued",
     )
+    chance_mass = _target_contract_chance_mass(target_contract)
+    _attach_partition_score(
+        current_point,
+        batch=batch,
+        accepted_mass=accepted_mass,
+        chance_mass=chance_mass,
+    )
     sampled_competence = _training_sampled_competence_record(
         benchmark_id=batch.benchmark_id,
         previous_frontier_points=previous_frontier_points,
@@ -4259,13 +4316,15 @@ def _training_gate_score_estimate(
         bounded_mass=target_contract.kind != "field-valued",
     )
     compact_sampled_competence = _compact_training_sampled_competence(sampled_competence)
+    partition_score = _training_sampled_competence_partition_score(
+        compact_sampled_competence
+    )
     _assign_sampled_competence_inference_cost(
         compact_sampled_competence,
         measurement=inference_cost[0],
         sample_count=inference_cost[1],
     )
     point_records = _training_score_estimate_points(compact_sampled_competence)
-    chance_mass = _target_contract_chance_mass(target_contract)
     competence_points = tuple(
         CompetencePoint.from_sampled_record(
             point,
@@ -4279,7 +4338,7 @@ def _training_gate_score_estimate(
         points=competence_points,
         chance_mass=chance_mass,
     )
-    score = score_integral.value
+    score = _required_float(partition_score.get("value"), "score_estimate.partition_score.value")
     record: dict[str, object] = {
         "kind": "training-running-score-estimate",
         "status": "provisional",
@@ -4657,6 +4716,26 @@ def _compact_training_sampled_competence(
             )
         compact["points"] = compact_points
     return compact
+
+
+def _training_sampled_competence_partition_score(
+    sampled_competence: dict[str, object],
+) -> Mapping[str, object]:
+    points = sampled_competence.get("points")
+    if not isinstance(points, Sequence) or isinstance(points, str | bytes):
+        partition_score = sampled_competence.get("partition_score")
+        if isinstance(partition_score, Mapping):
+            return cast(Mapping[str, object], partition_score)
+        raise BenchmarkRunnerError("training gate score estimate is missing partition score")
+    for point in reversed(cast(Sequence[object], points)):
+        if not isinstance(point, Mapping):
+            continue
+        partition_score = cast(Mapping[str, object], point).get("partition_score")
+        if isinstance(partition_score, Mapping):
+            score = cast(Mapping[str, object], partition_score)
+            sampled_competence["partition_score"] = dict(score)
+            return score
+    raise BenchmarkRunnerError("training gate score estimate is missing partition score")
 
 
 def _assign_sampled_competence_inference_cost(
