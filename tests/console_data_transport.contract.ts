@@ -10,8 +10,8 @@ assertEqual(parsed.format, 'leibniz.console-data', 'format');
 assertEqual(parsed.format_version, 1, 'format version');
 assertEqual(parsed.artifact_index.format, 'leibniz.console.artifact-index', 'artifact index format');
 assertEqual(parsed.artifact_index.format_version, 1, 'artifact index format version');
-assertEqual(parsed.artifact_index.artifacts.length, 5, 'artifact index count');
-assertEqual(parsed.artifact_details.length, 5, 'artifact detail count');
+assertEqual(parsed.artifact_index.artifacts.length, 4, 'artifact index count');
+assertEqual(parsed.artifact_details.length, 4, 'artifact detail count');
 assertEqual(
   parsed.artifact_details.map((detail) => `${detail.kind}:${detail.source_path}`).join('|'),
   parsed.artifact_index.artifacts.map((artifact) => `${artifact.kind}:${artifact.source_path}`).join('|'),
@@ -19,7 +19,7 @@ assertEqual(
 );
 assertEqual(parsed.result_views.length, 0, 'result view count');
 assertEqual(parsed.model_inspections.length, 0, 'model inspection count');
-assertEqual(parsed.benchmark_tasks.length, 3, 'benchmark task count');
+assertEqual(parsed.benchmark_tasks.length, 2, 'benchmark task count');
 assertEqual(
   parsed.operator_vocabulary.operators.length,
   0,
@@ -35,12 +35,6 @@ const benchmarkTask = parsed.benchmark_tasks.find(
 );
 if (benchmarkTask === undefined) {
   throw new Error('expected digits benchmark task');
-}
-const chessBenchmarkTask = parsed.benchmark_tasks.find(
-  (task) => task.benchmark_id === 'benchmarks.chess@0.1.0',
-);
-if (chessBenchmarkTask === undefined) {
-  throw new Error('expected chess benchmark task');
 }
 const ksBenchmarkTask = parsed.benchmark_tasks.find(
   (task) => task.benchmark_id === 'benchmarks.ks@0.1.0',
@@ -183,85 +177,6 @@ assertEqual(
   assignmentLabel(materializationPlan.resolution_assignment),
   'H=36,W=36',
   'sample resolution assignment',
-);
-const chessBatch = chessBenchmarkTask.batches[3];
-const chessSample = chessBatch?.samples[0];
-if (chessSample === undefined) {
-  throw new Error('expected chess generated sample');
-}
-assertEqual(
-  chessBenchmarkTask.batches
-    .map((batch) => batch.volumes?.[0])
-    .join(','),
-  '1,2,4,8,16,32,64,128,256',
-  'chess sample cardinalities',
-);
-assertEqual(
-  chessBatch?.volumes?.[0],
-  8,
-  'chess sample cardinality',
-);
-assertEqual(
-  chessBatch?.region?.components.length,
-  8,
-  'chess region component count',
-);
-assertEqual(
-  chessBatch?.region?.ambient.field_codomain_id,
-  'piece-occupancy',
-  'chess region codomain',
-);
-assertEqual(
-  chessSample.available_outcome_ids?.length,
-  2,
-  'chess sample legal move count',
-);
-assertEqual(
-  chessSample.region_component_index,
-  0,
-  'chess sample region component index',
-);
-assertEqual(
-  typeof chessSample.axis_coordinates,
-  'object',
-  'chess sample axis coordinates',
-);
-assertEqual(
-  chessSample.image_data_url?.startsWith('data:image/svg+xml;base64,'),
-  true,
-  'chess sample image data url',
-);
-assertEqual(
-  chessSample.image_overlay?.kind,
-  'grid-move-highlights',
-  'chess sample image overlay kind',
-);
-assertEqual(
-  chessSample.image_overlay?.moves.length,
-  chessSample.available_outcome_ids?.length,
-  'chess sample legal move overlay count',
-);
-assertEqual(
-  chessSample.image_overlay?.moves.every(
-    (move) => move.from.length === 2 && move.to.length === 2,
-  ),
-  true,
-  'chess sample legal move overlay coordinates',
-);
-assertEqual(
-  chessSample.image_overlay?.moves.some((move) => (move.target_probability ?? 0) > 0),
-  true,
-  'chess sample target move overlay',
-);
-assertEqual(
-  chessSample.field_shape,
-  undefined,
-  'chess sample omits field shape',
-);
-assertEqual(
-  chessSample.observable_state_id?.startsWith('fen:'),
-  true,
-  'chess sample observable state id',
 );
 const ksBatch = ksBenchmarkTask.batches[3];
 const ksSample = ksBatch?.samples[0];

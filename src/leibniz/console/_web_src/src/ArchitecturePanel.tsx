@@ -145,8 +145,14 @@ const ROOTS: RootTree[] = [
             tag: 'fitting is not theory',
             text: 'Fit enough data and you get a predictor with no theory inside it. In a tower of scales, the effective theory at each level still has to agree with the converged law underneath.',
           },
+          {
+            level: 3,
+            kind: 'add',
+            tag: 'known part plus unknown part',
+            text: 'Most real problems are $f = g + h$: a part $g$ whose law we know, so answers there are scored against the law, and a part $h$ we have only data for. Discovering the law of an $h$ converts it into a $g$ — and on the ledger that shows up as its bits turning from frontier-relative into certified-absolute. That migration is the measurable trace of a field becoming a science.',
+          },
         ],
-        verdict: { tone: 'open', text: 'Discovery and multi-scale universes still need to be specified.' },
+        verdict: { tone: 'open', text: 'The $g + h$ split and the relative-to-absolute migration orient discovery; relative-$h$ scoring and multi-scale universes still need to be specified.' },
       },
     ],
   },
@@ -251,6 +257,12 @@ const ROOTS: RootTree[] = [
             kind: 'add',
             tag: 'space-time ladder',
             text: 'Compute the operator on nested refinements and compare on the common grid. For a field law, the residual is evaluated consistently in space and time, then converted into a certified distance by the law\'s amplification along the submitted trajectory. For a static inverse map, the residual is converted by the renderer Jacobian conditioning at the submitted latent.',
+          },
+          {
+            level: 2,
+            kind: 'add',
+            tag: 'what makes a task admissible',
+            text: 'A task earns its place when the forward law hands you the certified answer as a byproduct — sample a cause, run the law, and you already hold the answer — so minting an instance is cheap and the difficulty lives in the inverse. Where the answer is instead an adversarial game tree, minting a certified instance costs as much as solving it and there is no cheap ground, so such games (chess) are out even though their rules are a law; the open frontier they would offer belongs on the cost axis instead, as the search for a cheaper algorithm.',
           },
           {
             level: 3,
@@ -407,6 +419,12 @@ const ROOTS: RootTree[] = [
           },
           {
             level: 2,
+            kind: 'add',
+            tag: 'one measure, two regimes',
+            text: 'Validated bits come off one ledger whatever the source: certified against the law where there is one ($g$), frontier-relative against the best extractor where there is not ($h$). Both are the same object — the spectrum of the information matrix, whose independent directions count the bits and whose additivity across observations discounts redundancy on its own, so datasets combine without a hand-picked weighting. The inverse-renderer benchmark already does the certified case per mode.',
+          },
+          {
+            level: 2,
             kind: 'horizon',
             tag: 'open',
             text: 'Whether value and cost really collapse into one number, or have to stay two, is open.',
@@ -459,7 +477,7 @@ const EDGES: CouplingEdge[] = [
     roots: ['U', 'R'],
     title: 'Grounding',
     warn: true,
-    body: 'Grounding is really two questions wearing one name: does the universe have a law (Universe), and is an answer checked by an exact verifier or by convergence (Refinement)? So a contract can just record whether there is a law and let the verifier-or-convergence part fall out of refinement, instead of declaring “grounding” outright.',
+    body: 'Grounding is really two questions wearing one name: does the universe have a law (Universe), and is an answer checked by an exact verifier or by convergence (Refinement)? So a contract can just record whether there is a law and let the verifier-or-convergence part fall out of refinement, instead of declaring “grounding” outright. And where there is no law yet, correctness does not vanish — it goes relative: an answer is scored by how much better it predicts the real data than the best model so far. Known-law and no-law are the two ends of one dial — how large a family you certify against (a universal family $\\to$ absolute bits, the current frontier $\\to$ relative bits) — so the same ledger measures both.',
   },
   {
     id: 'edge-score',
@@ -515,7 +533,7 @@ const STEPS: RoadmapStep[] = [
     id: 'discovery',
     title: 'Readout and unknown-law universes (reserved)',
     outcome:
-      'A readout-valued, convergence-grounded task, plus the scaffolding for unknown-law and multi-scale universes. Parked until the basic resolution case is solid.',
+      'A readout-valued, convergence-grounded task, plus the $g + h$ ledger: frontier-relative scoring on the data-only part $h$, aggregated with certified bits on $g$ through the partition tree, and the scaffolding for unknown-law and multi-scale universes. Parked until the consolidated certified spine is solid.',
   },
 ];
 
