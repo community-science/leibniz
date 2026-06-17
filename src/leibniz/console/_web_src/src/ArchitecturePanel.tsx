@@ -262,7 +262,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'what makes a task admissible',
-            text: 'A task earns its place when the forward law hands you the certified answer as a byproduct — sample a cause, run the law, and you already hold the answer — so minting an instance is cheap and the difficulty lives in the inverse. Where the answer is instead an adversarial game tree, minting a certified instance costs as much as solving it and there is no cheap ground, so such games (chess) are out even though their rules are a law; the open frontier they would offer belongs on the cost axis instead, as the search for a cheaper algorithm.',
+            text: 'A task earns its place when the forward law hands you the certified answer as a byproduct — sample a cause, run the law, and you already hold the answer — so minting an instance is cheap and the difficulty lives in the inverse. Where the answer is instead an adversarial game tree, minting a certified instance costs as much as solving it and there is no cheap ground, so such games are out even though their rules are a law; the open frontier they would offer belongs on the cost axis instead, as the search for a cheaper algorithm.',
           },
           {
             level: 3,
@@ -301,9 +301,9 @@ const ROOTS: RootTree[] = [
         id: 'R-territory',
         gist: 'One operator, many territories.',
         meta: 'Correctness, the score hierarchy, and the bootstrap are all the same move.',
-        status: 'direction',
-        anchor: 'partition-tree scoring',
-        step: 'hierarchy',
+        status: 'implemented',
+        anchor: 'partition_score.py: adversarial partition competence integral',
+        verify: { module: 'leibniz.partition_score', symbols: ['PartitionScore', 'adversarial_partition_competence_integral'] },
         rungs: [
           {
             level: 1,
@@ -321,16 +321,40 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'the partition tree',
-            text: 'On the problem partition, the score is a tree of regions. You keep subdividing a region until its competence estimate holds up even against an adversary choosing where to split, so a model cannot tuck its failures into a cell nobody looked at. A claim is a subtree, and the single number is that tree weighted by measure.',
+            text: 'On the problem partition, the score is a tree of regions. Each node is a state-space region, each leaf carries the ledger competence measured from samples that landed there, and the single score is $\\sum_r \\mu(r)c(r) / \\sum_r \\mu(r)$: the measure-weighted competence integral over the leaves.',
+          },
+          {
+            level: 3,
+            kind: 'add',
+            tag: 'adversarial refinement',
+            text: 'The partition is refined by the region grammar itself: split along an available axis or stratum, choose the candidate with the largest between-child competence disparity, and keep it only when that disparity exceeds the measured sampling noise. There is no declared floor; an unmeasurable split has unbounded noise, and more samples shrink the noise that determines the finest resolvable scale.',
+          },
+          {
+            level: 3,
+            kind: 'add',
+            tag: 'convergent value',
+            text: 'The record carries the refinement ladder: each depth contracts the current leaves back to the same measure-weighted integral and records the movement from the previous rung. The reported value is the converged leaf contraction with its propagated sampling uncertainty, not a score stopped by a hand-tuned minimum region size.',
+          },
+          {
+            level: 3,
+            kind: 'add',
+            tag: 'capability map',
+            text: 'The console renders the same tree as a capability map, coloring leaves by competence and showing the refinement ladder next to the single score. Failure pockets therefore remain visible even when their measure-weighted contribution is small.',
+          },
+          {
+            level: 3,
+            kind: 'code',
+            tag: 'tree',
+            text: 'partition_score.py: fixed_partition_competence_integral, adversarial_partition_competence_integral, PartitionScore; local_results.py and the console result-view transport expose the capability map.',
           },
           {
             level: 3,
             kind: 'horizon',
-            tag: 'open',
-            text: 'Whether all these territories are really one kind of axis, or several, is open.',
+            tag: 'deferred',
+            text: 'Sampling is still dense and post-hoc. Adaptive resampling toward suspicious splits is a follow-up diagnostic path, not part of the scorer in code today.',
           },
         ],
-        verdict: { tone: 'open', text: 'The shared mechanism is clear; whether its territories are uniform is not.' },
+        verdict: { tone: 'partial', text: 'The query-space partition tree, measure-weighted integral, convergence ladder, and capability map are in code; adaptive sampling remains deferred.' },
       },
       {
         id: 'R-ratchet',
@@ -501,7 +525,7 @@ const EDGES: CouplingEdge[] = [
     id: 'edge-score',
     roots: ['U', 'R', 'D'],
     title: 'The score (triple point)',
-    body: 'Competence is the validated information a model resolves at the certified refinement precision: measured distance from Refinement, bits from Description length, integrated over the query space from Universe. That sum is one of the same adaptive trees. So the score is not a fourth root; it is where the other three meet, and it needs nothing else.',
+    body: 'Competence is the validated information a model resolves at the certified refinement precision: measured distance from Refinement, bits from Description length, integrated over the sampled state-space territory from Universe. The partition tree makes that handoff explicit: leaves are regions, color is competence, and the single number is their measure-weighted contraction.',
   },
 ];
 
@@ -526,9 +550,9 @@ const STEPS: RoadmapStep[] = [
   },
   {
     id: 'hierarchy',
-    title: 'Hierarchical query-space scoring',
+    title: 'Hierarchical query-space scoring (implemented core)',
     outcome:
-      'Build the recursive partition, the problem-space refinement, and the adversarial stopping rule, so the score becomes a tree that contracts to the single number.',
+      'The recursive partition scorer, disparity-above-noise refinement, convergence ladder, and console capability map are now in code. Adaptive sampling toward suspicious splits remains a follow-up.',
   },
   {
     id: 'bootstrap',
