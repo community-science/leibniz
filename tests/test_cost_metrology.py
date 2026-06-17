@@ -6,10 +6,13 @@ from leibniz.cost_metrology import (
     CostMeasurement,
     CostMeter,
     CostMetrologyError,
+    DeviceCostProfile,
     OperationCostRecord,
     estimate_operation_stream_cost,
     estimate_program_cost,
     measure_program_cost,
+    normalize_tensor_dtype,
+    operation_class_for_name,
 )
 from leibniz.tensor_runtime import (
     TensorRuntimeError,
@@ -17,6 +20,71 @@ from leibniz.tensor_runtime import (
     TensorRuntimeTensorSpec,
     resolve_tensor_runtime,
 )
+
+
+def test_device_cost_profile_round_trips_declared_energy_schema() -> None:
+    profile = DeviceCostProfile(
+        profile_id="cost-model.device.test@0.1.0",
+        label="Test Device",
+        version="0.1.0",
+        provenance=("unit-test estimate",),
+        compute_energy_joules={
+            ("dense-matmul", "fp32"): 1.0e-12,
+            ("elementwise", "fp32"): 4.0e-12,
+            ("transcendental", "fp32"): 1.2e-11,
+            ("reduction", "fp32"): 6.0e-12,
+            ("fft", "fp32"): 8.0e-12,
+        },
+        bytes_moved_energy_joules=2.0e-12,
+        bytes_resident_energy_joules=1.0e-15,
+        unified_memory=True,
+        notes=("per-evaluation residency footprint",),
+    )
+
+    assert DeviceCostProfile.from_record(profile.to_record()) == profile
+
+
+def test_device_cost_profile_rejects_unknown_operation_class_and_dtype() -> None:
+    record = {
+        "profile_id": "cost-model.device.bad@0.1.0",
+        "label": "Bad Device",
+        "version": "0.1.0",
+        "provenance": ["unit-test"],
+        "compute_energy_joules": [
+            {"operation_class": "scalar", "dtype": "fp32", "joules": 1.0}
+        ],
+        "bytes_moved_energy_joules": 1.0,
+        "bytes_resident_energy_joules": 1.0,
+    }
+
+    with pytest.raises(CostMetrologyError, match="operation class"):
+        DeviceCostProfile.from_record(record)
+
+    record["compute_energy_joules"] = [
+        {"operation_class": "elementwise", "dtype": "fp8", "joules": 1.0}
+    ]
+    with pytest.raises(CostMetrologyError, match="dtype"):
+        DeviceCostProfile.from_record(record)
+
+
+def test_runtime_operation_names_map_to_device_cost_classes() -> None:
+    assert operation_class_for_name("aten.mm.default") == "dense-matmul"
+    assert operation_class_for_name("aten.convolution.default") == "convolution"
+    assert operation_class_for_name("aten.add.Tensor") == "elementwise"
+    assert operation_class_for_name("aten.sin.default") == "transcendental"
+    assert operation_class_for_name("aten.sum.default") == "reduction"
+    assert operation_class_for_name("aten._fft_c2c.default") == "fft"
+    assert operation_class_for_name("aten.gather.default") == "data-movement"
+    assert operation_class_for_name("aten.unknown.default") is None
+
+
+def test_tensor_dtype_strings_map_to_device_profile_dtypes() -> None:
+    assert normalize_tensor_dtype("torch.float64") == "fp64"
+    assert normalize_tensor_dtype("torch.complex64") == "fp32"
+    assert normalize_tensor_dtype("torch.float16") == "fp16"
+    assert normalize_tensor_dtype("torch.bfloat16") == "bf16"
+    assert normalize_tensor_dtype("torch.int8") == "int8"
+    assert normalize_tensor_dtype("torch.bool") is None
 
 
 def test_measure_program_cost_counts_matmul_formula() -> None:

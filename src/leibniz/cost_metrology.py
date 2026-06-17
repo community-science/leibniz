@@ -23,21 +23,168 @@ __all__ = [
     "CostMetrologyError",
     "CostMeter",
     "CostOperationTraceRecord",
+    "DeviceCostProfile",
+    "DeviceDType",
     "MovementCostRecord",
+    "OperationClass",
     "OperationCostRecord",
     "TensorValueSpec",
     "UnmodeledOperationRecord",
     "estimate_program_cost",
     "estimate_operation_stream_cost",
+    "operation_class_for_name",
     "measure_program_cost",
+    "normalize_tensor_dtype",
 ]
 
 _tensor_runtime_cost_model_id = "leibniz.cost-model.tensor-runtime@0.1.0"
 _CostExecutionMode = Literal["measured", "dry-run"]
+OperationClass = Literal[
+    "dense-matmul",
+    "convolution",
+    "elementwise",
+    "transcendental",
+    "reduction",
+    "fft",
+    "data-movement",
+]
+DeviceDType = Literal["fp64", "fp32", "tf32", "fp16", "bf16", "int8"]
+
+_operation_classes: tuple[OperationClass, ...] = (
+    "dense-matmul",
+    "convolution",
+    "elementwise",
+    "transcendental",
+    "reduction",
+    "fft",
+    "data-movement",
+)
+_device_dtypes: tuple[DeviceDType, ...] = (
+    "fp64",
+    "fp32",
+    "tf32",
+    "fp16",
+    "bf16",
+    "int8",
+)
 
 
 class CostMetrologyError(ValueError):
     """Raised when a cost measurement or record is invalid."""
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceCostProfile:
+    """Declared device energy coefficients for machine-independent counts."""
+
+    profile_id: str
+    label: str
+    version: str
+    provenance: tuple[str, ...]
+    compute_energy_joules: Mapping[tuple[OperationClass, DeviceDType], float]
+    bytes_moved_energy_joules: float
+    bytes_resident_energy_joules: float
+    unified_memory: bool = False
+    notes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_nonempty_string(self.profile_id, "profile_id")
+        _require_nonempty_string(self.label, "profile label")
+        _require_nonempty_string(self.version, "profile version")
+        for index, item in enumerate(self.provenance):
+            _require_nonempty_string(item, f"profile provenance.{index}")
+        if type(self.unified_memory) is not bool:
+            raise CostMetrologyError("profile unified_memory must be a boolean")
+        for index, item in enumerate(self.notes):
+            _require_nonempty_string(item, f"profile notes.{index}")
+        for (operation_class, dtype), value in self.compute_energy_joules.items():
+            if operation_class not in _operation_classes or dtype not in _device_dtypes:
+                raise CostMetrologyError(
+                    "compute_energy_joules keys must be (operation_class, dtype)"
+                )
+            _require_finite_nonnegative_float(
+                value,
+                f"compute_energy_joules.{operation_class}.{dtype}",
+            )
+        _require_finite_nonnegative_float(
+            self.bytes_moved_energy_joules,
+            "bytes_moved_energy_joules",
+        )
+        _require_finite_nonnegative_float(
+            self.bytes_resident_energy_joules,
+            "bytes_resident_energy_joules",
+        )
+
+    @classmethod
+    def from_record(cls, record: object) -> Self:
+        mapping = _record_mapping(record, "device cost profile record")
+        compute_entries: dict[tuple[OperationClass, DeviceDType], float] = {}
+        for index, item in enumerate(
+            _record_sequence(mapping.get("compute_energy_joules"), "compute_energy_joules")
+        ):
+            entry = _record_mapping(item, f"compute_energy_joules.{index}")
+            operation_class = _record_operation_class(
+                entry.get("operation_class"),
+                f"compute_energy_joules.{index}.operation_class",
+            )
+            dtype = _record_device_dtype(
+                entry.get("dtype"),
+                f"compute_energy_joules.{index}.dtype",
+            )
+            key = (operation_class, dtype)
+            if key in compute_entries:
+                raise CostMetrologyError(
+                    f"duplicate compute energy entry for {operation_class}/{dtype}"
+                )
+            compute_entries[key] = _record_float(
+                entry.get("joules"),
+                f"compute_energy_joules.{index}.joules",
+            )
+        return cls(
+            profile_id=_record_string(mapping.get("profile_id"), "profile_id"),
+            label=_record_string(mapping.get("label"), "profile label"),
+            version=_record_string(mapping.get("version"), "profile version"),
+            provenance=tuple(
+                _record_string(item, "profile provenance")
+                for item in _record_sequence(mapping.get("provenance"), "provenance")
+            ),
+            compute_energy_joules=compute_entries,
+            bytes_moved_energy_joules=_record_float(
+                mapping.get("bytes_moved_energy_joules"),
+                "bytes_moved_energy_joules",
+            ),
+            bytes_resident_energy_joules=_record_float(
+                mapping.get("bytes_resident_energy_joules"),
+                "bytes_resident_energy_joules",
+            ),
+            unified_memory=_record_bool(mapping.get("unified_memory", False), "unified_memory"),
+            notes=tuple(
+                _record_string(item, "profile notes")
+                for item in _record_sequence(mapping.get("notes", ()), "notes")
+            ),
+        )
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "profile_id": self.profile_id,
+            "label": self.label,
+            "version": self.version,
+            "provenance": list(self.provenance),
+            "compute_energy_joules": [
+                {
+                    "operation_class": operation_class,
+                    "dtype": dtype,
+                    "joules": joules,
+                }
+                for (operation_class, dtype), joules in sorted(
+                    self.compute_energy_joules.items()
+                )
+            ],
+            "bytes_moved_energy_joules": self.bytes_moved_energy_joules,
+            "bytes_resident_energy_joules": self.bytes_resident_energy_joules,
+            "unified_memory": self.unified_memory,
+            "notes": list(self.notes),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -843,6 +990,45 @@ def _movement_elements(
     return _specs_numel(input_specs)
 
 
+def operation_class_for_name(name: str) -> OperationClass | None:
+    """Return the declared device-cost operation class for a runtime op name."""
+
+    _require_nonempty_string(name, "operation name")
+    if name in _dense_matmul_ops:
+        return "dense-matmul"
+    if name in _convolution_ops:
+        return "convolution"
+    if name in _transcendental_ops:
+        return "transcendental"
+    if name in _pointwise_ops:
+        return "elementwise"
+    if name in _reduction_ops:
+        return "reduction"
+    if name.startswith("aten._fft_"):
+        return "fft"
+    if name in _movement_ops or _is_indexing_op(name):
+        return "data-movement"
+    return None
+
+
+def normalize_tensor_dtype(dtype: str) -> DeviceDType | None:
+    """Map tensor runtime dtype strings into the declared device-profile dtype set."""
+
+    _require_nonempty_string(dtype, "tensor dtype")
+    normalized = dtype.removeprefix("torch.").lower()
+    if normalized in {"float64", "double", "complex128"}:
+        return "fp64"
+    if normalized in {"float32", "float", "complex64"}:
+        return "fp32"
+    if normalized in {"float16", "half"}:
+        return "fp16"
+    if normalized == "bfloat16":
+        return "bf16"
+    if normalized in {"int8", "uint8", "qint8", "quint8"}:
+        return "int8"
+    return None
+
+
 def _is_indexing_op(name: str) -> bool:
     return (
         name.startswith("aten.index.")
@@ -897,6 +1083,24 @@ _pointwise_ops = frozenset(
     }
 )
 
+_transcendental_ops = frozenset(
+    {
+        "aten.acos.default",
+        "aten.asin.default",
+        "aten.atan.default",
+        "aten.cos.default",
+        "aten.erf.default",
+        "aten.exp.default",
+        "aten.log.default",
+        "aten.pow.Tensor_Scalar",
+        "aten.rsqrt.default",
+        "aten.sigmoid.default",
+        "aten.sin.default",
+        "aten.sqrt.default",
+        "aten.tanh.default",
+    }
+)
+
 _reduction_ops = frozenset(
     {
         "aten._adaptive_avg_pool2d.default",
@@ -909,6 +1113,22 @@ _reduction_ops = frozenset(
         "aten.prod.default",
         "aten.sum.default",
         "aten.sum.dim_IntList",
+    }
+)
+
+_dense_matmul_ops = frozenset(
+    {
+        "aten.addmm.default",
+        "aten.bmm.default",
+        "aten.matmul.default",
+        "aten.mm.default",
+    }
+)
+
+_convolution_ops = frozenset(
+    {
+        "aten.convolution.default",
+        "aten.conv2d.default",
     }
 )
 
@@ -1002,6 +1222,18 @@ def _record_execution_mode(value: object) -> _CostExecutionMode:
     if value == "measured" or value == "dry-run":
         return cast(_CostExecutionMode, value)
     raise CostMetrologyError("execution_mode must be measured or dry-run")
+
+
+def _record_operation_class(value: object, field: str) -> OperationClass:
+    if value in _operation_classes:
+        return value
+    raise CostMetrologyError(f"{field} must be a known operation class")
+
+
+def _record_device_dtype(value: object, field: str) -> DeviceDType:
+    if value in _device_dtypes:
+        return value
+    raise CostMetrologyError(f"{field} must be a known dtype")
 
 
 def _require_nonempty_string(value: str, field: str) -> None:
