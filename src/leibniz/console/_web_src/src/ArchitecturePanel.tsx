@@ -462,13 +462,14 @@ const ROOTS: RootTree[] = [
         meta: 'Measured, not a description-length penalty. Parsimony is pressured by low cost, not minimized directly.',
         status: 'implemented',
         anchor: 'cost metrology: DeviceCostProfile + bytes resident + energy breakdown',
+        verify: { module: 'leibniz.cost_metrology', symbols: ['DeviceCostProfile', 'EnergyCostBreakdown', 'price_cost_measurement_energy'] },
         step: 'cost',
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'measured, not penalized',
-            text: 'Cost is a single priced quantity from the submitted program, not the machine it happened to run on: invariant counts for op class, dtype, bytes moved, and bytes resident are priced by a declared reference device profile. Parsimony is emergent, not minimized — a table-heavy memorizer now pays for resident bytes, and a simple but expensive brute force is still excluded by cost; what survives, generalizing bits at low energy, is the parsimonious explanation.',
+            text: 'Cost is a single priced quantity from the submitted program, not the machine it happened to run on: invariant counts for op class, dtype, bytes moved, and bytes resident are priced by a declared reference device profile. Parsimony is emergent, not minimized — a table-heavy memorizer pays when held tables enter the operation footprint, and a simple but expensive brute force is still excluded by cost; what survives, generalizing bits at low energy, is the parsimonious explanation.',
           },
           {
             level: 2,
@@ -480,7 +481,7 @@ const ROOTS: RootTree[] = [
             level: 3,
             kind: 'code',
             tag: 'residency',
-            text: 'bytes_resident is a per-evaluation footprint from the operation stream: held parameters, lookup tables, and working-set high water are charged by $\\gamma$. The time-integrated resident × duration model remains a flagged future refinement, not faked in v1.',
+            text: 'bytes_resident is a peak per-operation input-plus-output tensor footprint from the operation stream. It charges large held operands and working-set spikes by $\\gamma$, but it is not a true held-buffer set: multi-buffer models and sharded table access can be undercounted. The time-integrated resident × duration model and trace identity needed for exact held-set residency remain flagged future refinements, not faked in v1.',
           },
         ],
         verdict: { tone: 'ok', text: 'Energy under a declared roofline profile is now the cost denominator; operation count remains as a diagnostic. Description length is rejected as an objective — parsimony is emergent.' },

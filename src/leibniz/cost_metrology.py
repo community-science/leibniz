@@ -219,7 +219,12 @@ class EnergyCostBreakdown:
             "bytes_moved_joules": self.bytes_moved_joules,
             "bytes_resident_joules": self.bytes_resident_joules,
             "total_joules": self.total_joules,
-            "residency_model": "per-evaluation-footprint",
+            "residency_model": "peak-per-operation-footprint",
+            "residency_proxy_limitation": (
+                "bytes_resident is the maximum input-plus-output tensor footprint "
+                "observed at one operation boundary; it is not a distinct held-buffer "
+                "set and can undercount multi-buffer or sharded-table residents"
+            ),
             "residency_duration_deferred": True,
         }
         if self.coefficient_overrides:
@@ -288,17 +293,18 @@ def price_cost_measurement_energy(
         if record.abstract_flops == 0:
             continue
         operation_class = record.operation_class or operation_class_for_name(record.name)
-        dtype = record.dtype or "fp32"
         if operation_class is None:
             raise CostMetrologyError(
                 f"operation {record.name} is missing operation_class"
             )
+        if record.dtype is None:
+            raise CostMetrologyError(f"operation {record.name} is missing dtype")
         try:
-            coefficient = compute_table[(operation_class, dtype)]
+            coefficient = compute_table[(operation_class, record.dtype)]
         except KeyError as error:
             raise CostMetrologyError(
                 "profile is missing compute coefficient "
-                f"for {operation_class}/{dtype}"
+                f"for {operation_class}/{record.dtype}"
             ) from error
         compute_joules += float(record.abstract_flops) * coefficient
     moved_joules = float(measurement.bytes_moved) * moved_coefficient

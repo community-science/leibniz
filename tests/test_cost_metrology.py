@@ -161,6 +161,21 @@ def test_energy_pricing_keeps_matmul_cheaper_than_vector_for_equal_flops() -> No
     )
 
 
+def test_energy_pricing_rejects_missing_dtype() -> None:
+    measurement = _synthetic_measurement(
+        OperationCostRecord(
+            name="aten.mm.default",
+            calls=1,
+            abstract_flops=128,
+            output_elements=8,
+            operation_class="dense-matmul",
+        )
+    )
+
+    with pytest.raises(CostMetrologyError, match="missing dtype"):
+        price_cost_measurement_energy(measurement)
+
+
 def test_measure_program_cost_populates_roofline_energy_when_profile_selected() -> None:
     runtime = resolve_tensor_runtime("cpu")
     torch = runtime.torch
@@ -179,6 +194,9 @@ def test_measure_program_cost_populates_roofline_energy_when_profile_selected() 
     assert measurement.roofline["source"] == "test"
     energy = measurement.roofline["energy"]
     assert isinstance(energy, dict)
+    assert energy["residency_model"] == "peak-per-operation-footprint"
+    assert energy["residency_duration_deferred"] is True
+    assert "undercount" in cast(str, energy["residency_proxy_limitation"])
     assert energy["profile_id"] == "cost-model.device.apple-m4@0.1.0"
     assert float(cast(float, cast(dict[str, object], energy)["total_joules"])) > 0.0
 
