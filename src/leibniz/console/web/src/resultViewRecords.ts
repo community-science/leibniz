@@ -112,7 +112,6 @@ export type StateSpaceIntegralTermRecord = {
   log2_volume_minimum: number;
   log2_volume_maximum: number;
   width_in_bits: number;
-  competence_density: number;
   contribution: number;
   representative_log2_volume?: number;
   sample_count?: number;
@@ -190,7 +189,6 @@ export type ModelResultRecord = {
   measurement_count: number;
   source_kinds: string[];
   training_estimate_comparison?: TrainingEstimateComparisonRecord;
-  console_view_model?: RunDetailViewModelRecord;
 };
 
 export type RunResultRecord = {
@@ -213,28 +211,6 @@ export type RunResultRecord = {
   measurement_dataset_digest: string;
   sampled_competence?: Record<string, unknown>;
   training_diagnostics?: TrainingDiagnosticsRecord;
-  console_view_model?: RunDetailViewModelRecord;
-};
-
-export type RunDetailViewModelRecord = {
-  detail_sections: RunDetailSectionRecord[];
-};
-
-export type RunDetailSectionRecord = {
-  title: string;
-  entries?: RunDetailEntryRecord[];
-  table?: RunDetailTableRecord;
-};
-
-export type RunDetailEntryRecord = {
-  label: string;
-  value: string;
-};
-
-export type RunDetailTableRecord = {
-  aria_label: string;
-  columns: string[];
-  rows: string[][];
 };
 
 export type TrainingDiagnosticsRecord = {
@@ -379,7 +355,6 @@ function parseModelResult(value: unknown, path: string): ModelResultRecord {
     measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`, transportError),
     source_kinds: stringArray(record.source_kinds, `${path}.source_kinds`),
     training_estimate_comparison: optional(record.training_estimate_comparison, `${path}.training_estimate_comparison`, parseTrainingEstimateComparison),
-    console_view_model: optional(record.console_view_model, `${path}.console_view_model`, parseRunDetailViewModel),
   }) as ModelResultRecord;
 }
 
@@ -419,7 +394,6 @@ function parseStateSpaceIntegralTerm(value: unknown, path: string): StateSpaceIn
     'log2_volume_minimum',
     'log2_volume_maximum',
     'width_in_bits',
-    'competence_density',
     'contribution',
   ]);
   return {
@@ -427,7 +401,6 @@ function parseStateSpaceIntegralTerm(value: unknown, path: string): StateSpaceIn
     log2_volume_minimum: requireNumber(record.log2_volume_minimum, `${path}.log2_volume_minimum`, transportError),
     log2_volume_maximum: requireNumber(record.log2_volume_maximum, `${path}.log2_volume_maximum`, transportError),
     width_in_bits: requireNumber(record.width_in_bits, `${path}.width_in_bits`, transportError),
-    competence_density: requireNumber(record.competence_density, `${path}.competence_density`, transportError),
     contribution: requireNumber(record.contribution, `${path}.contribution`, transportError),
     representative_log2_volume: optionalNumber(record.representative_log2_volume, `${path}.representative_log2_volume`, transportError),
     sample_count: optionalNumber(record.sample_count, `${path}.sample_count`, transportError),
@@ -537,7 +510,6 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
     program: requireRecord(record.program, `${path}.program`, transportError),
     program_graph: requireRecord(record.program_graph, `${path}.program_graph`, transportError),
     training_diagnostics: optional(record.training_diagnostics, `${path}.training_diagnostics`, parseTrainingDiagnostics),
-    console_view_model: optional(record.console_view_model, `${path}.console_view_model`, parseRunDetailViewModel),
   }) as RunResultRecord;
 }
 
@@ -561,44 +533,6 @@ function parseCompetenceTimePoint(value: unknown, path: string): CompetenceTimeP
     bits: requireNumber(record.bits, `${path}.bits`, transportError),
     certified_epsilon: optionalNumber(record.certified_epsilon, `${path}.certified_epsilon`, transportError),
     evolution_scale: optionalNumber(record.evolution_scale, `${path}.evolution_scale`, transportError),
-  };
-}
-
-function parseRunDetailViewModel(value: unknown, path: string): RunDetailViewModelRecord {
-  const record = requireRecord(value, path, transportError);
-  return {
-    detail_sections: arrayOf(record.detail_sections, `${path}.detail_sections`, (section, sectionPath) => {
-      const sectionRecord = requireRecord(section, sectionPath, transportError);
-      return {
-        title: requireString(sectionRecord.title, `${sectionPath}.title`, transportError),
-        entries: optional(sectionRecord.entries, `${sectionPath}.entries`, parseDetailEntries),
-        table: optional(sectionRecord.table, `${sectionPath}.table`, parseRunDetailTable),
-      };
-    }),
-  };
-}
-
-function parseDetailEntries(value: unknown, path: string): RunDetailEntryRecord[] {
-  return arrayOf(value, path, (entry, entryPath) => {
-    const record = requireRecord(entry, entryPath, transportError);
-    requireStrings(record, entryPath, ['label', 'value']);
-    return record as RunDetailEntryRecord;
-  });
-}
-
-function parseRunDetailTable(value: unknown, path: string): RunDetailTableRecord {
-  const record = requireRecord(value, path, transportError);
-  const columns = stringArray(record.columns, `${path}.columns`);
-  const rows = arrayOf(record.rows, `${path}.rows`, stringArray);
-  rows.forEach((row, index) => {
-    if (row.length !== columns.length) {
-      throw transportError(`${path}.rows.${index}: expected ${columns.length} cells`);
-    }
-  });
-  return {
-    aria_label: requireString(record.aria_label, `${path}.aria_label`, transportError),
-    columns,
-    rows,
   };
 }
 

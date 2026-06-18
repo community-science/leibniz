@@ -6,7 +6,7 @@ LEIBNIZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MINIFORGE_ROOT="${LEIBNIZ_MINIFORGE_ROOT:-$LEIBNIZ_ROOT/.miniforge}"
 ENV_NAME="${LEIBNIZ_ENV_NAME:-leibniz-dev}"
 CONDA_BIN="$MINIFORGE_ROOT/bin/conda"
-CONSOLE_WEB_ROOT="$LEIBNIZ_ROOT/src/leibniz/console/_web_src"
+CONSOLE_WEB_ROOT="$LEIBNIZ_ROOT/src/leibniz/console/web"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"

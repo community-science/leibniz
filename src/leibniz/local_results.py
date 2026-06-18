@@ -302,10 +302,13 @@ def materialize_benchmark_result_views(
     repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
     results_root = _resolve_output_root(repository_root, results_root)
     benchmarks = _known_benchmarks(repository_root)
-    local_runs = _local_run_records(results_root)
-    runs = tuple(sorted(local_runs, key=_run_sort_key))
+    evaluations = tuple(sorted(_evaluation_view_records(results_root), key=_evaluation_sort_key))
     unknown_benchmark_ids = sorted(
-        {run.benchmark_id for run in runs if run.benchmark_id not in benchmarks},
+        {
+            entry["benchmark_id"]
+            for entry in evaluations
+            if entry["benchmark_id"] not in benchmarks
+        },
         key=str,
     )
     if unknown_benchmark_ids:
@@ -318,11 +321,12 @@ def materialize_benchmark_result_views(
     view_root = results_root / "views"
     view_root.mkdir(parents=True, exist_ok=True)
     for benchmark_id, benchmark in sorted(benchmarks.items(), key=lambda item: str(item[0])):
-        benchmark_runs = tuple(run for run in runs if run.benchmark_id == benchmark_id)
-        benchmark_record = _benchmark_result_record(
+        benchmark_evaluations = tuple(
+            entry for entry in evaluations if entry["benchmark_id"] == benchmark_id
+        )
+        benchmark_record = _slim_benchmark_result_record(
             benchmark=benchmark,
-            repository_root=repository_root,
-            runs=benchmark_runs,
+            evaluations=benchmark_evaluations,
         )
         benchmark_records.append(benchmark_record)
         benchmark_view_root = view_root / _identifier_atom(benchmark_id)
@@ -339,17 +343,302 @@ def materialize_benchmark_result_views(
             + b"\n"
         )
         benchmark_view_files.append(benchmark_view_file)
-        if primary_view_file is None or benchmark_runs:
+        if primary_view_file is None or benchmark_evaluations:
             primary_view_file = benchmark_view_file
 
     return LocalBenchmarkResultViewSummary(
-        source_files=tuple(run.source_path for run in runs),
+        source_files=tuple(cast(Path, entry["source_path"]) for entry in evaluations),
         view_file=primary_view_file if primary_view_file is not None else benchmark_view_files[0],
         benchmark_view_files=tuple(benchmark_view_files),
         benchmark_count=len(benchmark_records),
-        model_count=len({(run.benchmark_id, run.model_key) for run in runs}),
-        run_count=len(runs),
+        model_count=len(
+            {
+                (entry["benchmark_id"], entry["model_key"])
+                for entry in evaluations
+            }
+        ),
+        run_count=len(evaluations),
     )
+
+
+def _evaluation_view_records(results_root: Path) -> tuple[dict[str, object], ...]:
+    evaluation_root = results_root / "evaluations"
+    if not evaluation_root.is_dir():
+        return ()
+    submissions = _submission_records_by_id(results_root)
+    records: list[dict[str, object]] = []
+    for path in sorted(evaluation_root.rglob("*" + _document_suffix)):
+        record = load_object_document(path.read_bytes(), description="benchmark evaluation")
+        if record.get("format") != "leibniz.evaluation":
+            continue
+        source_path = _result_state_record_path(path, results_root=results_root)
+        try:
+            evaluation = EvaluationRecord.from_record(record)
+        except ValueError as error:
+            raise LocalResultImportError(f"{source_path}: {error}") from error
+        submission_entry = submissions.get(str(evaluation.submission_id))
+        if submission_entry is None:
+            raise LocalResultImportError(
+                f"{source_path}: evaluation references unknown submission "
+                f"{evaluation.submission_id}"
+            )
+        submission, _submission_path = submission_entry
+        capability_map = dict(_capability_map_from_partition_score(evaluation.capability_map))
+        capability_map["evaluation_converged"] = evaluation.converged
+        capability_map["evidence_budget_limited"] = evaluation.evidence_budget_limited
+        score_width_bits = _as_nonnegative_number(
+            capability_map.get("score_width_bits"),
+            "evaluation.capability_map.score_width_bits",
+        )
+        sample_count = _as_positive_int(
+            capability_map.get("sample_count"),
+            "evaluation.capability_map.sample_count",
+        )
+        cost = float(evaluation.cost.energy_joules())
+        if not math.isfinite(cost) or cost < 0:
+            raise LocalResultImportError(f"{source_path}: evaluation cost must be finite")
+        inspection_record = dict(submission.model_inspection or {})
+        dataset_digest = (
+            evaluation.lineage.measurement_dataset_digest
+            if evaluation.lineage.measurement_dataset_digest is not None
+            else MeasurementDataset(measurements=()).digest
+        )
+        cost_summary: dict[str, object] = {
+            "component_count": _inspection_component_count(inspection_record),
+            "cost": cost,
+            "inference_cost_measurement": evaluation.cost.to_record(),
+            "inference_cost_sample_count": sample_count,
+        }
+        storage_bytes = _submission_storage_bytes(submission.training_provenance)
+        if storage_bytes is not None:
+            cost_summary["storage_bytes"] = storage_bytes
+        model_inspection: Mapping[str, object] | None = None
+        model_inspection_digest: ContentDigest | None = None
+        if inspection_record:
+            model_inspection = _model_inspection_view_record(
+                inspection=inspection_record,
+                source_path=source_path,
+                measurement_dataset_digest=dataset_digest,
+                training_summary=submission.training_provenance,
+                artifact_references=None,
+            )
+            model_inspection_digest = ContentDigest.from_value(model_inspection)
+        records.append(
+            {
+                "benchmark_id": evaluation.benchmark_id,
+                "capability_map": capability_map,
+                "converged": evaluation.converged,
+                "cost": cost,
+                "cost_summary": cost_summary,
+                "diagnostics": [dict(item) for item in evaluation.diagnostics],
+                "evaluation_id": str(evaluation.id),
+                "evidence_budget_limited": evaluation.evidence_budget_limited,
+                "measurement_dataset_digest": dataset_digest,
+                "model_inspection": model_inspection,
+                "model_inspection_digest": model_inspection_digest,
+                "model_key": str(submission.id),
+                "program": _program_record_from_inspection(inspection_record),
+                "program_digest": submission.digest,
+                "program_graph": dict(submission.program_graph),
+                "sample_count": sample_count,
+                "score": float(evaluation.validated_bits),
+                "score_width_bits": score_width_bits,
+                "source_path": source_path,
+                "submission": submission,
+            }
+        )
+    return tuple(records)
+
+
+def _slim_benchmark_result_record(
+    *,
+    benchmark: Benchmark,
+    evaluations: tuple[dict[str, object], ...],
+) -> dict[str, object]:
+    models = _slim_model_result_records(evaluations)
+    runs = [_slim_run_result_record(entry) for entry in evaluations]
+    return {
+        "benchmark_id": str(benchmark.manifest.id),
+        "leaderboard": [model for model in models if model["result_status"] == "accepted"],
+        "model_candidates": list(models),
+        "frontiers": {
+            axis: _frontier_records(models, cost_axis=axis) for axis in _benchmark_cost_axis_keys
+        },
+        "reference_curves": _benchmark_reference_curve_records(generator=benchmark.generator),
+        "training_history": [],
+        "plot_runs": runs,
+        "model_inspections": _slim_model_inspection_records(evaluations),
+    }
+
+
+def _slim_model_result_records(
+    evaluations: tuple[dict[str, object], ...],
+) -> tuple[dict[str, object], ...]:
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for entry in evaluations:
+        grouped.setdefault(str(entry["model_key"]), []).append(entry)
+    records = [_slim_model_result_record(entries) for entries in grouped.values()]
+    return tuple(sorted(records, key=_model_sort_key))
+
+
+def _slim_model_result_record(entries: list[dict[str, object]]) -> dict[str, object]:
+    ordered = sorted(entries, key=_evaluation_sort_key)
+    best = max(
+        ordered,
+        key=lambda entry: (
+            _as_nonnegative_number(entry["score"], "evaluation.score"),
+            -_as_nonnegative_number(entry["cost"], "evaluation.cost"),
+        ),
+    )
+    run_ids = [str(entry["evaluation_id"]) for entry in ordered]
+    score = _as_nonnegative_number(best["score"], "evaluation.score")
+    score_width_bits = _as_nonnegative_number(
+        best["score_width_bits"],
+        "evaluation.score_width_bits",
+    )
+    sample_count = _as_positive_int(best["sample_count"], "evaluation.sample_count")
+    record: dict[str, object] = {
+        "model_key": str(best["model_key"]),
+        "result_status": "accepted",
+        "program_digest": str(best["program_digest"]),
+        "benchmark_id": str(best["benchmark_id"]),
+        "score": score,
+        "score_integral": _single_term_integral_record(
+            kind="validated-bit-score",
+            term_kind="validated-bit-evaluation",
+            value=score,
+            score_width_bits=score_width_bits,
+            sample_count=sample_count,
+            region=_capability_map_root_region(
+                _extract.mapping(best["capability_map"], "evaluation.capability_map")
+            ),
+        ),
+        "capability_map": dict(_extract.mapping(best["capability_map"], "capability_map")),
+        "cost_integral": _single_term_integral_record(
+            kind="energy-cost-integral",
+            term_kind="energy-cost-evaluation",
+            value=_as_nonnegative_number(best["cost"], "evaluation.cost"),
+            score_width_bits=score_width_bits,
+            sample_count=sample_count,
+            region=_capability_map_root_region(
+                _extract.mapping(best["capability_map"], "evaluation.capability_map")
+            ),
+        ),
+        "points": [_slim_competence_point(entry) for entry in ordered],
+        "cost_summary": dict(_extract.mapping(best["cost_summary"], "cost_summary")),
+        "run_ids": run_ids,
+        "measurement_count": sum(
+            _as_positive_int(entry["sample_count"], "evaluation.sample_count")
+            for entry in ordered
+        ),
+        "source_kinds": ["evaluation"],
+    }
+    return record
+
+
+def _single_term_integral_record(
+    *,
+    kind: str,
+    term_kind: str,
+    value: float,
+    score_width_bits: float,
+    sample_count: int,
+    region: Mapping[str, object] | None,
+) -> dict[str, object]:
+    term: dict[str, object] = {
+        "kind": term_kind,
+        "log2_volume_minimum": 0.0,
+        "log2_volume_maximum": score_width_bits,
+        "width_in_bits": score_width_bits,
+        "contribution": value,
+        "representative_log2_volume": score_width_bits,
+        "sample_count": sample_count,
+    }
+    if region is not None:
+        term["region"] = dict(region)
+    return {"kind": kind, "value": value, "terms": [term]}
+
+
+def _slim_competence_point(entry: Mapping[str, object]) -> dict[str, object]:
+    point: dict[str, object] = {
+        "log2_volume": _as_nonnegative_number(
+            entry["score_width_bits"],
+            "evaluation.score_width_bits",
+        ),
+        "score": _as_nonnegative_number(entry["score"], "evaluation.score"),
+        "sample_count": _as_positive_int(entry["sample_count"], "evaluation.sample_count"),
+        "run_ids": [str(entry["evaluation_id"])],
+        "competence_value_kind": "validated-bits",
+    }
+    diagnostics = _as_sequence(entry.get("diagnostics"), "evaluation.diagnostics")
+    if diagnostics:
+        first = _extract.mapping(diagnostics[0], "evaluation.diagnostics.0")
+        raw_time_points = first.get("time_points")
+        if raw_time_points is not None:
+            time_points = _as_sequence(raw_time_points, "evaluation.diagnostics.0.time_points")
+            point["time_points"] = [
+                dict(_extract.mapping(item, f"evaluation.diagnostics.0.time_points.{index}"))
+                for index, item in enumerate(time_points)
+            ]
+    return point
+
+
+def _slim_run_result_record(entry: Mapping[str, object]) -> dict[str, object]:
+    record: dict[str, object] = {
+        "source_kind": "evaluation",
+        "result_status": "accepted",
+        "source_path": cast(Path, entry["source_path"]).as_posix(),
+        "run_id": str(entry["evaluation_id"]),
+        "run_slug": str(entry["evaluation_id"]),
+        "benchmark_id": str(entry["benchmark_id"]),
+        "program_digest": str(entry["program_digest"]),
+        "model_key": str(entry["model_key"]),
+        "log2_volume": _as_nonnegative_number(
+            entry["score_width_bits"],
+            "evaluation.score_width_bits",
+        ),
+        "measurement_count": _as_positive_int(
+            entry["sample_count"],
+            "evaluation.sample_count",
+        ),
+        "score": _as_nonnegative_number(entry["score"], "evaluation.score"),
+        "cost_summary": dict(_extract.mapping(entry["cost_summary"], "cost_summary")),
+        "program": dict(_extract.mapping(entry["program"], "program")),
+        "program_graph": dict(_extract.mapping(entry["program_graph"], "program_graph")),
+        "measurement_dataset_digest": str(entry["measurement_dataset_digest"]),
+    }
+    model_inspection_digest = entry.get("model_inspection_digest")
+    if isinstance(model_inspection_digest, ContentDigest):
+        record["model_inspection_digest"] = str(model_inspection_digest)
+        record["model_inspection_path"] = cast(Path, entry["source_path"]).as_posix()
+    return record
+
+
+def _slim_model_inspection_records(
+    evaluations: tuple[dict[str, object], ...],
+) -> list[Mapping[str, object]]:
+    by_digest: dict[str, Mapping[str, object]] = {}
+    for entry in evaluations:
+        digest = entry.get("model_inspection_digest")
+        inspection = entry.get("model_inspection")
+        if isinstance(digest, ContentDigest) and isinstance(inspection, Mapping):
+            by_digest.setdefault(str(digest), cast(Mapping[str, object], inspection))
+    return [by_digest[digest] for digest in sorted(by_digest)]
+
+
+def _evaluation_sort_key(entry: Mapping[str, object]) -> tuple[str, str, str]:
+    return (
+        str(entry["benchmark_id"]),
+        str(entry["model_key"]),
+        str(entry["evaluation_id"]),
+    )
+
+
+def _inspection_component_count(inspection_record: Mapping[str, object]) -> int:
+    components = inspection_record.get("components")
+    if isinstance(components, Sequence) and not isinstance(components, str | bytes):
+        return len(cast(Sequence[object], components))
+    return _component_count
 
 
 def summarize_local_benchmark_results(
@@ -1251,45 +1540,6 @@ def _console_validation_history_row(point: object) -> list[str]:
     ]
 
 
-def _benchmark_result_record(
-    *,
-    benchmark: Benchmark,
-    repository_root: Path,
-    runs: tuple[_BenchmarkRunRecord, ...],
-) -> dict[str, object]:
-    manifest = benchmark.manifest
-    accepted_runs = tuple(run for run in runs if run.result_status == "accepted")
-    models = tuple(
-        _model_result_records(
-            accepted_runs,
-            manifest=manifest,
-            repository_root=repository_root,
-        )
-    )
-    model_candidates = tuple(
-        _model_result_records(
-            runs,
-            manifest=manifest,
-            repository_root=repository_root,
-        )
-    )
-    record: dict[str, object] = {
-        "benchmark_id": str(manifest.id),
-        "leaderboard": list(models),
-        "model_candidates": list(model_candidates),
-        "frontiers": {
-            axis: _frontier_records(models, cost_axis=axis) for axis in _benchmark_cost_axis_keys
-        },
-        "reference_curves": _benchmark_reference_curve_records(
-            generator=benchmark.generator,
-        ),
-        "training_history": [run.to_record(volume_axis=None) for run in runs],
-        "plot_runs": [run.to_record(volume_axis=None) for run in runs],
-        "model_inspections": _model_inspection_records(accepted_runs),
-    }
-    return record
-
-
 def _benchmark_reference_curve_records(
     *,
     generator: Any,
@@ -1393,15 +1643,6 @@ def _integrated_reference_curve_points(
         )
         previous_log2_volume = log2_volume
     return integrated_points
-
-
-def _model_inspection_records(
-    runs: tuple[_BenchmarkRunRecord, ...],
-) -> list[Mapping[str, object]]:
-    by_digest: dict[str, Mapping[str, object]] = {}
-    for run in runs:
-        by_digest.setdefault(str(run.model_inspection_digest), run.model_inspection)
-    return [by_digest[digest] for digest in sorted(by_digest)]
 
 
 def _model_result_records(
@@ -3079,7 +3320,6 @@ def _validate_volume_integral(record: Mapping[str, object], prefix: str) -> None
             "log2_volume_minimum",
             "log2_volume_maximum",
             "width_in_bits",
-            "competence_density",
             "contribution",
         ):
             _as_nonnegative_number(term_record.get(field), _field_path(term_prefix, field))
@@ -3653,6 +3893,13 @@ def _optional_state_space_region(value: object, field: str) -> Any | None:
 
 
 def _as_positive_int(value: object, field: str) -> int:
-    if type(value) is not int or value < 1:
-        raise LocalResultImportError(f"{field}: expected positive integer")
-    return value
+    if type(value) is int and value >= 1:
+        return value
+    if (
+        isinstance(value, float)
+        and math.isfinite(value)
+        and value.is_integer()
+        and value >= 1
+    ):
+        return int(value)
+    raise LocalResultImportError(f"{field}: expected positive integer")

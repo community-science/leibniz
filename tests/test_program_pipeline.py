@@ -26,6 +26,7 @@ from leibniz.field_evolution import (
     validate_field_stepper_nondegenerate,
 )
 from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
+from leibniz.result_schema import EvaluationDocument
 from leibniz.tensor_runtime import resolve_tensor_runtime
 
 _repository_root = Path(__file__).parents[1]
@@ -324,6 +325,16 @@ def test_program_checkpoint_evaluation_materializes_ks_result_view(tmp_path: Pat
     )
 
     assert evaluation_summary.measurement_count == 0
+    evaluation_record = EvaluationDocument.from_bytes(
+        evaluation_summary.evaluation_bundle_path.read_bytes()
+    ).evaluation
+    assert evaluation_record.converged
+    assert not evaluation_record.evidence_budget_limited
+    assert evaluation_record.diagnostics
+    first_diagnostic = dict(evaluation_record.diagnostics[0])
+    assert first_diagnostic.get("kind") == "certified-bits-diagnostics"
+    assert "certified_epsilon" in first_diagnostic
+    assert cast(list[dict[str, object]], first_diagnostic["time_points"])
     view_summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
         results_root=results_root,
@@ -340,16 +351,12 @@ def test_program_checkpoint_evaluation_materializes_ks_result_view(tmp_path: Pat
     assert math.isfinite(cast(float, leaderboard[0]["score"]))
     assert "program_digest" in leaderboard[0]
     assert "program_graph" in plot_runs[0]
-    # The cutover derives the console view from the slim EvaluationRecord: the
-    # validated-bit Score and the capability map that backs it. The richer
-    # per-sample certification diagnostics (certified epsilon, time points) are
-    # not yet carried on the EvaluationRecord and return with the commit-3
-    # console rebuild -- see the cutover-code-smells memory.
-    sampled_competence = cast(dict[str, object], plot_runs[0]["sampled_competence"])
-    partition_score = cast(dict[str, object], sampled_competence["partition_score"])
     capability_map = cast(dict[str, object], leaderboard[0]["capability_map"])
-    assert leaderboard[0]["score"] == partition_score["value"]
-    assert capability_map["value"] == partition_score["value"]
+    assert leaderboard[0]["score"] == capability_map["value"]
+    assert "sampled_competence" not in plot_runs[0]
+    score_integral = cast(dict[str, object], leaderboard[0]["score_integral"])
+    score_terms = cast(list[dict[str, object]], score_integral["terms"])
+    assert "competence_density" not in score_terms[0]
     assert cast(float, capability_map["score_width_bits"]) > 0.0
     assert cast(float, capability_map["mean_competence"]) >= 0.0
     assert cast(int, capability_map["leaf_count"]) >= 1

@@ -235,9 +235,9 @@ function writeConsoleDataPayloadMetadata() {
 
 function consoleDataInputFiles() {
   return Array.from(new Set([
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/package.json'),
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/vite.config.mjs'),
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/scripts/prepareConsoleData.mjs'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/package.json'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/vite.config.mjs'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/scripts/prepareConsoleData.mjs'),
     ...sourceFiles(resolve(repositoryRoot, 'src/leibniz')),
     ...sourceFiles(resolve(repositoryRoot, 'tests/fixtures')),
     ...consoleResultRoots().flatMap((root) => sourceFiles(root)),

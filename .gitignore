@@ -14,7 +14,7 @@ node_modules/
 dist/
 build/
 .local-cache/
-src/leibniz/console/_web_src/src/generated/
+src/leibniz/console/web/src/generated/
 
 # Local tooling
 .DS_Store

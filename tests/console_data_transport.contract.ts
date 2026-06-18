@@ -1,5 +1,5 @@
-import { parseConsoleDataRecord } from '../src/leibniz/console/_web_src/src/consoleData.ts';
-import { coordinateDisplayName } from '../src/leibniz/console/_web_src/src/operatorVocabulary.ts';
+import { parseConsoleDataRecord } from '../src/leibniz/console/web/src/consoleData.ts';
+import { coordinateDisplayName } from '../src/leibniz/console/web/src/operatorVocabulary.ts';
 
 declare const consoleDataPayload: unknown;
 

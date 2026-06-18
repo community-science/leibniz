@@ -113,7 +113,7 @@ cache fewer buffers.
 - `src/leibniz/benchmarks/`: packaged benchmark manifests and benchmark-local
   protocol documents.
 - `src/leibniz/console/`: console data, artifact indexing, code generation,
-  and the embedded web console source under `_web_src/`.
+  and the embedded web console source under `web/`.
 - `tests/`: Python contract, workflow, and policy tests. Fixtures live under
   `tests/fixtures/`; console web contract tests live beside the Python tests.
 - `scripts/`: repository environment setup and activation helpers.

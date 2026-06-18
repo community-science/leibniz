@@ -448,7 +448,7 @@ def _console_dev_command(args: argparse.Namespace) -> list[str]:
 
 
 def _console_web_source_root() -> Path:
-    return Path(__file__).parent / "console" / "_web_src"
+    return Path(__file__).parent / "console" / "web"
 
 
 def _benchmark(args: argparse.Namespace) -> int:

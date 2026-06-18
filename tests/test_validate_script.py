@@ -78,7 +78,7 @@ def test_validation_commands_match_routine_ci_gates() -> None:
         "from pathlib import Path; import leibniz; print(Path(leibniz.__file__).resolve())",
     )
     assert commands[-1].argv == ("npm", "test")
-    assert commands[-1].cwd == _repository_root / "src" / "leibniz" / "console" / "_web_src"
+    assert commands[-1].cwd == _repository_root / "src" / "leibniz" / "console" / "web"
 
 
 def test_validation_commands_can_omit_console_gate() -> None:
