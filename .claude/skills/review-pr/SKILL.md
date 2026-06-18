@@ -9,7 +9,7 @@ A repeatable scaffold for reviewing one round of an implementation against the s
 
 ## 1. Ground the change in the architecture
 
-Before reading the diff, re-read the living architecture (the console Architecture tab, `src/leibniz/console/_web_src/src/ArchitecturePanel.tsx`). State which root, edge, or roadmap step the change advances, in the architecture's own vocabulary, and resolve to one of:
+Before reading the diff, re-read the living architecture (the console Architecture tab, `src/leibniz/console/web/src/ArchitecturePanel.tsx`). State which root, edge, or roadmap step the change advances, in the architecture's own vocabulary, and resolve to one of:
 
 - **Grounded** — it advances a named node, edge, or roadmap step, or closes an open rung. Frame the review in that language.
 - **Gap** — it needs a concept the architecture does not yet have. The change should propose the addition and land it in its fold-back.

@@ -153,15 +153,15 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: src/leibniz/console/_web_src/package-lock.json
+          cache-dependency-path: src/leibniz/console/web/package-lock.json
 
       - name: Install console dependencies
         run: npm ci
-        working-directory: src/leibniz/console/_web_src
+        working-directory: src/leibniz/console/web
 
       - name: Install headless browser
         run: npx playwright install --with-deps chromium
-        working-directory: src/leibniz/console/_web_src
+        working-directory: src/leibniz/console/web
 
       - name: Run console workflow tests
         run: python scripts/validate.py --check console
