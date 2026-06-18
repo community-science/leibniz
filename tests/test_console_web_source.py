@@ -2,7 +2,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from leibniz.cli import _console_dependencies_missing
+from leibniz.cli import _console_dependencies_missing  # pyright: ignore[reportPrivateUsage]
 from leibniz.console.protocol import (
     console_protocol_format_versions,
     console_protocol_formats,
