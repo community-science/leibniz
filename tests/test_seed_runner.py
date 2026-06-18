@@ -71,3 +71,23 @@ def test_seed_runner_scores_diverging_submission_at_boundary(tmp_path: Path) -> 
     assert evaluation.validated_bits >= 0.0
     assert cast(float, evaluation.capability_map["value"]) == evaluation.validated_bits
     assert isinstance(evaluation.capability_map["root"], dict)
+
+
+def test_seed_runner_evaluates_inverse_digits_submission(tmp_path: Path) -> None:
+    results_root = tmp_path / "results"
+    seed = SeedSubmission(
+        name="digits-inverse-conv-encoder",
+        program_path=_program_root / "digits_inverse_conv_encoder.py",
+        benchmark_root=_benchmark_root_base / "digits",
+        train_steps=0,
+        learning_rate=1e-3,
+    )
+
+    result = run_seed_submission(seed, results_root=results_root, tensor_device="cpu")
+
+    evaluation = EvaluationDocument.from_bytes(result.evaluation_path.read_bytes()).evaluation
+
+    assert math.isfinite(evaluation.validated_bits)
+    assert evaluation.validated_bits >= 0.0
+    assert cast(float, evaluation.capability_map["value"]) == evaluation.validated_bits
+    assert isinstance(evaluation.capability_map["root"], dict)

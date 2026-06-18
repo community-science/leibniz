@@ -150,7 +150,10 @@ _progress_format = "leibniz.benchmark-training-progress"
 _progress_format_version = 1
 _default_training_batch_target = 512
 _default_gate_batch_target = 512
+_default_certified_bits_gate_batch_target = 4
 _default_evaluation_convergence_min_samples = 64
+_default_certified_bits_evaluation_min_samples = 1
+_default_certified_bits_evaluation_max_rungs = 1
 _default_evaluation_convergence_half_width = 0.05
 _default_evaluation_convergence_confidence_z = 1.96
 _default_evaluation_integral_relative_half_width = 0.05
@@ -728,12 +731,16 @@ def _evaluation_estimate_converged(
     estimator: _RunningMeanEstimator,
     *,
     sampling_protocol: SamplingProtocol,
+    min_samples: int = _default_evaluation_convergence_min_samples,
+    deterministic_width: bool = False,
     half_width_threshold: float = _default_evaluation_convergence_half_width,
 ) -> bool:
+    if deterministic_width:
+        return estimator.samples >= min_samples
     if _evaluation_confidence_method_id(sampling_protocol) is None:
         return estimator.samples >= 1
     return (
-        estimator.samples >= _default_evaluation_convergence_min_samples
+        estimator.samples >= min_samples
         and _evaluation_confidence_half_width(
             estimator,
             sampling_protocol=sampling_protocol,
@@ -745,10 +752,11 @@ def _evaluation_estimate_converged(
 def _evaluation_next_sample_count(
     estimator: _RunningMeanEstimator,
     *,
+    min_samples: int = _default_evaluation_convergence_min_samples,
     half_width_threshold: float = _default_evaluation_convergence_half_width,
 ) -> int:
-    if estimator.samples < _default_evaluation_convergence_min_samples:
-        return _default_evaluation_convergence_min_samples - estimator.samples
+    if estimator.samples < min_samples:
+        return min_samples - estimator.samples
     target = math.ceil(
         estimator.sample_variance
         * (_default_evaluation_convergence_confidence_z / half_width_threshold) ** 2
@@ -1226,7 +1234,7 @@ def run_benchmark(
         target_contract=target_contract,
         accessible_subspace=accessible_subspace,
         sample_count=_default_training_batch_target,
-        gate_sample_count=_default_gate_batch_target,
+        gate_sample_count=_training_gate_sample_count(target_contract),
         train_steps=plan.train_steps,
         learning_rate=plan.learning_rate,
         optimizer_name=plan.optimizer,
@@ -2553,8 +2561,15 @@ def evaluate_model_checkpoint_artifact(
         runtime=predictor.runtime,
         competence_factory=competence_factory,
     )
+    competence_value_kind = _competence_value_kind(target_contract)
+    max_rungs = (
+        _default_certified_bits_evaluation_max_rungs
+        if competence_value_kind == "validated-bits"
+        else None
+    )
     capacity_limited = False
     curriculum_exhausted = False
+    rung_limited = False
     planner = _VolumeCurriculumPlanner()
     while True:
         with phase_timings.span("checkpoint_evaluation.rung_preparation"):
@@ -2592,6 +2607,7 @@ def evaluate_model_checkpoint_artifact(
                     sampling_protocol=sampling_protocol,
                     evaluation_counter=evaluation_counter,
                     phase_timings=phase_timings,
+                    competence_value_kind=competence_value_kind,
                 )
         except _RuntimeCapacityReached:
             if not results:
@@ -2605,11 +2621,15 @@ def evaluate_model_checkpoint_artifact(
             tuple(result.rung for result in results),
             accessible_subspace=accessible_subspace,
         )
+        if max_rungs is not None and len(results) >= max_rungs:
+            rung_limited = True
+            break
         with phase_timings.span("checkpoint_evaluation.integration_check"):
             integration_evidence = _evaluation_integration_evidence(
                 evaluation_results=results,
                 outcome_ids=outcome_ids,
                 target_contract=target_contract,
+                competence_value_kind=competence_value_kind,
             )
         if integration_evidence.converged:
             break
@@ -2647,6 +2667,7 @@ def evaluate_model_checkpoint_artifact(
     throughput["phase_timing"] = phase_timings.to_record()
     throughput["capacity_limited"] = capacity_limited
     throughput["curriculum_exhausted"] = curriculum_exhausted
+    throughput["rung_limited"] = rung_limited
     compile_fallbacks = tensor_element_compile_fallback_records()
     if compile_fallbacks:
         throughput["tensor_compile_fallbacks"] = [dict(fallback) for fallback in compile_fallbacks]
@@ -3118,6 +3139,7 @@ def _evaluate_checkpoint_rung(
     sampling_protocol: SamplingProtocol,
     evaluation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
+    competence_value_kind: str | None = None,
 ) -> _CheckpointEvaluationRungEvidence:
     estimator = _RunningMeanEstimator()
     max_cost_measurement: tuple[CostMeasurement, int] | None = None
@@ -3140,9 +3162,17 @@ def _evaluate_checkpoint_rung(
         if census_indices is not None
         else sampling_protocol
     )
+    min_samples = (
+        _default_certified_bits_evaluation_min_samples
+        if competence_value_kind == "validated-bits"
+        else _default_evaluation_convergence_min_samples
+    )
+    deterministic_width = competence_value_kind == "validated-bits"
     while not _evaluation_estimate_converged(
         estimator,
         sampling_protocol=effective_sampling_protocol,
+        min_samples=min_samples,
+        deterministic_width=deterministic_width,
         half_width_threshold=half_width_threshold,
     ):
         next_sample_count = (
@@ -3150,6 +3180,7 @@ def _evaluate_checkpoint_rung(
             if census_indices is not None
             else _evaluation_next_sample_count(
                 estimator,
+                min_samples=min_samples,
                 half_width_threshold=half_width_threshold,
             )
         )
@@ -3180,13 +3211,17 @@ def _evaluate_checkpoint_rung(
         rung=replace(rung, sample_count=observed_sample_count),
         mean_accepted_mass=estimator.mean,
         sample_count=observed_sample_count,
-        confidence_half_width=_evaluation_confidence_half_width(
-            estimator,
-            sampling_protocol=effective_sampling_protocol,
+        confidence_half_width=(
+            0.0
+            if deterministic_width
+            else _evaluation_confidence_half_width(
+                estimator,
+                sampling_protocol=effective_sampling_protocol,
+            )
         ),
         confidence_method_id=(
             None
-            if census_indices is not None
+            if census_indices is not None or deterministic_width
             else _evaluation_confidence_method_id(sampling_protocol)
         ),
         sampling_protocol=effective_sampling_protocol,
@@ -3201,6 +3236,7 @@ def _evaluation_integration_evidence(
     evaluation_results: Sequence[_CheckpointEvaluationRungEvidence],
     outcome_ids: tuple[str, ...],
     target_contract: TargetContract,
+    competence_value_kind: str | None = None,
 ) -> _EvaluationIntegrationEvidence:
     """Return the explicit score-integral state that controls evaluation."""
 
@@ -3217,9 +3253,10 @@ def _evaluation_integration_evidence(
         outcome_ids=outcome_ids,
         target_contract=target_contract,
     )
-    score_integral = sampled_competence_frontier_integral(
-        _evaluation_competence_points(evaluation_results),
+    score_integral = _score_frontier_integral(
+        points=_evaluation_competence_points(evaluation_results),
         chance_mass=chance_mass,
+        competence_value_kind=competence_value_kind,
     )
     return _EvaluationIntegrationEvidence(
         frontier_index=frontier_index,
@@ -4485,6 +4522,23 @@ def _training_score_integral(
 ) -> StateSpaceIntegral:
     if _competence_value_kind(target_contract) != "validated-bits":
         return sampled_competence_frontier_integral(points, chance_mass=chance_mass)
+    return _validated_bits_frontier_integral(points)
+
+
+def _score_frontier_integral(
+    *,
+    points: tuple[CompetencePoint, ...],
+    chance_mass: float,
+    competence_value_kind: str | None,
+) -> StateSpaceIntegral:
+    if competence_value_kind == "validated-bits":
+        return _validated_bits_frontier_integral(points)
+    return sampled_competence_frontier_integral(points, chance_mass=chance_mass)
+
+
+def _validated_bits_frontier_integral(
+    points: tuple[CompetencePoint, ...],
+) -> StateSpaceIntegral:
     terms: list[StateSpaceIntegralTerm] = []
     cursor = 0.0
     for point in sorted(points, key=_competence_point_interval_sort_key):
@@ -6016,6 +6070,12 @@ def _competence_value_kind(contract: TargetContract) -> str | None:
     ):
         return "validated-bits"
     return None
+
+
+def _training_gate_sample_count(contract: TargetContract) -> int:
+    if _competence_value_kind(contract) == "validated-bits":
+        return _default_certified_bits_gate_batch_target
+    return _default_gate_batch_target
 
 
 def _optional_training_loss_factory(
