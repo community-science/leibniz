@@ -181,11 +181,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     model_derivation.add_argument("path", type=Path)
 
-    evaluation_bundle = validate_subcommands.add_parser(
-        "evaluation-bundle",
-        help="validate a benchmark evaluation bundle document",
+    evaluation_record = validate_subcommands.add_parser(
+        "evaluation-record",
+        help="validate a benchmark evaluation record document",
     )
-    evaluation_bundle.add_argument("path", type=Path)
+    evaluation_record.add_argument("path", type=Path)
 
     submission_registry = validate_subcommands.add_parser(
         "submission-registry",
@@ -531,8 +531,8 @@ def _benchmark(args: argparse.Namespace) -> int:
                     f"{prefix} benchmark training run {summary.run_slug} "
                     f"({summary.measurement_count} benchmark measurement(s) planned)"
                 )
-                print(f"training summary: {summary.training_summary_path}")
-                print(f"model artifacts: {summary.model_artifact_root}")
+                print(f"submission record: {summary.submission_record_path}")
+                print(f"submission artifacts: {summary.submission_artifact_root}")
             if skipped:
                 print(f"skipped {skipped} completed benchmark training manifest(s)")
             if moved:
@@ -574,7 +574,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                     f"completed benchmark evaluation {summary.run_slug} "
                     f"({summary.measurement_count} measurement(s))"
                 )
-                print(f"evaluation bundle: {summary.evaluation_bundle_path}")
+                print(f"evaluation record: {summary.evaluation_record_path}")
             if not evaluation_summaries and args.checkpoint_artifact is not None:
                 raise ValueError("no checkpoint artifacts matched benchmark evaluation inputs")
             if not evaluation_summaries:
@@ -858,9 +858,9 @@ def _benchmark_training_completed(plan: BenchmarkRunPlan) -> bool:
             dry_run=True,
         )
     )
-    if not summary.training_summary_path.is_file():
+    if not summary.submission_record_path.is_file():
         return False
-    record = _load_object_record(summary.training_summary_path, description="training summary")
+    record = _load_object_record(summary.submission_record_path, description="training summary")
     completed = record.get("run_status") == "completed"
     return completed
 
@@ -893,7 +893,7 @@ def _benchmark_views_present(
     results_root: Path,
     benchmark_selectors: tuple[str, ...],
 ) -> bool:
-    paths = _evaluation_bundle_paths(
+    paths = _evaluation_record_paths(
         results_root=results_root,
         benchmark_selectors=benchmark_selectors,
     )
@@ -948,7 +948,7 @@ def _evaluation_checkpoint_artifacts(
         if not _benchmark_selected(benchmark_id, benchmark_selectors):
             continue
         run_slug = provenance.get("run_slug")
-        if isinstance(run_slug, str) and _evaluation_bundle_exists(
+        if isinstance(run_slug, str) and _evaluation_record_exists(
             results_root=results_root,
             benchmark_id=benchmark_id,
             run_slug=run_slug,
@@ -975,7 +975,7 @@ def _resolve_result_artifact_path(path: Path, *, results_root: Path) -> Path:
     return path
 
 
-def _evaluation_bundle_paths(
+def _evaluation_record_paths(
     *,
     results_root: Path,
     benchmark_selectors: tuple[str, ...],
@@ -993,7 +993,7 @@ def _evaluation_bundle_paths(
     return tuple(paths)
 
 
-def _evaluation_bundle_exists(
+def _evaluation_record_exists(
     *,
     results_root: Path,
     benchmark_id: str,
@@ -1149,7 +1149,7 @@ def _validate(args: argparse.Namespace) -> int:
             document = ModelDerivationCompatibilityReportDocument.from_bytes(args.path.read_bytes())
             print(f"valid model derivation compatibility report {document.report.id}")
             return 0
-        if artifact == "evaluation-bundle":
+        if artifact == "evaluation-record":
             document = EvaluationDocument.from_bytes(args.path.read_bytes())
             print(f"valid evaluation {document.evaluation.id}")
             return 0

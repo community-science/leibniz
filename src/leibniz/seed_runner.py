@@ -91,7 +91,7 @@ def run_seed_submission(
         )
     )
     checkpoint_path = _submission_selected_checkpoint_path(
-        summary.training_summary_path,
+        summary.submission_record_path,
         results_root=results_root,
     )
     evaluation = evaluate_benchmark_checkpoint(
@@ -105,8 +105,8 @@ def run_seed_submission(
     )
     return SeedResult(
         name=seed.name,
-        submission_path=summary.training_summary_path,
-        evaluation_path=evaluation.evaluation_bundle_path,
+        submission_path=summary.submission_record_path,
+        evaluation_path=evaluation.evaluation_record_path,
     )
 
 

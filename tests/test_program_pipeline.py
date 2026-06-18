@@ -297,7 +297,7 @@ def test_program_checkpoint_evaluation_materializes_ks_result_view(tmp_path: Pat
         )
     )
     submission_record = load_object_document(
-        training_summary.training_summary_path.read_bytes(),
+        training_summary.submission_record_path.read_bytes(),
         description="submission record",
     )
     assert submission_record["format"] == "leibniz.submission"
@@ -315,7 +315,7 @@ def test_program_checkpoint_evaluation_materializes_ks_result_view(tmp_path: Pat
     evaluation_summary = evaluate_benchmark_checkpoint(
         BenchmarkEvaluationPlan(
             checkpoint_artifact_path=_selected_checkpoint_artifact_path(
-                training_summary.training_summary_path,
+                training_summary.submission_record_path,
                 results_root=results_root,
             ),
             benchmark_root=_ks_benchmark_root,
@@ -326,7 +326,7 @@ def test_program_checkpoint_evaluation_materializes_ks_result_view(tmp_path: Pat
 
     assert evaluation_summary.measurement_count == 0
     evaluation_record = EvaluationDocument.from_bytes(
-        evaluation_summary.evaluation_bundle_path.read_bytes()
+        evaluation_summary.evaluation_record_path.read_bytes()
     ).evaluation
     assert evaluation_record.converged
     assert not evaluation_record.evidence_budget_limited
@@ -387,7 +387,7 @@ def test_cli_benchmark_train_accepts_program_flag(
 
     assert exit_code == 0
     assert "planned benchmark training run digits-program-" in output
-    assert "training summary:" in output
+    assert "submission record:" in output
 
 
 def test_field_program_scale_violation_is_rejected_before_training(tmp_path: Path) -> None:
@@ -443,12 +443,12 @@ def build_program_graph(runtime):
 
 
 def _selected_checkpoint_artifact_path(
-    training_summary_path: Path,
+    submission_record_path: Path,
     *,
     results_root: Path,
 ) -> Path:
     submission = load_object_document(
-        training_summary_path.read_bytes(),
+        submission_record_path.read_bytes(),
         description="submission record",
     )
     provenance = cast(dict[str, object], submission["training_provenance"])

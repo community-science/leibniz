@@ -987,7 +987,7 @@ class BenchmarkEvaluationSummary:
 
     run_slug: str
     benchmark_id: ProtocolIdentifier
-    evaluation_bundle_path: Path
+    evaluation_record_path: Path
     measurement_count: int
 
 
@@ -1096,8 +1096,8 @@ class BenchmarkRunSummary:
     benchmark_id: ProtocolIdentifier
     program_path: Path
     measurement_count: int
-    training_summary_path: Path
-    model_artifact_root: Path
+    submission_record_path: Path
+    submission_artifact_root: Path
     dry_run: bool
     results_root: Path
 
@@ -1114,12 +1114,12 @@ class BenchmarkRunSummary:
                 results_root=self.results_root,
             ),
             "measurement_count": self.measurement_count,
-            "training_summary_path": _portable_record_path(
-                self.training_summary_path,
+            "submission_record_path": _portable_record_path(
+                self.submission_record_path,
                 results_root=self.results_root,
             ),
-            "model_artifact_root": _portable_record_path(
-                self.model_artifact_root,
+            "submission_artifact_root": _portable_record_path(
+                self.submission_artifact_root,
                 results_root=self.results_root,
             ),
             "dry_run": self.dry_run,
@@ -1424,8 +1424,8 @@ def run_benchmark(
         "format_version",
         "program_graph",
         "program",
-        "training_summary_path",
-        "model_artifact_root",
+        "submission_record_path",
+        "submission_artifact_root",
     ):
         training_provenance.pop(provenance_drop_key, None)
     training_provenance["kind"] = "benchmark-training-provenance"
@@ -1446,8 +1446,8 @@ def run_benchmark(
         ),
         training_provenance=training_provenance,
     )
-    _write_document_atomic(summary.training_summary_path, submission.to_record())
-    if progress_path != summary.training_summary_path:
+    _write_document_atomic(summary.submission_record_path, submission.to_record())
+    if progress_path != summary.submission_record_path:
         progress_path.unlink(missing_ok=True)
     return summary
 
@@ -1466,8 +1466,8 @@ def _run_summary(
         benchmark_id=benchmark_id,
         program_path=plan.program_path,
         measurement_count=0,
-        training_summary_path=(submission_root / f"submission{_document_suffix}"),
-        model_artifact_root=submission_root,
+        submission_record_path=(submission_root / f"submission{_document_suffix}"),
+        submission_artifact_root=submission_root,
         dry_run=plan.dry_run,
         results_root=plan.results_root,
     )
@@ -1496,7 +1496,7 @@ def _portable_record_path(path: Path, *, results_root: Path) -> str:
 
 
 def _training_progress_path(summary: BenchmarkRunSummary) -> Path:
-    return summary.training_summary_path
+    return summary.submission_record_path
 
 
 def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEvaluationSummary:
@@ -1518,7 +1518,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         run_slug = evaluation_input.run_slug
         benchmark_id = evaluation_input.benchmark_id
         benchmark_atom = _identifier_atom(benchmark_id)
-        evaluation_bundle_path = (
+        evaluation_record_path = (
             plan.results_root / "evaluations" / benchmark_atom / f"{run_slug}{_document_suffix}"
         )
         evaluation_seed = _unpredictable_evaluation_seed()
@@ -1688,11 +1688,11 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             evidence_budget_limited=evidence_budget_limited,
             diagnostics=tuple(dict(item) for item in final_competence_diagnostics),
         )
-    _write_document(evaluation_bundle_path, evaluation.to_record())
+    _write_document(evaluation_record_path, evaluation.to_record())
     return BenchmarkEvaluationSummary(
         run_slug=run_slug,
         benchmark_id=benchmark_id,
-        evaluation_bundle_path=evaluation_bundle_path,
+        evaluation_record_path=evaluation_record_path,
         measurement_count=len(measurements),
     )
 
@@ -5569,7 +5569,7 @@ def _write_model_checkpoint_artifact(
 ) -> ModelCheckpointArtifact:
     latest = training_run.validation_history[-1]
     stem = f"gate{latest.validation_check:04d}-step{latest.step:08d}"
-    checkpoint_path = summary.model_artifact_root / f"{stem}.pt"
+    checkpoint_path = summary.submission_artifact_root / f"{stem}.pt"
     _write_torch_checkpoint(checkpoint_path, module=module)
     checkpoint_digest = _file_content_digest(checkpoint_path)
     checkpoint_reference = ArtifactReference(
@@ -5604,7 +5604,7 @@ def _write_model_checkpoint_artifact(
             ),
         ),
     )
-    manifest_path = summary.model_artifact_root / f"{stem}.model{_document_suffix}"
+    manifest_path = summary.submission_artifact_root / f"{stem}.model{_document_suffix}"
     _write_document(manifest_path, manifest.to_record())
     return ModelCheckpointArtifact(
         path=checkpoint_path,
