@@ -121,6 +121,11 @@ _evaluation_record = RecordSpec(
         "evaluation_seed": FieldSpec(kind="integer"),
         "converged": FieldSpec(kind="boolean"),
         "evidence_budget_limited": FieldSpec(kind="boolean"),
+        "diagnostics": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="record"),
+            required=False,
+        ),
     }
 )
 _representation_kinds = frozenset({"finite-outcome", "field-valued", "inverse"})
@@ -393,6 +398,7 @@ class EvaluationRecord:
     evaluation_seed: int
     converged: bool
     evidence_budget_limited: bool
+    diagnostics: tuple[Mapping[str, object], ...] = ()
 
     def __post_init__(self) -> None:
         try:
@@ -412,6 +418,7 @@ class EvaluationRecord:
             raise ResultSchemaError("evidence_budget_limited must be a boolean")
         if self.evidence_budget_limited and self.converged:
             raise ResultSchemaError("budget-limited evaluations cannot be marked converged")
+        _validate_diagnostics(self.diagnostics)
         _validate_capability_map(self.capability_map, validated_bits=self.validated_bits)
 
     @property
@@ -452,10 +459,11 @@ class EvaluationRecord:
                 validated["evidence_budget_limited"],
                 "evidence_budget_limited",
             ),
+            diagnostics=_diagnostics_from_record(validated.get("diagnostics")),
         )
 
     def to_record(self) -> dict[str, object]:
-        return {
+        record: dict[str, object] = {
             "format": _evaluation_format,
             "format_version": _format_version,
             "id": str(self.id),
@@ -471,6 +479,9 @@ class EvaluationRecord:
             "converged": self.converged,
             "evidence_budget_limited": self.evidence_budget_limited,
         }
+        if self.diagnostics:
+            record["diagnostics"] = [dict(item) for item in self.diagnostics]
+        return record
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,6 +552,22 @@ def _validate_capability_map(
         raise ResultSchemaError("capability_map.value must match validated_bits.value")
     if not isinstance(capability_map.get("root"), Mapping):
         raise ResultSchemaError("capability_map.root must be a record")
+
+
+def _diagnostics_from_record(value: object) -> tuple[Mapping[str, object], ...]:
+    if value is None:
+        return ()
+    return tuple(
+        _extract.mapping(item, "diagnostics[]")
+        for item in _extract.sequence(value, "diagnostics")
+    )
+
+
+def _validate_diagnostics(diagnostics: Sequence[Mapping[str, object]]) -> None:
+    for index, item in enumerate(diagnostics):
+        kind = item.get("kind")
+        if kind is not None and (not isinstance(kind, str) or not kind):
+            raise ResultSchemaError(f"diagnostics[{index}].kind must be a nonempty string")
 
 
 def _nonnegative_number(value: object, *, field: str) -> float:

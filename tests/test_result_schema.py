@@ -115,6 +115,13 @@ def _evaluation(submission: SubmissionRecord) -> EvaluationRecord:
         evaluation_seed=7,
         converged=True,
         evidence_budget_limited=False,
+        diagnostics=(
+            {
+                "kind": "certified-bits-diagnostics",
+                "certified_epsilon": 0.125,
+                "time_points": [{"time": 0.0, "bits": 1.0}],
+            },
+        ),
     )
 
 
@@ -169,6 +176,9 @@ def test_evaluation_round_trips_and_pivots_by_id() -> None:
     assert str(restored.evaluation.submission_id) == "submissions.ks-spectral-solver@0.1.0"
     assert str(restored.evaluation.benchmark_id) == "benchmarks.ks.generator@0.1.0"
     assert restored.evaluation.cost == _cost_measurement()
+    [diagnostic] = restored.evaluation.diagnostics
+    assert diagnostic["kind"] == "certified-bits-diagnostics"
+    assert diagnostic["certified_epsilon"] == 0.125
 
 
 def test_evaluation_rejects_capability_map_value_mismatch() -> None:

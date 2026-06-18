@@ -1686,6 +1686,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             evaluation_seed=evaluation_seed,
             converged=evaluation_converged,
             evidence_budget_limited=evidence_budget_limited,
+            diagnostics=tuple(dict(item) for item in final_competence_diagnostics),
         )
     _write_document(evaluation_bundle_path, evaluation.to_record())
     return BenchmarkEvaluationSummary(
