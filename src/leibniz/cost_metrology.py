@@ -1389,6 +1389,7 @@ _convolution_ops = frozenset(
 
 _movement_ops = frozenset(
     {
+        "aten._to_copy.default",
         "aten.clone.default",
         "aten.cat.default",
         "aten.copy.default",
