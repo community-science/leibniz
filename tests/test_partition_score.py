@@ -1,9 +1,11 @@
 import math
 from pathlib import Path
 
+from leibniz.benchmark_implementations import Generator
 from leibniz.observation_generation import StateSpaceVolumeRequest, load_generator
 from leibniz.partition_score import (
     PartitionSample,
+    PartitionScore,
     adversarial_partition_competence_integral,
     fixed_partition_competence_integral,
     partition_samples_from_generated,
@@ -217,6 +219,29 @@ def test_adversarial_partition_runs_on_real_digits_tree_and_ladder() -> None:
     )
 
 
+def test_validated_bits_partition_converges_on_real_digits_region() -> None:
+    generator = load_generator(Path("src/leibniz/benchmarks/digits"))
+
+    coarse = _digits_component_score(generator=generator, sample_count=16)
+    fine = _digits_component_score(generator=generator, sample_count=32)
+    finer = _digits_component_score(generator=generator, sample_count=64)
+
+    assert len(coarse.root.leaves()) > 1
+    assert len(fine.root.leaves()) > 1
+    assert len(finer.root.leaves()) > 1
+    assert math.isclose(fine.value, finer.value, abs_tol=1e-12)
+    assert math.isclose(fine.mean_competence, finer.mean_competence, abs_tol=1e-12)
+
+    uniform = _digits_component_score(
+        generator=generator,
+        sample_count=64,
+        structured=False,
+    )
+    assert len(uniform.root.leaves()) == 1
+    assert len(uniform.refinement_ladder) == 1
+    assert math.isclose(uniform.mean_competence, 1.0)
+
+
 def test_axis_split_preserves_estimated_measure_inside_mixed_product() -> None:
     root = _mixed_estimated_region()
     samples: list[PartitionSample] = []
@@ -366,6 +391,39 @@ def _mixed_estimated_region() -> StateSpaceRegion:
         volume=16,
         log2_volume=4.0,
         measure_estimate=product_measure,
+    )
+
+
+def _digits_component_score(
+    *,
+    generator: Generator,
+    sample_count: int,
+    structured: bool = True,
+) -> PartitionScore:
+    batch = generator(
+        seed=31,
+        shape=sample_count,
+        include_metadata=True,
+        volume_request=StateSpaceVolumeRequest(minimum=3.0, maximum=4.0),
+        sample_indices=tuple(range(sample_count)),
+    )
+    assert batch.region is not None
+    return adversarial_partition_competence_integral(
+        root_region=batch.region,
+        samples=partition_samples_from_generated(
+            batch.samples,
+            {
+                sample.index: (
+                    0.0
+                    if structured
+                    and sample.region_component_index is not None
+                    and sample.region_component_index < 2
+                    else 1.0
+                )
+                for sample in batch.samples
+            },
+        ),
+        score_width_bits=1.0,
     )
 
 

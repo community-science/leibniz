@@ -52,6 +52,7 @@ class SeedSubmission:
     # parameters to fit, so the value is immaterial for them.
     learning_rate: float | None = 1e-3
     seed: int = 101
+    evaluation_half_width_threshold: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +100,7 @@ def run_seed_submission(
             benchmark_root=seed.benchmark_root,
             results_root=results_root,
             tensor_device=tensor_device,
+            half_width_threshold=seed.evaluation_half_width_threshold,
         )
     )
     return SeedResult(

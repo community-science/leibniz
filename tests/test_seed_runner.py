@@ -20,6 +20,7 @@ from leibniz.seed_runner import SeedSubmission, run_seed_submission
 _repository_root = Path(__file__).parents[1]
 _program_root = _repository_root / "tests/fixtures/programs"
 _benchmark_root_base = _repository_root / "src/leibniz/benchmarks"
+_fast_gate_half_width_threshold = 10.0
 
 
 def _evaluation_ladder_length(capability_map: Mapping[str, object]) -> int:
@@ -37,6 +38,7 @@ def test_seed_runner_emits_submission_and_evaluation(tmp_path: Path) -> None:
         benchmark_root=_benchmark_root_base / "ks",
         train_steps=0,
         learning_rate=1e-3,
+        evaluation_half_width_threshold=_fast_gate_half_width_threshold,
     )
 
     result = run_seed_submission(seed, results_root=results_root, tensor_device="cpu")
@@ -70,6 +72,7 @@ def _run_ks_fixture(tmp_path: Path, *, name: str, program_name: str) -> Evaluati
             benchmark_root=_benchmark_root_base / "ks",
             train_steps=0,
             learning_rate=1e-3,
+            evaluation_half_width_threshold=_fast_gate_half_width_threshold,
         ),
         results_root=tmp_path / name,
         tensor_device="cpu",
@@ -110,6 +113,7 @@ def test_seed_runner_evaluates_inverse_digits_submission(tmp_path: Path) -> None
         benchmark_root=_benchmark_root_base / "digits",
         train_steps=0,
         learning_rate=1e-3,
+        evaluation_half_width_threshold=_fast_gate_half_width_threshold,
     )
 
     result = run_seed_submission(seed, results_root=results_root, tensor_device="cpu")
@@ -122,3 +126,5 @@ def test_seed_runner_evaluates_inverse_digits_submission(tmp_path: Path) -> None
     assert isinstance(evaluation.capability_map["root"], dict)
     assert _evaluation_ladder_length(evaluation.capability_map) > 1
     assert cast(int, evaluation.capability_map["sample_count"]) >= 2
+    assert not evaluation.converged
+    assert evaluation.evidence_budget_limited

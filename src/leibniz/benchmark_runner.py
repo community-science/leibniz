@@ -154,6 +154,7 @@ _default_gate_batch_target = 512
 _default_certified_bits_gate_batch_target = 4
 _default_evaluation_convergence_min_samples = 64
 _default_certified_bits_evaluation_min_samples = 2
+_default_certified_bits_evaluation_half_width = 0.25
 _default_certified_bits_evaluation_max_rungs = 6
 _default_evaluation_convergence_half_width = 0.05
 _default_evaluation_convergence_confidence_z = 1.96
@@ -708,17 +709,29 @@ class _RunningMeanEstimator:
             return 0.25
         return min(0.25, max(0.0, self._sum_squared_delta / (self.samples - 1)))
 
+    @property
+    def unbounded_sample_variance(self) -> float:
+        if self.samples < 2:
+            return math.inf
+        return max(0.0, self._sum_squared_delta / (self.samples - 1))
+
 
 def _evaluation_confidence_half_width(
     estimator: _RunningMeanEstimator,
     *,
     sampling_protocol: SamplingProtocol,
+    competence_value_kind: str | None = None,
 ) -> float:
     if estimator.samples < 1:
         return math.inf
     method_id = _evaluation_confidence_method_id(sampling_protocol)
     if method_id is None:
         return 0.0
+    if competence_value_kind == "validated-bits":
+        return _normal_sample_mean_half_width(
+            estimator,
+            z=_default_evaluation_convergence_confidence_z,
+        )
     if method_id != "wilson":
         raise BenchmarkRunnerError(f"unsupported confidence_method_id: {method_id}")
     return _wilson_confidence_half_width(
@@ -728,12 +741,34 @@ def _evaluation_confidence_half_width(
     )
 
 
+def _normal_sample_mean_half_width(
+    estimator: _RunningMeanEstimator,
+    *,
+    z: float,
+) -> float:
+    if estimator.samples < 2:
+        return math.inf
+    return z * math.sqrt(estimator.unbounded_sample_variance / estimator.samples)
+
+
 def _evaluation_confidence_method_id(protocol: SamplingProtocol) -> str | None:
     if protocol.kind == "census":
         return None
     if protocol.confidence_method_id is None:
         raise BenchmarkRunnerError("sampling protocol is missing confidence_method_id")
     return protocol.confidence_method_id
+
+
+def _evaluation_checkpoint_confidence_method_id(
+    protocol: SamplingProtocol,
+    *,
+    competence_value_kind: str | None,
+) -> str | None:
+    if _evaluation_confidence_method_id(protocol) is None:
+        return None
+    if competence_value_kind == "validated-bits":
+        return "normal-sample-mean-1.96se"
+    return _evaluation_confidence_method_id(protocol)
 
 
 def _wilson_confidence_half_width(
@@ -759,11 +794,9 @@ def _evaluation_estimate_converged(
     *,
     sampling_protocol: SamplingProtocol,
     min_samples: int = _default_evaluation_convergence_min_samples,
-    deterministic_width: bool = False,
+    competence_value_kind: str | None = None,
     half_width_threshold: float = _default_evaluation_convergence_half_width,
 ) -> bool:
-    if deterministic_width:
-        return estimator.samples >= min_samples
     if _evaluation_confidence_method_id(sampling_protocol) is None:
         return estimator.samples >= 1
     return (
@@ -771,6 +804,7 @@ def _evaluation_estimate_converged(
         and _evaluation_confidence_half_width(
             estimator,
             sampling_protocol=sampling_protocol,
+            competence_value_kind=competence_value_kind,
         )
         <= half_width_threshold
     )
@@ -780,15 +814,39 @@ def _evaluation_next_sample_count(
     estimator: _RunningMeanEstimator,
     *,
     min_samples: int = _default_evaluation_convergence_min_samples,
+    competence_value_kind: str | None = None,
     half_width_threshold: float = _default_evaluation_convergence_half_width,
 ) -> int:
     if estimator.samples < min_samples:
         return min_samples - estimator.samples
+    if competence_value_kind == "validated-bits":
+        variance = estimator.unbounded_sample_variance
+        if not math.isfinite(variance) or variance <= 0.0:
+            return 1
+        target = math.ceil(
+            variance * (_default_evaluation_convergence_confidence_z / half_width_threshold) ** 2
+        )
+        return max(1, target - estimator.samples)
     target = math.ceil(
         estimator.sample_variance
         * (_default_evaluation_convergence_confidence_z / half_width_threshold) ** 2
     )
     return max(1, target - estimator.samples)
+
+
+def _evaluation_half_width_threshold(
+    *,
+    chance_mass: float,
+    competence_value_kind: str | None,
+    requested: float | None,
+) -> float:
+    if requested is not None:
+        return float(requested)
+    if competence_value_kind == "validated-bits":
+        return _default_certified_bits_evaluation_half_width
+    if chance_mass >= 1.0:
+        return _default_evaluation_convergence_half_width
+    return _default_evaluation_convergence_half_width * (1.0 - chance_mass)
 
 
 def _sampling_protocol_saturates_to_census(
@@ -908,12 +966,19 @@ class BenchmarkEvaluationPlan:
     checkpoint_artifact_path: Path
     results_root: Path = Path("results")
     tensor_device: TensorRuntimeDevice = "auto"
+    half_width_threshold: float | None = None
 
     def __post_init__(self) -> None:
         try:
             validate_tensor_runtime_device(self.tensor_device)
         except TensorRuntimeError as error:
             raise BenchmarkRunnerError(str(error)) from error
+        if self.half_width_threshold is not None and (
+            type(self.half_width_threshold) not in (int, float)
+            or not math.isfinite(float(self.half_width_threshold))
+            or float(self.half_width_threshold) <= 0.0
+        ):
+            raise BenchmarkRunnerError("half_width_threshold must be finite and positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1474,6 +1539,12 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             sampling_protocol=benchmark.sampling_protocol,
             seed=evaluation_seed,
             tensor_device=plan.tensor_device,
+            half_width_threshold=(
+                _default_certified_bits_evaluation_half_width
+                if plan.half_width_threshold is None
+                and _competence_value_kind(target_contract) == "validated-bits"
+                else plan.half_width_threshold
+            ),
             checkpoint=selected_checkpoint,
         )
     with workflow_timings.span("evaluation_workflow.integration_evidence"):
@@ -1569,6 +1640,16 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             frontier_index=evaluation_frontier_index,
         )
         capability_map["evaluation_frontier_index"] = evaluation_frontier_index
+        evaluation_converged = _required_bool(
+            checkpoint_evaluation_throughput.get("converged"),
+            "checkpoint_evaluation.converged",
+        )
+        evidence_budget_limited = _required_bool(
+            checkpoint_evaluation_throughput.get("evidence_budget_limited"),
+            "checkpoint_evaluation.evidence_budget_limited",
+        )
+        capability_map["evaluation_converged"] = evaluation_converged
+        capability_map["evidence_budget_limited"] = evidence_budget_limited
         validated_bits = _required_float(
             capability_map.get("value"),
             "sampled_competence.partition_score.value",
@@ -1603,6 +1684,8 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
                 measurement_dataset_digest=dataset.digest,
             ),
             evaluation_seed=evaluation_seed,
+            converged=evaluation_converged,
+            evidence_budget_limited=evidence_budget_limited,
         )
     _write_document(evaluation_bundle_path, evaluation.to_record())
     return BenchmarkEvaluationSummary(
@@ -2563,6 +2646,7 @@ def evaluate_model_checkpoint_artifact(
     sampling_protocol: SamplingProtocol,
     seed: int,
     tensor_device: TensorRuntimeDevice,
+    half_width_threshold: float | None,
     checkpoint: ModelCheckpointArtifact,
 ) -> tuple[
     tuple[_CheckpointEvaluationRungEvidence, ...],
@@ -2597,6 +2681,7 @@ def evaluate_model_checkpoint_artifact(
     capacity_limited = False
     curriculum_exhausted = False
     evidence_budget_limited = False
+    evaluation_converged = False
     planner = _VolumeCurriculumPlanner()
     while True:
         with phase_timings.span("checkpoint_evaluation.rung_preparation"):
@@ -2614,6 +2699,7 @@ def evaluate_model_checkpoint_artifact(
                 if not results:
                     raise
                 curriculum_exhausted = True
+                evaluation_converged = True
                 break
             except _EmptyCurriculumWindow:
                 if not results:
@@ -2621,6 +2707,7 @@ def evaluate_model_checkpoint_artifact(
                         "checkpoint evaluation first curriculum rung materialized no samples"
                     ) from None
                 curriculum_exhausted = True
+                evaluation_converged = True
                 break
         try:
             with phase_timings.span("checkpoint_evaluation.rung_evaluation"):
@@ -2635,6 +2722,7 @@ def evaluate_model_checkpoint_artifact(
                     evaluation_counter=evaluation_counter,
                     phase_timings=phase_timings,
                     competence_value_kind=competence_value_kind,
+                    half_width_threshold=half_width_threshold,
                 )
         except _RuntimeCapacityReached:
             if not results:
@@ -2654,8 +2742,9 @@ def evaluate_model_checkpoint_artifact(
                 outcome_ids=outcome_ids,
                 target_contract=target_contract,
                 competence_value_kind=competence_value_kind,
-            )
+        )
         if integration_evidence.converged:
+            evaluation_converged = True
             break
         if (
             competence_value_kind == "validated-bits"
@@ -2698,6 +2787,7 @@ def evaluate_model_checkpoint_artifact(
     throughput["capacity_limited"] = capacity_limited
     throughput["curriculum_exhausted"] = curriculum_exhausted
     throughput["evidence_budget_limited"] = evidence_budget_limited
+    throughput["converged"] = evaluation_converged and not evidence_budget_limited
     compile_fallbacks = tensor_element_compile_fallback_records()
     if compile_fallbacks:
         throughput["tensor_compile_fallbacks"] = [dict(fallback) for fallback in compile_fallbacks]
@@ -3165,14 +3255,15 @@ def _evaluate_checkpoint_rung(
     evaluation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
     competence_value_kind: str | None = None,
+    half_width_threshold: float | None = None,
 ) -> _CheckpointEvaluationRungEvidence:
     estimator = _RunningMeanEstimator()
     max_cost_measurement: tuple[CostMeasurement, int] | None = None
     chance_mass = _target_contract_chance_mass(target_contract)
-    half_width_threshold = (
-        _default_evaluation_convergence_half_width
-        if chance_mass >= 1.0
-        else _default_evaluation_convergence_half_width * (1.0 - chance_mass)
+    resolved_half_width_threshold = _evaluation_half_width_threshold(
+        chance_mass=chance_mass,
+        competence_value_kind=competence_value_kind,
+        requested=half_width_threshold,
     )
     census_indices = (
         _census_sample_indices(rung.batch.region)
@@ -3192,13 +3283,12 @@ def _evaluate_checkpoint_rung(
         if competence_value_kind == "validated-bits"
         else _default_evaluation_convergence_min_samples
     )
-    deterministic_width = competence_value_kind == "validated-bits"
     while not _evaluation_estimate_converged(
         estimator,
         sampling_protocol=effective_sampling_protocol,
         min_samples=min_samples,
-        deterministic_width=deterministic_width,
-        half_width_threshold=half_width_threshold,
+        competence_value_kind=competence_value_kind,
+        half_width_threshold=resolved_half_width_threshold,
     ):
         next_sample_count = (
             len(census_indices)
@@ -3206,7 +3296,8 @@ def _evaluate_checkpoint_rung(
             else _evaluation_next_sample_count(
                 estimator,
                 min_samples=min_samples,
-                half_width_threshold=half_width_threshold,
+                competence_value_kind=competence_value_kind,
+                half_width_threshold=resolved_half_width_threshold,
             )
         )
         for chunk in _checkpoint_evaluation_chunks(
@@ -3236,18 +3327,18 @@ def _evaluate_checkpoint_rung(
         rung=replace(rung, sample_count=observed_sample_count),
         mean_accepted_mass=estimator.mean,
         sample_count=observed_sample_count,
-        confidence_half_width=(
-            0.0
-            if deterministic_width
-            else _evaluation_confidence_half_width(
-                estimator,
-                sampling_protocol=effective_sampling_protocol,
-            )
+        confidence_half_width=_evaluation_confidence_half_width(
+            estimator,
+            sampling_protocol=effective_sampling_protocol,
+            competence_value_kind=competence_value_kind,
         ),
         confidence_method_id=(
             None
-            if census_indices is not None or deterministic_width
-            else _evaluation_confidence_method_id(sampling_protocol)
+            if census_indices is not None
+            else _evaluation_checkpoint_confidence_method_id(
+                sampling_protocol,
+                competence_value_kind=competence_value_kind,
+            )
         ),
         sampling_protocol=effective_sampling_protocol,
         input_shape=_batch_sample_input_shape(batch=rung.batch),
@@ -4036,6 +4127,12 @@ def _required_string(value: object, field: str) -> str:
 def _required_int(value: object, field: str) -> int:
     if type(value) is not int:
         raise BenchmarkRunnerError(f"{field} must be an integer")
+    return value
+
+
+def _required_bool(value: object, field: str) -> bool:
+    if type(value) is not bool:
+        raise BenchmarkRunnerError(f"{field} must be a boolean")
     return value
 
 

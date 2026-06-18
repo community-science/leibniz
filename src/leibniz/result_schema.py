@@ -119,6 +119,8 @@ _evaluation_record = RecordSpec(
         "cost": FieldSpec(kind="record"),
         "lineage": FieldSpec(kind="record"),
         "evaluation_seed": FieldSpec(kind="integer"),
+        "converged": FieldSpec(kind="boolean"),
+        "evidence_budget_limited": FieldSpec(kind="boolean"),
     }
 )
 _representation_kinds = frozenset({"finite-outcome", "field-valued", "inverse"})
@@ -389,6 +391,8 @@ class EvaluationRecord:
     cost: CostMeasurement
     lineage: EvaluationLineage
     evaluation_seed: int
+    converged: bool
+    evidence_budget_limited: bool
 
     def __post_init__(self) -> None:
         try:
@@ -402,6 +406,12 @@ class EvaluationRecord:
         _nonnegative_number(self.validated_bits, field="validated_bits")
         if type(self.evaluation_seed) is not int or self.evaluation_seed < 0:
             raise ResultSchemaError("evaluation_seed must be a nonnegative integer")
+        if type(self.converged) is not bool:
+            raise ResultSchemaError("converged must be a boolean")
+        if type(self.evidence_budget_limited) is not bool:
+            raise ResultSchemaError("evidence_budget_limited must be a boolean")
+        if self.evidence_budget_limited and self.converged:
+            raise ResultSchemaError("budget-limited evaluations cannot be marked converged")
         _validate_capability_map(self.capability_map, validated_bits=self.validated_bits)
 
     @property
@@ -437,6 +447,11 @@ class EvaluationRecord:
                 _extract.mapping(validated["lineage"], "lineage")
             ),
             evaluation_seed=_extract.integer(validated["evaluation_seed"], "evaluation_seed"),
+            converged=_extract.boolean(validated["converged"], "converged"),
+            evidence_budget_limited=_extract.boolean(
+                validated["evidence_budget_limited"],
+                "evidence_budget_limited",
+            ),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -453,6 +468,8 @@ class EvaluationRecord:
             "cost": self.cost.to_record(),
             "lineage": self.lineage.to_record(),
             "evaluation_seed": self.evaluation_seed,
+            "converged": self.converged,
+            "evidence_budget_limited": self.evidence_budget_limited,
         }
 
 

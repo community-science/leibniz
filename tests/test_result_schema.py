@@ -113,6 +113,8 @@ def _evaluation(submission: SubmissionRecord) -> EvaluationRecord:
             measurement_dataset_digest=ContentDigest.from_value({"dataset": "stub"}),
         ),
         evaluation_seed=7,
+        converged=True,
+        evidence_budget_limited=False,
     )
 
 
@@ -185,6 +187,29 @@ def test_evaluation_rejects_capability_map_value_mismatch() -> None:
                 benchmark_digest=benchmark.digest,
             ),
             evaluation_seed=0,
+            converged=True,
+            evidence_budget_limited=False,
+        )
+
+
+def test_evaluation_rejects_budget_limited_converged_status() -> None:
+    submission = _deterministic_submission()
+    benchmark = _benchmark_metadata()
+    with pytest.raises(ResultSchemaError, match="budget-limited"):
+        EvaluationRecord(
+            id=ProtocolIdentifier.parse("evaluations.status.ks@0.1.0"),
+            submission_id=submission.id,
+            benchmark_id=benchmark.id,
+            validated_bits=3.5,
+            capability_map=_capability_map(3.5),
+            cost=_cost_measurement(),
+            lineage=EvaluationLineage(
+                submission_digest=submission.digest,
+                benchmark_digest=benchmark.digest,
+            ),
+            evaluation_seed=0,
+            converged=True,
+            evidence_budget_limited=True,
         )
 
 
