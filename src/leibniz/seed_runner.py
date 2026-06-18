@@ -144,4 +144,9 @@ def _submission_selected_checkpoint_path(
         raise SeedRunnerError(
             f"{submission_path}: selected_model_checkpoint has no record_path"
         )
-    return results_root / record_path.removeprefix("results/")
+    path = Path(record_path)
+    if path.is_absolute():
+        return path
+    if path.parts[:1] == (results_root.name,):
+        return (results_root.parent / path).resolve()
+    return results_root / path

@@ -178,6 +178,12 @@ _field_valued_competence_kinds = frozenset(
         "mass-within-resolution",
     }
 )
+_validated_bit_competence_kinds = frozenset(
+    {
+        "ambient-certified-bits",
+        "convergence-resolved-bits",
+    }
+)
 
 
 class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
@@ -319,7 +325,7 @@ class CheckpointModelPredictor:
             target_contract=self.target_contract,
         )
         with no_grad_context(self.runtime):
-            if self.target_contract.kind == "field-valued":
+            if self.target_contract.kind in {"field-valued", "inverse"}:
                 return _model_predictions(
                     runtime=self.runtime,
                     module=self.module,
@@ -497,6 +503,7 @@ def _evaluation_sampled_competence_record(
     evaluation_results: Sequence[_CheckpointEvaluationRungEvidence],
     frontier_point: Mapping[str, object],
     frontier_index: int,
+    competence_value_kind: str | None = None,
 ) -> dict[str, object]:
     points: list[Mapping[str, object]] = []
     for index, result in enumerate(evaluation_results):
@@ -524,6 +531,8 @@ def _evaluation_sampled_competence_record(
             "inference_cost_sample_count": result.inference_cost_sample_count,
             **_rung_log2_volume_interval_record(result.rung),
         }
+        if competence_value_kind is not None:
+            point["competence_value_kind"] = competence_value_kind
         if result.rung.batch.region is not None:
             point["region"] = result.rung.batch.region.to_record()
         points.append(point)
@@ -568,11 +577,14 @@ def _attach_partition_score(
     batch: GeneratedSampleSet,
     accepted_mass: tuple[float, ...],
     chance_mass: float,
+    competence_value_kind: str | None = None,
 ) -> None:
     if batch.region is None:
         return
     competence = tuple(
-        _competence_fraction(accepted_mass=value, chance_mass=chance_mass)
+        max(0.0, value)
+        if competence_value_kind == "validated-bits"
+        else _competence_fraction(accepted_mass=value, chance_mass=chance_mass)
         for value in accepted_mass
     )
     score = adversarial_partition_competence_integral(
@@ -591,6 +603,8 @@ def _attach_partition_score(
         ),
     )
     record["partition_score"] = score.to_record()
+    if competence_value_kind is not None:
+        record["competence_value_kind"] = competence_value_kind
 
 
 def _batch_score_width_bits(batch: GeneratedSampleSet) -> float:
@@ -1438,6 +1452,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         "evaluation_workflow.final_measurement_records",
         samples=final_evaluation_batch.sample_count,
     ):
+        competence_value_kind = _competence_value_kind(target_contract)
         frontier_rung = evaluation_results[evaluation_frontier_index].rung
         final_scored_batch = replace(
             final_evaluation_batch,
@@ -1449,7 +1464,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
                 batch=final_scored_batch,
                 accepted_mass=final_accepted_mass,
                 volume_axis=None,
-                bounded_mass=False,
+                bounded_mass=competence_value_kind != "validated-bits",
             )
             _attach_competence_diagnostics(
                 final_sampled_competence,
@@ -1493,12 +1508,14 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             batch=final_scored_batch,
             accepted_mass=final_accepted_mass,
             chance_mass=_target_contract_chance_mass(target_contract),
+            competence_value_kind=competence_value_kind,
         )
         sampled_competence = _evaluation_sampled_competence_record(
             benchmark_id=benchmark_id,
             evaluation_results=evaluation_results,
             frontier_point=final_sampled_competence,
             frontier_index=evaluation_frontier_index,
+            competence_value_kind=competence_value_kind,
         )
     with workflow_timings.span("evaluation_workflow.measurement_dataset"):
         measurements = tuple(measurement for group in measurement_groups for measurement in group)
@@ -2381,15 +2398,22 @@ def _train_and_predict_on_device(
                     evaluation_counter=evaluation_counter,
                     roofline=runtime_roofline_record(runtime),
                     work_estimates=_training_work_estimates(
-                        input_shape=_batch_sample_input_shape(batch=current_frontier().batch),
-                        output_shape=_expected_program_output_shape(
-                            batch=current_frontier().batch,
+                        input_shape=_rung_tensor_input_shape(
+                            generator=generator,
+                            rung=current_frontier(),
+                        ),
+                        output_shape=_expected_rung_output_shape(
+                            generator=generator,
+                            rung=current_frontier(),
                             target_contract=target_contract,
                         ),
                         inference_cost=_module_projected_inference_cost_measurement(
                             runtime=runtime,
                             module=checked_module,
-                            input_shape=_batch_sample_input_shape(batch=current_frontier().batch),
+                            input_shape=_rung_tensor_input_shape(
+                                generator=generator,
+                                rung=current_frontier(),
+                            ),
                             batch_size=batch_size,
                             target_contract=target_contract,
                         ),
@@ -2453,9 +2477,13 @@ def _train_and_predict_on_device(
             evaluation_counter=evaluation_counter,
             roofline=runtime_roofline_record(runtime),
             work_estimates=_training_work_estimates(
-                input_shape=_batch_sample_input_shape(batch=current_frontier().batch),
-                output_shape=_expected_program_output_shape(
-                    batch=current_frontier().batch,
+                input_shape=_rung_tensor_input_shape(
+                    generator=generator,
+                    rung=current_frontier(),
+                ),
+                output_shape=_expected_rung_output_shape(
+                    generator=generator,
+                    rung=current_frontier(),
                     target_contract=target_contract,
                 ),
                 inference_cost=(
@@ -2463,7 +2491,10 @@ def _train_and_predict_on_device(
                     or _module_projected_inference_cost_measurement(
                         runtime=runtime,
                         module=module,
-                        input_shape=_batch_sample_input_shape(batch=current_frontier().batch),
+                        input_shape=_rung_tensor_input_shape(
+                            generator=generator,
+                            rung=current_frontier(),
+                        ),
                         batch_size=batch_size,
                         target_contract=target_contract,
                     )
@@ -3660,6 +3691,20 @@ def _rung_tensor_input_shape(
     return (channel_count, height, width)
 
 
+def _expected_rung_output_shape(
+    *,
+    generator: _TensorBenchmarkGenerator,
+    rung: _CurriculumRung,
+    target_contract: TargetContract,
+) -> tuple[int, ...]:
+    input_shape = _rung_tensor_input_shape(generator=generator, rung=rung)
+    field_shape = input_shape if target_contract.kind == "field-valued" else None
+    try:
+        return target_contract.expected_output_shape(field_shape)
+    except TargetContractError as error:
+        raise BenchmarkRunnerError(str(error)) from error
+
+
 def _runtime_memory_budget_bytes(runtime: TensorRuntime) -> int | None:
     total_bytes = tensor_runtime_total_memory_bytes(runtime)
     if total_bytes is None:
@@ -4366,11 +4411,12 @@ def _training_gate_score_estimate(
     training_cost: tuple[CostMeasurement, int] | None,
     competence_diagnostics: tuple[Mapping[str, object], ...] = (),
 ) -> dict[str, object]:
+    competence_value_kind = _competence_value_kind(target_contract)
     current_point = _sampled_competence_record_from_accepted_mass(
         batch=batch,
         accepted_mass=accepted_mass,
         volume_axis=None,
-        bounded_mass=target_contract.kind != "field-valued",
+        bounded_mass=competence_value_kind != "validated-bits",
     )
     chance_mass = _target_contract_chance_mass(target_contract)
     _attach_partition_score(
@@ -4378,12 +4424,13 @@ def _training_gate_score_estimate(
         batch=batch,
         accepted_mass=accepted_mass,
         chance_mass=chance_mass,
+        competence_value_kind=competence_value_kind,
     )
     sampled_competence = _training_sampled_competence_record(
         benchmark_id=batch.benchmark_id,
         previous_frontier_points=previous_frontier_points,
         current_point=current_point,
-        bounded_mass=target_contract.kind != "field-valued",
+        bounded_mass=competence_value_kind != "validated-bits",
     )
     compact_sampled_competence = _compact_training_sampled_competence(sampled_competence)
     partition_score = _training_sampled_competence_partition_score(compact_sampled_competence)
@@ -4436,7 +4483,7 @@ def _training_score_integral(
     points: tuple[CompetencePoint, ...],
     chance_mass: float,
 ) -> StateSpaceIntegral:
-    if target_contract.kind != "field-valued":
+    if _competence_value_kind(target_contract) != "validated-bits":
         return sampled_competence_frontier_integral(points, chance_mass=chance_mass)
     terms: list[StateSpaceIntegralTerm] = []
     cursor = 0.0
@@ -5961,6 +6008,14 @@ def _target_contract_chance_mass(contract: TargetContract) -> float:
     if chance_mass is None:
         raise BenchmarkRunnerError("runner path requires finite-outcome chance mass")
     return chance_mass
+
+
+def _competence_value_kind(contract: TargetContract) -> str | None:
+    if contract.kind in {"field-valued", "inverse"} and (
+        contract.competence.kind in _validated_bit_competence_kinds
+    ):
+        return "validated-bits"
+    return None
 
 
 def _optional_training_loss_factory(

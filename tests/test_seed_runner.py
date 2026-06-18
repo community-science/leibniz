@@ -22,7 +22,7 @@ _benchmark_root_base = _repository_root / "src/leibniz/benchmarks"
 
 
 def test_seed_runner_emits_submission_and_evaluation(tmp_path: Path) -> None:
-    results_root = tmp_path / "results"
+    results_root = tmp_path / "custom-results"
     seed = SeedSubmission(
         name="ks-variable-conv",
         program_path=_program_root / "ks_variable_conv.py",
