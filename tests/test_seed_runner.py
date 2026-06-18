@@ -1,19 +1,15 @@
 """Gate test for the seed runner wiring.
 
-Exercises the seed runner end to end on a proven-good submission (the KS
-variable-conv program, a convolutional stepper, at train_steps == 0): the runner
+Exercises the seed runner end to end on a proven-good submission (the variable
+convolutional stepper, at train_steps == 0): the runner
 must emit a valid SubmissionRecord and a valid EvaluationRecord through the new
 schema, with the evaluation resolving back to its submission and carrying the
 validated-bit score and its capability map.
-
-Seeding the full KS ladder with meaningful trained scores is pending: the
-analytic exp-based steppers (partial_dynamics, learned_residual) overflow under
-the generic seed-runner curriculum, and the learned programs need per-program
-numerical tuning. See the cutover-code-smells memory for the concrete blockers.
 """
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import cast
 
@@ -55,3 +51,23 @@ def test_seed_runner_emits_submission_and_evaluation(tmp_path: Path) -> None:
     capability_map = evaluation.capability_map
     assert cast(float, capability_map["value"]) == evaluation.validated_bits
     assert isinstance(capability_map["root"], dict)
+
+
+def test_seed_runner_scores_diverging_submission_at_boundary(tmp_path: Path) -> None:
+    results_root = tmp_path / "results"
+    seed = SeedSubmission(
+        name="partial-dynamics",
+        program_path=_program_root / "ks_partial_dynamics.py",
+        benchmark_root=_benchmark_root_base / "ks",
+        train_steps=0,
+        learning_rate=1e-3,
+    )
+
+    result = run_seed_submission(seed, results_root=results_root, tensor_device="cpu")
+
+    evaluation = EvaluationDocument.from_bytes(result.evaluation_path.read_bytes()).evaluation
+
+    assert math.isfinite(evaluation.validated_bits)
+    assert evaluation.validated_bits >= 0.0
+    assert cast(float, evaluation.capability_map["value"]) == evaluation.validated_bits
+    assert isinstance(evaluation.capability_map["root"], dict)

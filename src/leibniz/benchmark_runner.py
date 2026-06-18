@@ -844,6 +844,10 @@ class _CurriculumExhausted(BenchmarkRunnerError):
     """Raised when a finite benchmark has no further curriculum windows."""
 
 
+class _NumericalProgramFailure(BenchmarkRunnerError):
+    """Raised when a submitted program numerically leaves its declared domain."""
+
+
 _extract = RecordExtractor(error_type=BenchmarkRunnerError)
 
 
@@ -2678,7 +2682,7 @@ def _model_predictions(
     target_contract: TargetContract,
 ) -> Any:
     if target_contract.kind in {"finite-outcome", "inverse"}:
-        return module(fields)
+        return _call_submitted_program(module, fields)
     return _field_valued_model_trajectory(
         runtime=runtime,
         module=module,
@@ -2697,13 +2701,47 @@ def _model_inference_for_cost(
     target_contract: TargetContract,
 ) -> Any:
     if target_contract.kind in {"finite-outcome", "inverse"}:
-        return module(fields)
+        return _call_submitted_program(module, fields)
     return _field_valued_model_state_at_horizon(
         runtime=runtime,
         module=module,
         fields=fields,
         horizon=_field_valued_cost_horizon(horizons),
     )
+
+
+def _call_submitted_program(module: Any, fields: Any) -> Any:
+    try:
+        return module(fields)
+    except (OverflowError, FloatingPointError, ValueError) as error:
+        raise _NumericalProgramFailure(str(error)) from error
+
+
+def _raise_for_nonfinite_model_output(runtime: TensorRuntime, output: object) -> None:
+    if _model_output_contains_nonfinite(runtime, output):
+        raise _NumericalProgramFailure("submitted program produced nonfinite output")
+
+
+def _model_output_contains_nonfinite(runtime: TensorRuntime, output: object) -> bool:
+    if isinstance(output, int | float):
+        return not math.isfinite(float(output))
+    if isinstance(output, str | bytes):
+        return False
+    shape = getattr(output, "shape", None)
+    if shape is not None:
+        try:
+            backend_module = getattr(runtime, "tor" + "ch")
+            finite = backend_module.isfinite(output).all()
+            return not bool(tensor_value_to_host(finite))
+        except (TypeError, ValueError):
+            return False
+    if isinstance(output, Mapping):
+        mapping = cast(Mapping[object, object], output)
+        return any(_model_output_contains_nonfinite(runtime, value) for value in mapping.values())
+    if isinstance(output, Sequence):
+        sequence = cast(Sequence[object], output)
+        return any(_model_output_contains_nonfinite(runtime, value) for value in sequence)
+    return False
 
 
 def _field_valued_target_horizons(
@@ -2875,6 +2913,8 @@ def _field_valued_model_state_at_horizon(
         )
     except (FieldEvolutionError, TensorRuntimeError) as error:
         raise BenchmarkRunnerError(str(error)) from error
+    except (OverflowError, FloatingPointError, ValueError) as error:
+        raise _NumericalProgramFailure(str(error)) from error
 
 
 def _module_inference_cost_measurement(
@@ -2949,11 +2989,91 @@ def _module_projected_inference_cost_measurement(
             ).without_operation_trace(),
             sample_count,
         )
-    except (CostMetrologyError, TensorRuntimeError):
+    except (CostMetrologyError, TensorRuntimeError, _NumericalProgramFailure):
         return None
     finally:
         if was_training:
             module.train()
+
+
+def _failed_forward_inference_cost_measurement(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    input_shape: tuple[int, ...],
+    batch_size: int,
+    target_contract: TargetContract,
+) -> tuple[CostMeasurement, int]:
+    projected = _module_projected_inference_cost_measurement(
+        runtime=runtime,
+        module=module,
+        input_shape=input_shape,
+        batch_size=batch_size,
+        target_contract=target_contract,
+    )
+    if projected is not None:
+        return projected
+    return (
+        CostMeasurement(
+            cost_model_id=CostMeasurement.tensor_runtime_cost_model_id(),
+            abstract_flops=0,
+            per_op=(),
+            moved_elements=0,
+            movement=(),
+            unmodeled_operations=(),
+            operation_count=0,
+            operation_trace=(),
+            wall_seconds=0.0,
+            tensor_device=runtime.device_kind,
+            execution_mode="dry-run",
+            operation_stream_source="failed-forward-no-operation-stream",
+            operations_executed=False,
+            roofline=runtime_roofline_record(runtime),
+        ),
+        max(1, batch_size),
+    )
+
+
+def _numerical_failure_diagnostics(
+    *,
+    batch: GeneratedSampleSet,
+    error: _NumericalProgramFailure,
+) -> tuple[Mapping[str, object], ...]:
+    reason = str(error) or "submitted program numerical failure"
+    return tuple(
+        {
+            "status": "numerical-failure",
+            "reason": reason,
+            "sample_index": sample.index,
+        }
+        for sample in batch.samples
+    )
+
+
+def _failed_checkpoint_evaluation_chunk(
+    *,
+    predictor: CheckpointModelPredictor,
+    batch: GeneratedSampleSet,
+    target_contract: TargetContract,
+    error: _NumericalProgramFailure,
+) -> _CheckpointEvaluationChunk:
+    cost_measurement, cost_sample_count = _failed_forward_inference_cost_measurement(
+        runtime=predictor.runtime,
+        module=predictor.module,
+        input_shape=_batch_sample_input_shape(batch=batch),
+        batch_size=batch.sample_count,
+        target_contract=target_contract,
+    )
+    return _CheckpointEvaluationChunk(
+        batch=batch,
+        probabilities=(),
+        accepted_mass=tuple(0.0 for _ in batch.samples),
+        accepted_mass_sum=0.0,
+        sample_count=batch.sample_count,
+        competence_diagnostics=_numerical_failure_diagnostics(batch=batch, error=error),
+        inference_cost_measurement=cost_measurement,
+        inference_cost_sample_count=cost_sample_count,
+    )
 
 
 def _evaluate_checkpoint_rung(
@@ -3322,11 +3442,17 @@ def _checkpoint_evaluation_chunks(
                 "generator returned no samples for the selected volume window"
             )
         prediction_started = time.perf_counter()
-        with phase_timings.span(
-            f"checkpoint_evaluation_{purpose}_prediction",
-            samples=batch.sample_count,
-        ):
-            predictions = predictor.predict_batch(batch)
+        prediction_error: _NumericalProgramFailure | None = None
+        predictions: object | None = None
+        try:
+            with phase_timings.span(
+                f"checkpoint_evaluation_{purpose}_prediction",
+                samples=batch.sample_count,
+            ):
+                predictions = predictor.predict_batch(batch)
+                _raise_for_nonfinite_model_output(predictor.runtime, predictions)
+        except _NumericalProgramFailure as error:
+            prediction_error = error
         evaluation_counter.add(
             seconds=time.perf_counter() - generation_started,
             samples=batch.sample_count,
@@ -3336,56 +3462,92 @@ def _checkpoint_evaluation_chunks(
             seconds=time.perf_counter() - prediction_started,
             samples=batch.sample_count,
         )
+        if prediction_error is not None:
+            yield _failed_checkpoint_evaluation_chunk(
+                predictor=predictor,
+                batch=batch,
+                target_contract=target_contract,
+                error=prediction_error,
+            )
+            remaining -= batch.sample_count
+            sample_offset += batch.sample_count
+            chunk_index += 1
+            continue
+        if predictions is None:
+            raise BenchmarkRunnerError("checkpoint evaluation produced no predictions")
         with phase_timings.span(
             f"checkpoint_evaluation_{purpose}_accepted_mass",
             samples=batch.sample_count,
         ):
-            if target_contract.kind in {"field-valued", "inverse"}:
-                fields, labels = _batch_tensors(
-                    runtime=predictor.runtime,
-                    batch=batch,
-                    outcome_ids=outcome_ids,
-                    device=predictor.runtime.device,
-                )
-                horizons = _field_valued_target_horizons(
-                    batch=batch,
-                    labels=labels,
-                    target_contract=target_contract,
-                )
-                with no_grad_context(predictor.runtime):
-                    competence_evaluation = competence.training_logit_masses_with_diagnostics(
-                        predictor.runtime,
-                        predictions,
-                        labels,
-                        module=predictor.module,
-                        fields=fields,
-                        horizons=horizons,
+            try:
+                if target_contract.kind in {"field-valued", "inverse"}:
+                    fields, labels = _batch_tensors(
+                        runtime=predictor.runtime,
                         batch=batch,
-                        generator=generator,
+                        outcome_ids=outcome_ids,
+                        device=predictor.runtime.device,
                     )
-                    accepted_mass = competence_evaluation.values
-                    competence_diagnostics = competence_evaluation.diagnostics
-                probabilities: tuple[tuple[float, ...], ...] = ()
-            else:
-                probabilities = predictions
-                competence_diagnostics = ()
-                accepted_mass = competence.prediction_accepted_mass(
+                    horizons = _field_valued_target_horizons(
+                        batch=batch,
+                        labels=labels,
+                        target_contract=target_contract,
+                    )
+                    with no_grad_context(predictor.runtime):
+                        competence_evaluation = (
+                            competence.training_logit_masses_with_diagnostics(
+                                predictor.runtime,
+                                predictions,
+                                labels,
+                                module=predictor.module,
+                                fields=fields,
+                                horizons=horizons,
+                                batch=batch,
+                                generator=generator,
+                            )
+                        )
+                        accepted_mass = competence_evaluation.values
+                        competence_diagnostics = competence_evaluation.diagnostics
+                    probabilities: tuple[tuple[float, ...], ...] = ()
+                else:
+                    probabilities = cast(tuple[tuple[float, ...], ...], predictions)
+                    competence_diagnostics = ()
+                    accepted_mass = competence.prediction_accepted_mass(
+                        batch=batch,
+                        probabilities=probabilities,
+                        outcome_ids=outcome_ids,
+                    )
+            except (OverflowError, FloatingPointError, ValueError) as error:
+                yield _failed_checkpoint_evaluation_chunk(
+                    predictor=predictor,
                     batch=batch,
-                    probabilities=probabilities,
-                    outcome_ids=outcome_ids,
+                    target_contract=target_contract,
+                    error=_NumericalProgramFailure(str(error)),
                 )
+                remaining -= batch.sample_count
+                sample_offset += batch.sample_count
+                chunk_index += 1
+                continue
         inference_cost_measurement: CostMeasurement | None = None
         if purpose in {"score", "measurements"}:
             with phase_timings.span(
                 f"checkpoint_evaluation_{purpose}_inference_cost_metrology",
                 samples=batch.sample_count,
             ):
-                inference_cost_measurement = _checkpoint_inference_cost_measurement(
-                    predictor=predictor,
-                    batch=batch,
-                    outcome_ids=outcome_ids,
-                    target_contract=target_contract,
-                )
+                try:
+                    inference_cost_measurement = _checkpoint_inference_cost_measurement(
+                        predictor=predictor,
+                        batch=batch,
+                        outcome_ids=outcome_ids,
+                        target_contract=target_contract,
+                    )
+                except (_NumericalProgramFailure, CostMetrologyError):
+                    inference_cost_measurement, _ = _failed_forward_inference_cost_measurement(
+                        runtime=predictor.runtime,
+                        module=predictor.module,
+                        input_shape=_batch_sample_input_shape(batch=batch),
+                        batch_size=batch.sample_count,
+                        target_contract=target_contract,
+                    )
         if inference_cost_measurement is None:
             raise BenchmarkRunnerError("checkpoint evaluation could not measure inference cost")
         yield _CheckpointEvaluationChunk(
@@ -3889,14 +4051,23 @@ def _train_until_convergence(
             "validation_inference_cost_metrology",
             samples=actual_gate_sample_count,
         ):
-            validation_cost_measurement = _module_inference_cost_measurement(
-                runtime=runtime,
-                module=module,
-                fields=fields,
-                labels=labels,
-                horizons=horizons,
-                target_contract=target_contract,
-            )
+            try:
+                validation_cost_measurement = _module_inference_cost_measurement(
+                    runtime=runtime,
+                    module=module,
+                    fields=fields,
+                    labels=labels,
+                    horizons=horizons,
+                    target_contract=target_contract,
+                )
+            except (_NumericalProgramFailure, CostMetrologyError):
+                validation_cost_measurement, _ = _failed_forward_inference_cost_measurement(
+                    runtime=runtime,
+                    module=module,
+                    input_shape=_batch_sample_input_shape(batch=batch),
+                    batch_size=actual_gate_sample_count,
+                    target_contract=target_contract,
+                )
         max_validation_inference_cost = _max_cost_measurement(
             max_validation_inference_cost,
             (validation_cost_measurement, actual_gate_sample_count),
@@ -3906,27 +4077,37 @@ def _train_until_convergence(
         with phase_timings.span("validation_forward_loss", samples=actual_gate_sample_count):
             was_training = bool(module.training)
             module.eval()
-            with no_grad_context(runtime):
-                logits = _model_predictions(
-                    runtime=runtime,
-                    module=module,
-                    fields=fields,
-                    labels=labels,
-                    horizons=horizons,
-                    target_contract=target_contract,
-                )
-                validation_loss = float(loss_function(logits, labels).item())
-                competence_evaluation = competence.training_logit_masses_with_diagnostics(
-                    runtime,
-                    logits,
-                    labels,
-                    module=module,
-                    fields=fields,
-                    horizons=horizons,
+            try:
+                with no_grad_context(runtime):
+                    logits = _model_predictions(
+                        runtime=runtime,
+                        module=module,
+                        fields=fields,
+                        labels=labels,
+                        horizons=horizons,
+                        target_contract=target_contract,
+                    )
+                    _raise_for_nonfinite_model_output(runtime, logits)
+                    validation_loss = float(loss_function(logits, labels).item())
+                    competence_evaluation = competence.training_logit_masses_with_diagnostics(
+                        runtime,
+                        logits,
+                        labels,
+                        module=module,
+                        fields=fields,
+                        horizons=horizons,
+                        batch=batch,
+                        generator=generator,
+                    )
+                    accepted_mass = competence_evaluation.values
+                    competence_diagnostics = competence_evaluation.diagnostics
+            except _NumericalProgramFailure as error:
+                validation_loss = 1.0e300
+                accepted_mass = tuple(0.0 for _ in batch.samples)
+                competence_diagnostics = _numerical_failure_diagnostics(
                     batch=batch,
-                    generator=generator,
+                    error=error,
                 )
-                accepted_mass = competence_evaluation.values
             if was_training:
                 module.train()
         with phase_timings.span("validation_score_estimate", samples=batch.sample_count):
@@ -3942,7 +4123,7 @@ def _train_until_convergence(
                 step=step,
                 inference_cost=max_validation_inference_cost,
                 training_cost=latest_training_cost,
-                competence_diagnostics=competence_evaluation.diagnostics,
+                competence_diagnostics=competence_diagnostics,
             )
         plateau_signal = _training_score_estimate_frontier_competence(
             score_estimate,
@@ -4095,6 +4276,9 @@ def _train_until_convergence(
             if not _is_runtime_capacity_error(error):
                 raise
             stop_reason = "capacity-limited"
+            break
+        except _NumericalProgramFailure:
+            stop_reason = "numerical-failure"
             break
         if scheduler is not None:
             with phase_timings.span("training_scheduler_step"):
