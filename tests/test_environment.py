@@ -30,7 +30,7 @@ def test_environment_scripts_use_repo_local_miniforge() -> None:
     assert "-n \"$ENV_NAME\"" in setup_script
     assert "-f environment.yml" in setup_script
     assert "--prune" in setup_script
-    assert "CONSOLE_WEB_ROOT=\"$LEIBNIZ_ROOT/src/leibniz/console/_web_src\"" in setup_script
+    assert "CONSOLE_WEB_ROOT=\"$LEIBNIZ_ROOT/src/leibniz/console/web\"" in setup_script
     assert "Syncing console npm dependencies" in setup_script
     assert "\"$CONDA_BIN\" run -n \"$ENV_NAME\" npm ci" in setup_script
     assert "This script must be sourced" in activate_script

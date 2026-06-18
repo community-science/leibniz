@@ -2,6 +2,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from leibniz.cli import _console_dependencies_missing  # pyright: ignore[reportPrivateUsage]
 from leibniz.console.protocol import (
     console_protocol_format_versions,
     console_protocol_formats,
@@ -13,7 +14,7 @@ _console_package = (
     / "src"
     / "leibniz"
     / "console"
-    / "_web_src"
+    / "web"
 )
 _generated_source_root = (
     _console_package
@@ -33,7 +34,7 @@ def test_console_web_source_is_handwritten_not_codegen_output() -> None:
         text=True,
     ).stdout.splitlines()
     assert tracked == []
-    assert "src/leibniz/console/_web_src/src/generated/" in (
+    assert "src/leibniz/console/web/src/generated/" in (
         _repository_root / ".gitignore"
     ).read_text(encoding="utf-8")
     assert ".local-cache/" in (_repository_root / ".gitignore").read_text(encoding="utf-8")
@@ -83,7 +84,7 @@ def test_console_web_source_is_handwritten_not_codegen_output() -> None:
     assert "export function isConsoleDataPayloadCurrent()" in vite_config
     assert "function consoleDataInputFiles()" in vite_config
     assert ".local-cache/console/consoleDataPayload.json" in vite_config
-    assert "src/leibniz/console/_web_src/src/generated/consoleDataPayload.json" not in (
+    assert "src/leibniz/console/web/src/generated/consoleDataPayload.json" not in (
         vite_config
     )
     assert "Leibniz console data is current" in prepare_console_data
@@ -121,7 +122,7 @@ def test_handwritten_web_source_uses_protocol_vocabulary_formats() -> None:
         "leibniz.console.benchmark-results",
     )
     allowed = {
-        "src/leibniz/console/_web_src/src/protocolVocabulary.ts",
+        "src/leibniz/console/web/src/protocolVocabulary.ts",
     }
 
     offenders = tuple(
@@ -209,24 +210,39 @@ def test_console_styles_do_not_reference_undefined_custom_properties() -> None:
     assert sorted(references - definitions) == []
 
 
-def test_benchmark_dashboard_renders_python_owned_run_detail_sections() -> None:
+def test_benchmark_dashboard_omits_python_owned_run_detail_sections() -> None:
     dashboard = (
         _web_source_root / "BenchmarkResultDashboard.tsx"
     ).read_text(encoding="utf-8")
     model_inspector = (
         _web_source_root / "BenchmarksPanel.tsx"
     ).read_text(encoding="utf-8")
-    migrated_markers = (
-        "sampled_competence",
-        "training_diagnostics",
-        "validation_history",
-        "validation_source",
+    offenders = tuple(
+        marker
+        for marker in ("console_view_model", "RunDetail")
+        if marker in dashboard or marker in model_inspector
     )
 
-    offenders = tuple(marker for marker in migrated_markers if marker in dashboard)
-
-    assert "console_view_model?.detail_sections" in model_inspector
     assert offenders == ()
+
+
+def test_benchmark_panel_omits_legacy_sample_and_integral_tables() -> None:
+    panel = (_web_source_root / "BenchmarksPanel.tsx").read_text(encoding="utf-8")
+    result_view_records = (_web_source_root / "resultViewRecords.ts").read_text(
+        encoding="utf-8"
+    )
+    removed_markers = (
+        "BenchmarkTaskPane",
+        "BenchmarkSampleCard",
+        "BenchmarkSampleCoordinateInspector",
+        "CombinedIntegralTermTable",
+        "IntegralTermTable",
+        "benchmark-sample-window",
+        "competence_density",
+    )
+
+    assert [marker for marker in removed_markers if marker in panel] == []
+    assert "competence_density" not in result_view_records
 
 
 def test_handwritten_console_source_avoids_migrated_protocol_literals() -> None:
@@ -242,7 +258,7 @@ def test_handwritten_console_source_avoids_migrated_protocol_literals() -> None:
         "benchmarks.digits@0.1.0",
     )
     allowed = {
-        "src/leibniz/console/_web_src/src/operatorVocabulary.ts",
+        "src/leibniz/console/web/src/operatorVocabulary.ts",
     }
 
     offenders = tuple(
@@ -256,6 +272,20 @@ def test_handwritten_console_source_avoids_migrated_protocol_literals() -> None:
     )
 
     assert offenders == ()
+
+
+def test_console_dependency_check_reports_uninstalled_toolchain(tmp_path: Path) -> None:
+    # No node_modules at all (fresh checkout / wrong directory).
+    assert _console_dependencies_missing(tmp_path) is not None
+
+    # node_modules exists but the vite dev toolchain was never installed
+    # (e.g. an empty directory left after a source rename).
+    (tmp_path / "node_modules").mkdir()
+    assert _console_dependencies_missing(tmp_path) is not None
+
+    # A populated install with the dev toolchain present passes.
+    (tmp_path / "node_modules" / "vite").mkdir()
+    assert _console_dependencies_missing(tmp_path) is None
 
 
 def _handwritten_web_source_files() -> tuple[Path, ...]:

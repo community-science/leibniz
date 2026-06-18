@@ -20,7 +20,7 @@ _panel_path = (
     / "src"
     / "leibniz"
     / "console"
-    / "_web_src"
+    / "web"
     / "src"
     / "ArchitecturePanel.tsx"
 )

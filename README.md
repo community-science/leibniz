@@ -113,7 +113,7 @@ cache fewer buffers.
 - `src/leibniz/benchmarks/`: packaged benchmark manifests and benchmark-local
   protocol documents.
 - `src/leibniz/console/`: console data, artifact indexing, code generation,
-  and the embedded web console source under `_web_src/`.
+  and the embedded web console source under `web/`.
 - `tests/`: Python contract, workflow, and policy tests. Fixtures live under
   `tests/fixtures/`; console web contract tests live beside the Python tests.
 - `scripts/`: repository environment setup and activation helpers.
@@ -236,20 +236,28 @@ materialize those records as tentative plot points, using the training run's own
 score estimate, but leaderboard rows and frontiers are composed only from
 completed accepted benchmark evaluations. Saved model checkpoints, checkpoint
 artifact sidecars, and model manifests are written under `results/models/`, and
-completed training runs atomically replace their running records with final
-training summaries in the same `results/training/` location. Benchmark evidence
-is generated separately by handing a checkpoint artifact record to the evaluator
-with a fresh unpredictable evaluation seed; those evaluation records are written
-under `results/evaluations/` and replace matching tentative points as the
-accepted local benchmark records consumed by the console. Each accepted
-evaluation is a self-contained benchmark evaluation bundle: it embeds the
-benchmark manifest, submitted program graph, model manifest, checkpoint artifact
-record, model inspection, measurement dataset, score view, sampled competence
-record, evaluation protocol, evaluation curriculum, seed, and throughput.
+completed training runs atomically replace their running records with
+a final `SubmissionRecord` under `results/submissions/<run>/`. The published
+`results/` dataset is program-neutral with three source-of-truth record tiers
+that reference one another by id and content digest rather than embedding each
+other: a **submission** (`results/submissions/`) is a runnable program whose
+submission *is* the program graph, carrying fitted parameters and a
+training-provenance record only when it is a learned submission (a deterministic
+submission carries neither) and benchmark-agnostic so the same submission is
+evaluated against many benchmarks; a **benchmark** (`results/benchmarks/`) is
+descriptive universe metadata; and an **evaluation** (`results/evaluations/`) is
+the result of evaluating one submission against one benchmark. Benchmark
+evidence is generated separately by handing a checkpoint artifact record to the
+evaluator with a fresh unpredictable evaluation seed; each evaluation writes an
+`EvaluationRecord` carrying the validated-bit Score, the capability-map data
+backing it, the measured energy cost, optional certification diagnostics, and
+lineage references back to the submission, the benchmark, and the measurement
+evidence — and these records replace matching tentative points as the accepted
+local benchmark records the console derives every presentation from.
 `benchmark evaluate` accepts an explicit `--checkpoint-artifact`; when omitted,
 it discovers selected checkpoint artifact sidecars from local training summaries
 under `results/training/` and evaluates completed training runs whose matching
-checkpoints do not already have accepted evaluation bundles. Pending program
+checkpoints do not already have an accepted `EvaluationRecord`. Pending program
 sources and in-progress training records are ignored by evaluation discovery.
 `benchmark evaluate digits` narrows evaluation to the Digits benchmark, and
 omitting the benchmark name scans all local benchmarks. The command accepts

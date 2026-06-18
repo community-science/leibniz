@@ -1,9 +1,11 @@
 import math
+from typing import cast
 
 from leibniz.benchmark_evaluation import (
     CompetencePoint,
     ValidationCompetencePoint,
     finite_measurements_for_predictions,
+    sampled_competence_curriculum_record,
     sampled_competence_frontier_integral,
     validation_competence_frontier_advances,
 )
@@ -137,6 +139,38 @@ def test_sampled_competence_integral_exposes_human_readable_terms() -> None:
     assert math.isclose(measured_density, 0.5)
     assert math.isclose(measured_contribution, 0.5)
     assert math.isclose(integral.value, 0.5)
+
+
+def test_validated_bit_competence_curriculum_allows_unbounded_bit_values() -> None:
+    record = sampled_competence_curriculum_record(
+        (
+            {
+                "kind": "sampled-state-space-volume-window",
+                "sampling_rule": "generator-uniform-component-index-v1",
+                "difficulty_assumption": "approximately-uniform-within-volume-window",
+                "benchmark_id": "tests.benchmark@0.1.0",
+                "volume_axis": None,
+                "log2_volume": 1.0,
+                "sample_count": 2,
+                "mean_accepted_mass": 3.0,
+                "competence_value_kind": "validated-bits",
+            },
+            {
+                "kind": "sampled-state-space-volume-window",
+                "sampling_rule": "generator-uniform-component-index-v1",
+                "difficulty_assumption": "approximately-uniform-within-volume-window",
+                "benchmark_id": "tests.benchmark@0.1.0",
+                "volume_axis": None,
+                "log2_volume": 2.0,
+                "sample_count": 1,
+                "mean_accepted_mass": 6.0,
+                "competence_value_kind": "validated-bits",
+            },
+        )
+    )
+
+    assert record["competence_value_kind"] == "validated-bits"
+    assert math.isclose(cast(float, record["mean_accepted_mass"]), 4.0)
 
 
 def test_sampled_competence_record_regions_flow_into_integral_terms() -> None:

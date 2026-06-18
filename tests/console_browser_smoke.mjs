@@ -6,13 +6,13 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
 const require = createRequire(
-  new URL('../src/leibniz/console/_web_src/package.json', import.meta.url),
+  new URL('../src/leibniz/console/web/package.json', import.meta.url),
 );
 const { chromium } = require('playwright');
 
 const host = '127.0.0.1';
 const port = await freePort();
-const consolePackageRoot = new URL('../src/leibniz/console/_web_src', import.meta.url);
+const consolePackageRoot = new URL('../src/leibniz/console/web', import.meta.url);
 const resultRoot = mkdtempSync(resolve(tmpdir(), 'leibniz-console-browser-results-'));
 const smokeTimeout = setTimeout(() => {
   console.error('headless console browser smoke test timed out');
@@ -68,18 +68,25 @@ try {
     }
     await assertSelectBackgroundsMatchContainingElements(page);
     await assertSelectOptionsUseConsoleTheme(page);
-    const samplesToggle = page.getByRole('button', { name: 'Samples' }).first();
-    await samplesToggle.waitFor({ state: 'visible' });
-    await samplesToggle.click();
+    await page.getByRole('button', { name: 'Performance' }).first().waitFor({ state: 'visible' });
+    await page
+      .getByRole('button', { name: 'Model Inspector' })
+      .first()
+      .waitFor({ state: 'visible' });
+    const samplesToggleCount = await page.getByRole('button', { name: 'Samples' }).count();
+    if (samplesToggleCount !== 0) {
+      throw new Error(`expected Samples section to be absent, found ${samplesToggleCount}`);
+    }
+    await page.getByRole('button', { name: 'Performance' }).first().click();
     await page.reload({ waitUntil: 'networkidle' });
     await page.locator('.benchmark-workbench').waitFor({ state: 'visible', timeout: 5_000 });
     const persistedExpanded = await page
-      .getByRole('button', { name: 'Samples' })
+      .getByRole('button', { name: 'Performance' })
       .first()
       .getAttribute('aria-expanded');
     if (persistedExpanded !== 'false') {
       throw new Error(
-        `expected collapsed Samples section to persist after reload, found ${persistedExpanded}`,
+        `expected collapsed Performance section to persist after reload, found ${persistedExpanded}`,
       );
     }
   } finally {

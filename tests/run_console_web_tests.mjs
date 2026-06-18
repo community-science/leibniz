@@ -14,13 +14,13 @@ import {
   isModelArtifactEvent,
   isMaterializedResultViewEvent,
   resultRootArguments,
-} from '../src/leibniz/console/_web_src/vite.config.mjs';
+} from '../src/leibniz/console/web/vite.config.mjs';
 
 const testsRoot = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(testsRoot, '..');
 const consoleWebBinPath = resolve(
   repositoryRoot,
-  'src/leibniz/console/_web_src/node_modules/.bin',
+  'src/leibniz/console/web/node_modules/.bin',
 );
 const generatedPayloadPath = resolve(tmpdir(), 'leibniz-console-data.contract.json');
 const pythonPath = [resolve(repositoryRoot, 'src'), process.env.PYTHONPATH]
@@ -48,7 +48,7 @@ assertShellUsesGeneratedConsoleData();
 assertConsoleShellNavigation();
 assertArchitecturePanel();
 assertBenchmarkWorkbenchStructure();
-assertBenchmarkSamplePaneStructure();
+assertBenchmarkResultViewStructure();
 assertBenchmarkFrontierPlotStructure();
 assertBenchmarkModelWorkbenchStructure();
 assertConsoleTextIsUseful();
@@ -85,7 +85,7 @@ for (const contract of contracts) {
 
 function assertShellUsesGeneratedConsoleData() {
   const shell = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/ConsoleShell.tsx'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/src/ConsoleShell.tsx'),
     'utf8',
   );
   if (!shell.includes("from 'virtual:leibniz-console-data'")) {
@@ -101,7 +101,7 @@ function assertShellUsesGeneratedConsoleData() {
 
 function assertArchitecturePanel() {
   const shell = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/ConsoleShell.tsx'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/src/ConsoleShell.tsx'),
     'utf8',
   );
   for (const marker of [
@@ -121,7 +121,7 @@ function assertArchitecturePanel() {
     throw new Error('Program must be the default console tab');
   }
   const panel = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/ArchitecturePanel.tsx'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/src/ArchitecturePanel.tsx'),
     'utf8',
   );
   for (const marker of [
@@ -146,7 +146,7 @@ function assertArchitecturePanel() {
 
 function assertConsoleShellNavigation() {
   const shell = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/ConsoleShell.tsx'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/src/ConsoleShell.tsx'),
     'utf8',
   );
   for (const marker of [
@@ -166,7 +166,7 @@ function assertConsoleShellNavigation() {
 }
 
 function assertBenchmarkWebSourceIsDataDriven() {
-  const sourceRoot = resolve(repositoryRoot, 'src/leibniz/console/_web_src/src');
+  const sourceRoot = resolve(repositoryRoot, 'src/leibniz/console/web/src');
   const bannedPatterns = [
     /\bDigitsBenchmark\b/,
     /\bDigitsTask\b/,
@@ -191,11 +191,11 @@ function assertBenchmarkWebSourceIsDataDriven() {
 
 function assertBenchmarkWorkbenchStructure() {
   const panel = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/BenchmarksPanel.tsx'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/src/BenchmarksPanel.tsx'),
     'utf8',
   );
   const styles = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/styles.css'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/src/styles.css'),
     'utf8',
   );
   const requiredPanelMarkers = [
@@ -227,51 +227,51 @@ function assertBenchmarkWorkbenchStructure() {
   }
 }
 
-function assertBenchmarkSamplePaneStructure() {
+function assertBenchmarkResultViewStructure() {
   const panel = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/BenchmarksPanel.tsx'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/src/BenchmarksPanel.tsx'),
     'utf8',
   );
-  const styles = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/styles.css'),
-    'utf8',
-  );
-  const requiredPanelMarkers = [
+  const removedPanelMarkers = [
+    'BenchmarkTaskPane',
+    'BenchmarkSampleCard',
     'BenchmarkSampleCoordinateInspector',
+    'CombinedIntegralTermTable',
+    'IntegralTermTable',
     'benchmark-image-fit',
     'benchmark-sample-coordinate-inspector',
+    'benchmark-sample-window',
+    'competence_density',
+  ];
+  for (const marker of removedPanelMarkers) {
+    if (panel.includes(marker)) {
+      throw new Error(`BenchmarksPanel must not expose legacy benchmark result marker: ${marker}`);
+    }
+  }
+  const requiredPanelMarkers = [
+    'BenchmarkPerformancePane',
+    'BenchmarkModelsPane',
+    'CapabilityMapPanel',
+    'benchmark-model-cost-grid',
   ];
   for (const marker of requiredPanelMarkers) {
     if (!panel.includes(marker)) {
-      throw new Error(`BenchmarksPanel must expose sample pane marker: ${marker}`);
-    }
-  }
-  const requiredStyleMarkers = [
-    '--benchmark-sample-tile-size',
-    '.benchmark-image-fit',
-    'box-sizing: border-box',
-    'inset: 0',
-    '.benchmark-sample-coordinate-inspector',
-    'object-fit: contain',
-  ];
-  for (const marker of requiredStyleMarkers) {
-    if (!styles.includes(marker)) {
-      throw new Error(`Console styles must preserve sample pane marker: ${marker}`);
+      throw new Error(`BenchmarksPanel must expose result-view marker: ${marker}`);
     }
   }
 }
 
 function assertBenchmarkFrontierPlotStructure() {
   const dashboard = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/BenchmarkResultDashboard.tsx'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/src/BenchmarkResultDashboard.tsx'),
     'utf8',
   );
   const panel = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/BenchmarksPanel.tsx'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/src/BenchmarksPanel.tsx'),
     'utf8',
   );
   const styles = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/styles.css'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/src/styles.css'),
     'utf8',
   );
   const requiredDashboardMarkers = [
@@ -337,11 +337,11 @@ function assertBenchmarkFrontierPlotStructure() {
 
 function assertBenchmarkModelWorkbenchStructure() {
   const panel = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/BenchmarksPanel.tsx'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/src/BenchmarksPanel.tsx'),
     'utf8',
   );
   const styles = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/styles.css'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/src/styles.css'),
     'utf8',
   );
   const requiredPanelMarkers = [
@@ -394,7 +394,7 @@ function assertBenchmarkModelWorkbenchStructure() {
 }
 
 function assertConsoleTextIsUseful() {
-  const webRoot = resolve(repositoryRoot, 'src/leibniz/console/_web_src/src');
+  const webRoot = resolve(repositoryRoot, 'src/leibniz/console/web/src');
   const bannedPatterns = [
     /fixture/i,
     /Best-known score by model cost/,
@@ -417,7 +417,7 @@ function assertConsoleTextIsUseful() {
 
 function assertConsoleResultRootPolicy() {
   const resultViewRecords = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/resultViewRecords.ts'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/src/resultViewRecords.ts'),
     'utf8',
   );
   for (const marker of ['delete resultRecord']) {
@@ -427,7 +427,7 @@ function assertConsoleResultRootPolicy() {
     throw new Error(`Result view transport must not expose local mutation marker: ${marker}`);
   }
   const viteConfig = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/vite.config.mjs'),
+    resolve(repositoryRoot, 'src/leibniz/console/web/vite.config.mjs'),
     'utf8',
   );
   if (viteConfig.includes('addWatchFile')) {

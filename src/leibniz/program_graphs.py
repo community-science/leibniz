@@ -75,10 +75,17 @@ class ProgramTensorContract:
 
     name: str
     axes: tuple[ProgramAxis, ...]
+    # A non-negative input declares a physical domain constraint (e.g. a
+    # timestep dt >= 0). Shape validation probes such inputs with non-negative
+    # values so a numerically valid program — a spectral/exponential integrator,
+    # say — is not spuriously overflowed by a random negative probe.
+    nonnegative: bool = False
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ProgramGraphError("tensor contract name must be nonempty")
+        if type(self.nonnegative) is not bool:
+            raise ProgramGraphError(f"{self.name} nonnegative flag must be a boolean")
         for axis in self.axes:
             if type(axis) is int:
                 if axis <= 0:
@@ -127,16 +134,23 @@ class ProgramTensorContract:
                 )
 
     def to_record(self) -> dict[str, object]:
-        return {"name": self.name, "axes": list(self.axes)}
+        record: dict[str, object] = {"name": self.name, "axes": list(self.axes)}
+        if self.nonnegative:
+            record["nonnegative"] = True
+        return record
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ProgramTensorContract:
+        nonnegative = record.get("nonnegative", False)
+        if type(nonnegative) is not bool:
+            raise ProgramGraphError("tensor contract nonnegative flag must be a boolean")
         return cls(
             name=_extract.string(record.get("name"), "name"),
             axes=tuple(
                 _as_program_axis(axis, field="axes")
                 for axis in _unparsed_sequence(record.get("axes"), "axes")
             ),
+            nonnegative=nonnegative,
         )
 
 
@@ -537,14 +551,20 @@ class ProgramGraph:
         output_shapes: list[tuple[tuple[int, ...], ...]] = []
         for sample_index, sample_shapes in enumerate(samples):
             self._validate_input_shape_sample(sample_shapes, field=f"sample {sample_index} input")
-            values = tuple(
-                make_empty_float_tensor(
+            probes: list[Any] = []
+            for contract, shape in zip(self.inputs, sample_shapes, strict=True):
+                probe = make_empty_float_tensor(
                     runtime,
                     (batch_size, *shape),
                     device=runtime.device,
                 ).normal_()
-                for shape in sample_shapes
-            )
+                # A non-negative input (e.g. a timestep) must not be probed with
+                # a random negative value, which would spuriously overflow a
+                # numerically valid integrator during shape inference.
+                if contract.nonnegative:
+                    probe = probe.abs_()
+                probes.append(probe)
+            values = tuple(probes)
             outputs = _as_tuple(module(*values))
             _validate_output_count(outputs, expected=len(self.outputs))
             output_shapes.append(

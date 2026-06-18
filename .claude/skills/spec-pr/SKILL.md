@@ -9,7 +9,7 @@ A repeatable scaffold for turning a settled design into the spec PR an implement
 
 ## 1. Ground the design in the architecture, and design from the ideal
 
-Before drafting, re-read the living architecture (the console Architecture tab, `src/leibniz/console/_web_src/src/ArchitecturePanel.tsx`). State which root, edge, or roadmap step the work advances — grounded / gap / contradiction, the same opening move as a review. Then design from what *should* exist, reasoning from domain knowledge, rather than by extending whatever is already in the repo. Existing code is a starting point to replace, not a constraint.
+Before drafting, re-read the living architecture (the console Architecture tab, `src/leibniz/console/web/src/ArchitecturePanel.tsx`). State which root, edge, or roadmap step the work advances — grounded / gap / contradiction, the same opening move as a review. Then design from what *should* exist, reasoning from domain knowledge, rather than by extending whatever is already in the repo. Existing code is a starting point to replace, not a constraint.
 
 ## 2. Settle scope and the genuine forks
 

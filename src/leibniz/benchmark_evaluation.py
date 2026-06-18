@@ -319,6 +319,7 @@ def sampled_competence_curriculum_record(
 
     if not points:
         raise ValueError("sampled competence curriculum requires at least one point")
+    competence_value_kind = _shared_competence_value_kind(points)
     sorted_points = tuple(
         sorted(
             points,
@@ -334,7 +335,13 @@ def sampled_competence_curriculum_record(
         for point in sorted_points
     )
     accepted_masses = tuple(
-        _finite_score(
+        _record_nonnegative_number(
+            point.get("mean_accepted_mass"),
+            field="sampled_competence.mean_accepted_mass",
+            error_type=ValueError,
+        )
+        if competence_value_kind == "validated-bits"
+        else _finite_score(
             point.get("mean_accepted_mass"),
             field="sampled_competence.mean_accepted_mass",
         )
@@ -348,7 +355,7 @@ def sampled_competence_curriculum_record(
         )
         / total_samples
     )
-    return {
+    record: dict[str, object] = {
         "kind": "sampled-competence-curriculum",
         "sampling_rule": first.get("sampling_rule"),
         "difficulty_assumption": first.get("difficulty_assumption"),
@@ -359,6 +366,24 @@ def sampled_competence_curriculum_record(
         "mean_accepted_mass": weighted_score,
         "points": [dict(point) for point in sorted_points],
     }
+    if competence_value_kind is not None:
+        record["competence_value_kind"] = competence_value_kind
+    return record
+
+
+def _shared_competence_value_kind(
+    points: Sequence[Mapping[str, object]],
+) -> str | None:
+    kinds = {
+        value
+        for point in points
+        if isinstance((value := point.get("competence_value_kind")), str)
+    }
+    if not kinds:
+        return None
+    if kinds == {"validated-bits"}:
+        return "validated-bits"
+    raise ValueError("sampled competence points mix incompatible value kinds")
 
 
 def validation_competence(*, validation_loss: float, outcome_count: int) -> float:

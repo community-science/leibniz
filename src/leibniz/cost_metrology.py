@@ -1362,7 +1362,9 @@ _reduction_ops = frozenset(
         "aten.amax.default",
         "aten.argmax.default",
         "aten.argmin.default",
+        "aten.avg_pool2d.default",
         "aten.max.default",
+        "aten.max_pool2d_with_indices.default",
         "aten.mean.dim",
         "aten.min.default",
         "aten.prod.default",
@@ -1389,6 +1391,7 @@ _convolution_ops = frozenset(
 
 _movement_ops = frozenset(
     {
+        "aten._to_copy.default",
         "aten.clone.default",
         "aten.cat.default",
         "aten.copy.default",

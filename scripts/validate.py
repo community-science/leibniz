@@ -156,7 +156,7 @@ def validation_checks(
                     ValidationCommand(
                         label="Console build and browser tests",
                         argv=("npm", "test"),
-                        cwd=repository_root / "src" / "leibniz" / "console" / "_web_src",
+                        cwd=repository_root / "src" / "leibniz" / "console" / "web",
                     ),
                 ),
             )

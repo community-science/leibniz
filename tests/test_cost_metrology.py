@@ -309,6 +309,25 @@ def test_measure_program_cost_counts_conv2d_formula() -> None:
     assert measurement.per_op[0].name == "aten.convolution.default"
 
 
+def test_measure_program_cost_counts_max_pool2d_as_reduction() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    values = torch.randn(1, 2, 4, 4, device=runtime.device)
+
+    def program(tensor: Any) -> Any:
+        return torch.nn.functional.max_pool2d(tensor, 2)
+
+    measurement = measure_program_cost(runtime, program, values, strict=True)
+
+    pool_ops = tuple(
+        op for op in measurement.per_op if op.name == "aten.max_pool2d_with_indices.default"
+    )
+    assert pool_ops, [op.name for op in measurement.per_op]
+    assert pool_ops[0].operation_class == "reduction"
+    # A reduction is charged its input element count: 1 * 2 * 4 * 4 = 32.
+    assert pool_ops[0].abstract_flops == 1 * 2 * 4 * 4
+
+
 def test_measure_program_cost_counts_pointwise_chain() -> None:
     runtime = resolve_tensor_runtime("cpu")
     torch = runtime.torch

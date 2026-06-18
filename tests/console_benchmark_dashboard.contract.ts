@@ -10,15 +10,15 @@ import {
   scoreTickLabel,
   selectionForId,
   sortedModelResults,
-} from '../src/leibniz/console/_web_src/src/benchmarkDashboardModel.ts';
-import type { ModelInspectionRecord } from '../src/leibniz/console/_web_src/src/modelInspections.ts';
+} from '../src/leibniz/console/web/src/benchmarkDashboardModel.ts';
+import type { ModelInspectionRecord } from '../src/leibniz/console/web/src/modelInspections.ts';
 import type {
   BenchmarkResultRecord,
   ModelResultRecord,
   ResultViewRecord,
-} from '../src/leibniz/console/_web_src/src/resultViews.ts';
-import { parseResultViewRecords } from '../src/leibniz/console/_web_src/src/resultViews.ts';
-import type { StateSpaceRegionRecord } from '../src/leibniz/console/_web_src/src/stateSpaceRecords.ts';
+} from '../src/leibniz/console/web/src/resultViews.ts';
+import { parseResultViewRecords } from '../src/leibniz/console/web/src/resultViews.ts';
+import type { StateSpaceRegionRecord } from '../src/leibniz/console/web/src/stateSpaceRecords.ts';
 
 const targetBenchmark = 'benchmarks.target@0.1.0';
 const otherBenchmark = 'benchmarks.other@0.1.0';
@@ -98,7 +98,6 @@ function modelResult({
           log2_volume_minimum: 0,
           log2_volume_maximum: score,
           width_in_bits: score,
-          competence_density: cost / score,
           contribution: cost,
           representative_log2_volume: score,
         },
@@ -212,7 +211,6 @@ function modelResult({
           log2_volume_minimum: 0,
           log2_volume_maximum: score,
           width_in_bits: score,
-          competence_density: 1,
           contribution: score,
           representative_log2_volume: score,
           confidence_half_width: 0,
@@ -767,28 +765,6 @@ assertThrows(
       },
     ]),
   'parser rejects unsupported result views',
-);
-assertThrows(
-  () =>
-    parseResultViewRecords([
-      {
-        benchmark_results: [
-          {
-            ...result,
-            leaderboard: [
-              {
-                ...result.leaderboard[0]!,
-                console_view_model: {},
-              },
-            ],
-          },
-        ],
-        format: 'leibniz.console.benchmark-results',
-        format_version: 1,
-        source_path: 'results/views/digits/benchmark_results.json',
-      },
-    ]),
-  'parser rejects malformed console view models',
 );
 
 function assertEqual(actual: unknown, expected: unknown, label: string) {

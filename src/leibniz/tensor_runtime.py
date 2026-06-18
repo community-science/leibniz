@@ -65,6 +65,7 @@ __all__ = [
     "tensor_runtime_shape_element_count",
     "tensor_runtime_total_memory_bytes",
     "tensor_runtime_used_memory_bytes",
+    "tensor_runtime_value_is_finite",
     "tensor_value_to_host",
     "tensor_value_to_host_values",
     "resolve_host_tensor_runtime",
@@ -412,6 +413,16 @@ def tensor_value_to_host(value: Any) -> Any:
     if callable(move_to_host):
         value = move_to_host()
     return value
+
+
+def tensor_runtime_value_is_finite(runtime: TensorRuntime, value: Any) -> bool:
+    """Return whether every element of a tensor-like runtime value is finite."""
+
+    try:
+        finite = runtime.backend.isfinite(value).all()
+    except (TypeError, ValueError):
+        return True
+    return bool(tensor_value_to_host(finite))
 
 
 def tensor_value_to_host_values(value: Any) -> list[float]:
@@ -1793,4 +1804,3 @@ def spatial_axis_names_for_dimension(dimension: int) -> tuple[str, ...] | None:
     """Return fixed-support output-axis parameter names for a spatial dimension."""
 
     return _spatial_axis_names_by_dimension.get(dimension)
-

@@ -1,7 +1,6 @@
 import {
   Boxes,
   ChevronDown,
-  Code2,
   Fingerprint,
   GitBranch,
   PackageCheck,
@@ -9,7 +8,6 @@ import {
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useMemo } from 'react';
-import { useState } from 'react';
 
 import { BenchmarkResultDashboard } from './BenchmarkResultDashboard.tsx';
 import {
@@ -22,12 +20,7 @@ import {
   shortDigest,
 } from './benchmarkDashboardModel.ts';
 import type { ArtifactReferenceRecord } from './artifactReferences.ts';
-import type {
-  BenchmarkCodeSurfaceRecord,
-  BenchmarkTaskRecord,
-  GeneratedObservationBatchRecord,
-  GeneratedObservationSampleRecord,
-} from './benchmarkTasks.ts';
+import type { BenchmarkTaskRecord } from './benchmarkTasks.ts';
 import type {
   ModelInspectionRecord,
 } from './modelInspections.ts';
@@ -37,14 +30,11 @@ import type {
   CapabilityMapNodeRecord,
   CapabilityMapRecord,
   ResultViewRecord,
-  RunDetailSectionRecord,
   RunResultRecord,
-  StateSpaceIntegralTermRecord,
   TrainingHistoryPointRecord,
   TrainingProtocolRecord,
 } from './resultViews.ts';
 
-type SampleCardDensity = 'standard' | 'compact';
 type BenchmarkModelCandidate = BenchmarkResultRecord['model_candidates'][number];
 type ModelArtifactView = 'model' | 'program' | 'measurements' | 'training' | 'provenance';
 type ModelArtifactFlowItem = {
@@ -144,12 +134,6 @@ export function BenchmarksPanel({
         </div>
 
         <div className="benchmark-section-stack">
-          <CollapsibleBenchmarkSection
-            label="Samples"
-            storageKey="leibniz.console.benchmarks.section.samples.expanded"
-          >
-            <BenchmarkTaskPane task={selected} />
-          </CollapsibleBenchmarkSection>
           <CollapsibleBenchmarkSection
             label="Performance"
             summary={`${result?.leaderboard.length ?? 0} models`}
@@ -502,17 +486,9 @@ function ModelManifestDetail({
   inspection: ModelInspectionRecord | undefined;
   model: BenchmarkModelCandidate;
 }) {
-  const sections = model.console_view_model?.detail_sections ?? [];
   return (
     <section className="benchmark-model-detail-section">
       <h4>Model Manifest</h4>
-      {sections.length === 0 ? null : (
-        <div className="benchmark-model-generated-summary">
-          {sections.map((section) => (
-            <ModelGeneratedSummarySection key={section.title} section={section} />
-          ))}
-        </div>
-      )}
       <dl className="benchmark-model-detail-grid">
         <dt>Model Key</dt>
         <dd>{model.model_key}</dd>
@@ -524,26 +500,6 @@ function ModelManifestDetail({
         <dd>{observedVolumeLabel(model)}</dd>
         <dt>Manifest</dt>
         <dd>{inspection?.model_manifest === undefined ? 'not recorded' : referenceLabel(inspection.model_manifest)}</dd>
-      </dl>
-    </section>
-  );
-}
-
-function ModelGeneratedSummarySection({ section }: { section: RunDetailSectionRecord }) {
-  const entries = section.entries ?? [];
-  if (entries.length === 0) {
-    return null;
-  }
-  return (
-    <section className="run-evidence-panel">
-      <h5>{section.title}</h5>
-      <dl>
-        {entries.map((entry) => (
-          <div key={entry.label}>
-            <dt>{entry.label}</dt>
-            <dd>{entry.value}</dd>
-          </div>
-        ))}
       </dl>
     </section>
   );
@@ -571,19 +527,6 @@ function ModelMeasurementDetail({ model }: { model: BenchmarkModelCandidate }) {
           <dd>{model.cost_integral?.terms.length.toLocaleString() ?? 'none'}</dd>
         </div>
       </dl>
-      {model.cost_integral !== undefined && integralTermsAlign(model.score_integral.terms, model.cost_integral.terms) ? (
-        <CombinedIntegralTermTable
-          costTerms={model.cost_integral.terms}
-          scoreTerms={model.score_integral.terms}
-        />
-      ) : (
-        <>
-          <IntegralTermTable title="Score Integral" terms={model.score_integral.terms} />
-          {model.cost_integral === undefined ? null : (
-            <IntegralTermTable title="Cost Integral" terms={model.cost_integral.terms} />
-          )}
-        </>
-      )}
       <CapabilityMapPanel map={model.capability_map} />
     </section>
   );
@@ -664,111 +607,6 @@ function CapabilityMapNode({
       ))}
     </div>
   );
-}
-
-function CombinedIntegralTermTable({
-  costTerms,
-  scoreTerms,
-}: {
-  costTerms: StateSpaceIntegralTermRecord[];
-  scoreTerms: StateSpaceIntegralTermRecord[];
-}) {
-  if (scoreTerms.length === 0) {
-    return null;
-  }
-  return (
-    <section className="benchmark-integral-term-section" aria-label="Score and cost integrals">
-      <h5>Score and Cost Integrals</h5>
-      <div className="benchmark-integral-term-grid combined" role="table">
-        <div className="benchmark-integral-term-row combined header" role="row">
-          <span role="columnheader">Range</span>
-          <span role="columnheader">Width</span>
-          <span role="columnheader">Score Density</span>
-          <span role="columnheader">Score</span>
-          <span role="columnheader">Cost Density</span>
-          <span role="columnheader">Cost</span>
-          <span role="columnheader">Samples</span>
-        </div>
-        {scoreTerms.map((scoreTerm, index) => {
-          const costTerm = costTerms[index];
-          return (
-            <div
-              className="benchmark-integral-term-row combined"
-              key={`${scoreTerm.kind}:${scoreTerm.log2_volume_minimum}:${scoreTerm.log2_volume_maximum}:${index}`}
-              role="row"
-            >
-              <span role="cell">{integralTermRegionLabel(scoreTerm)}</span>
-              <span role="cell">{formatBits(scoreTerm.width_in_bits)}</span>
-              <span role="cell">{formatMetricNumber(scoreTerm.competence_density)}</span>
-              <span role="cell">{formatBits(scoreTerm.contribution)}</span>
-              <span role="cell">{formatCost(costTerm.competence_density)}</span>
-              <span role="cell">{formatCost(costTerm.contribution)}</span>
-              <span role="cell">{scoreTerm.sample_count?.toLocaleString() ?? 'unknown'}</span>
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-function IntegralTermTable({
-  terms,
-  title,
-}: {
-  terms: StateSpaceIntegralTermRecord[];
-  title: string;
-}) {
-  if (terms.length === 0) {
-    return null;
-  }
-  return (
-    <section className="benchmark-integral-term-section" aria-label={title}>
-      <h5>{title}</h5>
-      <div className="benchmark-integral-term-grid" role="table">
-        <div className="benchmark-integral-term-row header" role="row">
-          <span role="columnheader">Range</span>
-          <span role="columnheader">Width</span>
-          <span role="columnheader">Density</span>
-          <span role="columnheader">Contribution</span>
-          <span role="columnheader">Samples</span>
-        </div>
-        {terms.map((term, index) => (
-          <div
-            className="benchmark-integral-term-row"
-            key={`${term.kind}:${term.log2_volume_minimum}:${term.log2_volume_maximum}:${index}`}
-            role="row"
-          >
-            <span role="cell">{integralTermRegionLabel(term)}</span>
-            <span role="cell">{formatBits(term.width_in_bits)}</span>
-            <span role="cell">{formatMetricNumber(term.competence_density)}</span>
-            <span role="cell">{formatBits(term.contribution)}</span>
-            <span role="cell">{term.sample_count?.toLocaleString() ?? 'unknown'}</span>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function integralTermsAlign(
-  scoreTerms: StateSpaceIntegralTermRecord[],
-  costTerms: StateSpaceIntegralTermRecord[],
-): boolean {
-  return scoreTerms.length === costTerms.length && scoreTerms.every((term, index) => {
-    const costTerm = costTerms[index];
-    return costTerm !== undefined
-      && term.log2_volume_minimum === costTerm.log2_volume_minimum
-      && term.log2_volume_maximum === costTerm.log2_volume_maximum;
-  });
-}
-
-function integralTermRegionLabel(term: StateSpaceIntegralTermRecord): string {
-  return `${formatBits(term.log2_volume_minimum)} to ${formatBits(term.log2_volume_maximum)}`;
-}
-
-function formatBits(value: number): string {
-  return `${formatMetricNumber(value)} bits`;
 }
 
 function ModelProgramDetail({
@@ -1244,330 +1082,4 @@ function referenceLabel(reference: ArtifactReferenceRecord): string {
     reference.external_uri ??
     reference.kind
   );
-}
-
-function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
-  const defaultBatch = task.batches.find((batch) => batch.sample_count > 0) ?? task.batches[0];
-  const defaultBatchKey = defaultBatch === undefined ? null : batchKey(defaultBatch);
-  const [selectedBatchKey, setSelectedBatchKey] = usePersistentState<string | null>(
-    `leibniz.console.benchmarks.${task.benchmark_id}.selectedBatch`,
-    defaultBatchKey,
-  );
-  const [selectedSampleKey, setSelectedSampleKey] = usePersistentState<string | null>(
-    `leibniz.console.benchmarks.${task.benchmark_id}.selectedSample`,
-    null,
-  );
-
-  if (task.batches.length === 0) {
-    return <p className="artifact-detail-note">No generated samples are available.</p>;
-  }
-
-  const selectedBatch =
-    task.batches.find((batch) => batchKey(batch) === selectedBatchKey) ??
-    task.batches.find((batch) => batch.sample_count > 0) ??
-    task.batches[0];
-  const visibleSamples = selectedBatch.samples.map((sample) => ({
-    batch: selectedBatch,
-    sample,
-  }));
-  const selectedSample =
-    visibleSamples.find(
-      ({ batch, sample }) => sampleKey(batch, sample) === selectedSampleKey,
-    ) ?? visibleSamples[0];
-  const selectedKey =
-    selectedSample === undefined
-      ? null
-      : sampleKey(selectedSample.batch, selectedSample.sample);
-  const hasInteractiveImageOverlay = selectedBatch.samples.some(
-    (sample) => sample.image_overlay?.kind === 'grid-move-highlights',
-  );
-
-  return (
-    <div className="benchmark-task">
-      <BenchmarkCodeSurfaceInspector surfaces={task.code_surfaces} />
-      <BenchmarkSampleCoordinateInspector
-        batches={task.batches}
-        onBatchChange={(key) => {
-          setSelectedBatchKey(key);
-          setSelectedSampleKey(null);
-        }}
-        sample={selectedSample?.sample}
-        selectedBatch={selectedBatch}
-      />
-      <section
-        aria-label={`Generated benchmark samples ${selectedBatch.label}`}
-        className="benchmark-sample-window"
-      >
-        {selectedBatch.samples.length === 0 ? (
-          <p className="artifact-detail-note">No generated samples in this range.</p>
-        ) : (
-          <div
-            className={`benchmark-sample-grid ${
-              selectedBatch.presentation.sample_card_density
-            } ${hasInteractiveImageOverlay ? 'interactive-image-overlay' : ''}`}
-          >
-            {selectedBatch.samples.map((sample) => (
-              <BenchmarkSampleCard
-                density={selectedBatch.presentation.sample_card_density}
-                key={sampleKey(selectedBatch, sample)}
-                onSelect={() => setSelectedSampleKey(sampleKey(selectedBatch, sample))}
-                sample={sample}
-                selected={sampleKey(selectedBatch, sample) === selectedKey}
-              />
-            ))}
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function BenchmarkCodeSurfaceInspector({
-  surfaces,
-}: {
-  surfaces: BenchmarkCodeSurfaceRecord[];
-}) {
-  const [expanded, setExpanded] = usePersistentState(
-    'leibniz.console.benchmarks.codeInspector.expanded',
-    false,
-  );
-  const selected = surfaces[0];
-  if (selected === undefined) {
-    return null;
-  }
-  return (
-    <section className="benchmark-code-inspector" aria-label="Benchmark implementation code">
-      <div className="benchmark-code-inspector-header">
-        <button
-          aria-expanded={expanded}
-          className="benchmark-code-toggle"
-          onClick={() => setExpanded((value) => !value)}
-          type="button"
-        >
-          <ChevronDown aria-hidden="true" className={expanded ? 'expanded' : ''} size={16} />
-          <Code2 aria-hidden="true" size={16} />
-          <span>Implementation</span>
-        </button>
-        <div className="benchmark-code-source">
-          {selected.source_path}:{selected.start_line}-{selected.end_line}
-        </div>
-      </div>
-      <div className="benchmark-code-inspector-body" hidden={!expanded}>
-        <ol className="benchmark-code-call-path" aria-label="Implementation call path">
-          {selected.call_path.map((step) => (
-            <li key={step}>{step}</li>
-          ))}
-        </ol>
-        <pre className="benchmark-code-excerpt">
-          <code>{selected.code}</code>
-        </pre>
-      </div>
-    </section>
-  );
-}
-
-function BenchmarkSampleCard({
-  density,
-  onSelect,
-  sample,
-  selected,
-}: {
-  density: SampleCardDensity;
-  onSelect: () => void;
-  sample: GeneratedObservationSampleRecord;
-  selected: boolean;
-}) {
-  const imageUrl = sample.image_data_url;
-  const overlay = sample.image_overlay;
-  const [hoveredSource, setHoveredSource] = useState<string | null>(null);
-  return (
-    <button
-      className={`benchmark-sample-card ${density} ${
-        overlay?.kind === 'grid-move-highlights' ? 'interactive-image-overlay' : ''
-      } ${selected ? 'selected' : ''}`}
-      onClick={onSelect}
-      type="button"
-    >
-      {imageUrl === undefined ? (
-        <div className="benchmark-text-sample-shell">
-          <div className="benchmark-text-sample-outcome">{sample.outcome_id}</div>
-          {sample.observable_state_id === undefined ? null : (
-            <div className="benchmark-text-sample-state">{sample.observable_state_id}</div>
-          )}
-        </div>
-      ) : (
-        <div className="benchmark-image-shell">
-          <div className="benchmark-image-fit">
-            <img alt={sample.outcome_id} src={imageUrl} />
-            {overlay?.kind === 'grid-move-highlights' ? (
-              <BenchmarkGridMoveOverlay
-                hoveredSource={hoveredSource}
-                onHoverSource={setHoveredSource}
-                overlay={overlay}
-              />
-            ) : null}
-          </div>
-        </div>
-      )}
-    </button>
-  );
-}
-
-function BenchmarkGridMoveOverlay({
-  hoveredSource,
-  onHoverSource,
-  overlay,
-}: {
-  hoveredSource: string | null;
-  onHoverSource: (source: string | null) => void;
-  overlay: NonNullable<GeneratedObservationSampleRecord['image_overlay']>;
-}) {
-  const sourceKeys = new Set(overlay.moves.map((move) => gridCoordinateKey(move.from)));
-  const destinationKeys = new Set(
-    overlay.moves
-      .filter((move) => gridCoordinateKey(move.from) === hoveredSource)
-      .map((move) => gridCoordinateKey(move.to)),
-  );
-  const targetDestinationKeys = new Set(
-    overlay.moves
-      .filter(
-        (move) =>
-          gridCoordinateKey(move.from) === hoveredSource &&
-          (move.target_probability ?? 0) > 0,
-      )
-      .map((move) => gridCoordinateKey(move.to)),
-  );
-  const cells = [];
-  for (let row = 0; row < overlay.rows; row += 1) {
-    for (let column = 0; column < overlay.columns; column += 1) {
-      const key = `${column},${row}`;
-      const isSource = sourceKeys.has(key);
-      const isDestination = destinationKeys.has(key);
-      const isTargetDestination = targetDestinationKeys.has(key);
-      const className = [
-        'benchmark-grid-move-cell',
-        isSource ? 'source' : '',
-        isDestination ? 'destination' : '',
-        isTargetDestination ? 'target-destination' : '',
-      ].filter(Boolean).join(' ');
-      cells.push(
-        <div
-          aria-hidden="true"
-          className={className}
-          key={key}
-          onMouseEnter={() => {
-            if (isSource) {
-              onHoverSource(key);
-            }
-          }}
-          onMouseLeave={() => {
-            if (isSource) {
-              onHoverSource(null);
-            }
-          }}
-        />,
-      );
-    }
-  }
-  return (
-    <div
-      className="benchmark-grid-move-overlay"
-      style={{
-        gridTemplateColumns: `repeat(${overlay.columns}, 1fr)`,
-        gridTemplateRows: `repeat(${overlay.rows}, 1fr)`,
-      }}
-    >
-      {cells}
-    </div>
-  );
-}
-
-function gridCoordinateKey(coordinate: [number, number]): string {
-  return `${coordinate[0]},${coordinate[1]}`;
-}
-
-function BenchmarkSampleCoordinateInspector({
-  batches,
-  onBatchChange,
-  sample,
-  selectedBatch,
-}: {
-  batches: GeneratedObservationBatchRecord[];
-  onBatchChange: (key: string) => void;
-  sample: GeneratedObservationSampleRecord | undefined;
-  selectedBatch: GeneratedObservationBatchRecord;
-}) {
-  const volumes = realizedVolumes(selectedBatch);
-  const entries: [string, string][] = [
-    ['Realized Volumes', volumes.length === 0 ? 'null set' : volumes.join(', ')],
-  ];
-  if (sample !== undefined) {
-    entries.push(['Outcome', sample.outcome_id]);
-    if (sample.component_index !== undefined) {
-      entries.push(['Component', String(sample.component_index)]);
-    }
-    if (sample.region_component_index !== undefined) {
-      entries.push(['Region Component', String(sample.region_component_index)]);
-    }
-    if (sample.axis_coordinates !== undefined) {
-      entries.push(['Axis Coordinates', recordLabel(sample.axis_coordinates)]);
-    }
-    if (sample.field_shape !== undefined) {
-      entries.push(['Field', sample.field_shape.join(' x ')]);
-    }
-    if (sample.available_outcome_ids !== undefined) {
-      entries.push(['Available Outcomes', String(sample.available_outcome_ids.length)]);
-    }
-    if (sample.observable_state_id !== undefined) {
-      entries.push(['State', sample.observable_state_id]);
-    }
-  }
-  return (
-    <section
-      className="benchmark-sample-coordinate-inspector"
-      aria-label="Selected sample coordinates"
-    >
-      <div className="benchmark-sample-coordinate-range">
-        <label htmlFor="benchmark-volume-range">Volume Range</label>
-        <select
-          className="benchmark-sample-window-select"
-          id="benchmark-volume-range"
-          onChange={(event) => onBatchChange(event.target.value)}
-          value={batchKey(selectedBatch)}
-        >
-          {batches.map((batch) => (
-            <option key={batchKey(batch)} value={batchKey(batch)}>
-              {batch.label} ({batch.sample_count})
-            </option>
-          ))}
-        </select>
-      </div>
-      <dl>
-        {entries.map(([label, value]) => (
-          <div key={label}>
-            <dt>{label}</dt>
-            <dd title={value}>{value}</dd>
-          </div>
-        ))}
-      </dl>
-    </section>
-  );
-}
-
-function realizedVolumes(batch: GeneratedObservationBatchRecord): string[] {
-  if (batch.volumes === undefined) {
-    return [];
-  }
-  return batch.volumes.map((size) => String(size));
-}
-
-function sampleKey(
-  batch: GeneratedObservationBatchRecord,
-  sample: GeneratedObservationSampleRecord,
-): string {
-  return `${batchKey(batch)}:${sample.index}:${sample.outcome_id}`;
-}
-
-function batchKey(batch: GeneratedObservationBatchRecord): string {
-  return `${batch.mode}:${batch.label}:${batch.seed}:${batch.sample_count}`;
 }

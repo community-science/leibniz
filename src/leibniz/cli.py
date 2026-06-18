@@ -31,7 +31,6 @@ from leibniz.documents import (
     document_filename_suffix,
     load_object_document,
 )
-from leibniz.evaluation_bundles import BenchmarkEvaluationBundleDocument
 from leibniz.formation_timing import (
     FormationOperatorProfilePlan,
     profile_formation_operators,
@@ -57,6 +56,7 @@ from leibniz.model_operations import ModelOperationDocument
 from leibniz.outcomes import OutcomeSpace
 from leibniz.program_graphs import ProgramGraphError, load_program_graph
 from leibniz.resources import ResourceReportDocument, ResourceReportSetDocument
+from leibniz.result_schema import EvaluationDocument
 from leibniz.submission_registries import SubmissionRegistryDocument
 from leibniz.tensor_runtime import (
     TensorRuntimeError,
@@ -181,11 +181,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     model_derivation.add_argument("path", type=Path)
 
-    evaluation_bundle = validate_subcommands.add_parser(
-        "evaluation-bundle",
-        help="validate a benchmark evaluation bundle document",
+    evaluation_record = validate_subcommands.add_parser(
+        "evaluation-record",
+        help="validate a benchmark evaluation record document",
     )
-    evaluation_bundle.add_argument("path", type=Path)
+    evaluation_record.add_argument("path", type=Path)
 
     submission_registry = validate_subcommands.add_parser(
         "submission-registry",
@@ -426,6 +426,15 @@ def _parser() -> argparse.ArgumentParser:
 
 def _console(args: argparse.Namespace) -> int:
     if str(args.console_command) == "dev":
+        missing = _console_dependencies_missing()
+        if missing is not None:
+            print(
+                f"error: console web dependencies are not installed ({missing}).\n"
+                "Run `bash scripts/setup_environment.sh` before starting the "
+                "console dev server.",
+                file=sys.stderr,
+            )
+            return 1
         command = _console_dev_command(args)
         try:
             return subprocess.run(
@@ -448,7 +457,26 @@ def _console_dev_command(args: argparse.Namespace) -> list[str]:
 
 
 def _console_web_source_root() -> Path:
-    return Path(__file__).parent / "console" / "_web_src"
+    return Path(__file__).parent / "console" / "web"
+
+
+def _console_dependencies_missing(web_root: Path | None = None) -> str | None:
+    """Return why console node dependencies look uninstalled, or None if present.
+
+    ``console dev`` shells into ``npm run dev`` (vite), which fails with an
+    opaque ``ERR_MODULE_NOT_FOUND`` when the dev toolchain is not installed —
+    e.g. on a fresh checkout, or when an earlier install was stranded under a
+    renamed directory. Detect that here and point the user at the setup step
+    instead.
+    """
+
+    root = _console_web_source_root() if web_root is None else web_root
+    node_modules = root / "node_modules"
+    if not node_modules.is_dir():
+        return "node_modules is missing"
+    if not (node_modules / "vite").exists():
+        return "the vite dev toolchain is not installed"
+    return None
 
 
 def _benchmark(args: argparse.Namespace) -> int:
@@ -531,8 +559,8 @@ def _benchmark(args: argparse.Namespace) -> int:
                     f"{prefix} benchmark training run {summary.run_slug} "
                     f"({summary.measurement_count} benchmark measurement(s) planned)"
                 )
-                print(f"training summary: {summary.training_summary_path}")
-                print(f"model artifacts: {summary.model_artifact_root}")
+                print(f"submission record: {summary.submission_record_path}")
+                print(f"submission artifacts: {summary.submission_artifact_root}")
             if skipped:
                 print(f"skipped {skipped} completed benchmark training manifest(s)")
             if moved:
@@ -574,7 +602,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                     f"completed benchmark evaluation {summary.run_slug} "
                     f"({summary.measurement_count} measurement(s))"
                 )
-                print(f"evaluation bundle: {summary.evaluation_bundle_path}")
+                print(f"evaluation record: {summary.evaluation_record_path}")
             if not evaluation_summaries and args.checkpoint_artifact is not None:
                 raise ValueError("no checkpoint artifacts matched benchmark evaluation inputs")
             if not evaluation_summaries:
@@ -641,7 +669,7 @@ def _run_benchmark_training(args: argparse.Namespace) -> tuple[list[BenchmarkRun
     return summaries, skipped, moved
 
 
-_generated_result_roots = ("training", "models", "evaluations", "views")
+_generated_result_roots = ("submissions", "benchmarks", "evaluations", "views")
 
 
 class _CleanBenchmarkResults(NamedTuple):
@@ -858,9 +886,9 @@ def _benchmark_training_completed(plan: BenchmarkRunPlan) -> bool:
             dry_run=True,
         )
     )
-    if not summary.training_summary_path.is_file():
+    if not summary.submission_record_path.is_file():
         return False
-    record = _load_object_record(summary.training_summary_path, description="training summary")
+    record = _load_object_record(summary.submission_record_path, description="training summary")
     completed = record.get("run_status") == "completed"
     return completed
 
@@ -893,7 +921,7 @@ def _benchmark_views_present(
     results_root: Path,
     benchmark_selectors: tuple[str, ...],
 ) -> bool:
-    paths = _evaluation_bundle_paths(
+    paths = _evaluation_record_paths(
         results_root=results_root,
         benchmark_selectors=benchmark_selectors,
     )
@@ -930,27 +958,31 @@ def _evaluation_checkpoint_artifacts(
                 results_root=results_root,
             ),
         )
-    training_root = results_root / "training"
-    if not training_root.is_dir():
+    submissions_root = results_root / "submissions"
+    if not submissions_root.is_dir():
         return ()
     checkpoint_paths: list[Path] = []
-    for path in sorted(training_root.rglob("*" + document_filename_suffix())):
-        record = _load_object_record(path, description="training summary")
-        if record.get("format") != "leibniz.benchmark-run":
+    for path in sorted(submissions_root.rglob("*" + document_filename_suffix())):
+        record = _load_object_record(path, description="submission record")
+        if record.get("format") != "leibniz.submission":
             continue
-        if record.get("run_status") != "completed":
+        raw_provenance = record.get("training_provenance")
+        if not isinstance(raw_provenance, Mapping):
             continue
-        benchmark_id = _benchmark_id_from_record(record, description="training_summary")
+        provenance = cast(Mapping[str, object], raw_provenance)
+        benchmark_id = _benchmark_id_from_record(
+            provenance, description="submission.training_provenance"
+        )
         if not _benchmark_selected(benchmark_id, benchmark_selectors):
             continue
-        run_slug = record.get("run_slug")
-        if isinstance(run_slug, str) and _evaluation_bundle_exists(
+        run_slug = provenance.get("run_slug")
+        if isinstance(run_slug, str) and _evaluation_record_exists(
             results_root=results_root,
             benchmark_id=benchmark_id,
             run_slug=run_slug,
         ):
             continue
-        raw_artifact = record.get("evaluation_model_artifact")
+        raw_artifact = provenance.get("evaluation_model_artifact")
         if not isinstance(raw_artifact, Mapping):
             continue
         artifact = cast(Mapping[str, object], raw_artifact)
@@ -971,7 +1003,7 @@ def _resolve_result_artifact_path(path: Path, *, results_root: Path) -> Path:
     return path
 
 
-def _evaluation_bundle_paths(
+def _evaluation_record_paths(
     *,
     results_root: Path,
     benchmark_selectors: tuple[str, ...],
@@ -989,7 +1021,7 @@ def _evaluation_bundle_paths(
     return tuple(paths)
 
 
-def _evaluation_bundle_exists(
+def _evaluation_record_exists(
     *,
     results_root: Path,
     benchmark_id: str,
@@ -1047,9 +1079,9 @@ def _benchmark_root_for_record(
 
 
 def _load_evaluation_summary_record(path: Path) -> dict[str, object]:
-    record = _load_object_record(path, description="benchmark evaluation bundle")
-    if record.get("format") != "leibniz.benchmark-evaluation":
-        raise ValueError(f"unsupported benchmark evaluation bundle: {path}")
+    record = _load_object_record(path, description="benchmark evaluation")
+    if record.get("format") != "leibniz.evaluation":
+        raise ValueError(f"unsupported benchmark evaluation: {path}")
     return record
 
 
@@ -1145,9 +1177,9 @@ def _validate(args: argparse.Namespace) -> int:
             document = ModelDerivationCompatibilityReportDocument.from_bytes(args.path.read_bytes())
             print(f"valid model derivation compatibility report {document.report.id}")
             return 0
-        if artifact == "evaluation-bundle":
-            document = BenchmarkEvaluationBundleDocument.from_bytes(args.path.read_bytes())
-            print(f"valid evaluation bundle {document.bundle.id}")
+        if artifact == "evaluation-record":
+            document = EvaluationDocument.from_bytes(args.path.read_bytes())
+            print(f"valid evaluation {document.evaluation.id}")
             return 0
         if artifact == "submission-registry":
             document = SubmissionRegistryDocument.from_bytes(args.path.read_bytes())

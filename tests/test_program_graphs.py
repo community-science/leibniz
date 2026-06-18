@@ -398,6 +398,53 @@ def test_program_graph_rejects_nondifferentiable_submitted_programs() -> None:
     ) == "sample 0 output is not differentiable"
 
 
+def test_validation_probes_nonnegative_input_without_negative_values() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    graph = ProgramGraph(
+        contract_kind="prediction",
+        inputs=(
+            ProgramTensorContract("field", (1, "S")),
+            ProgramTensorContract("dt", (), nonnegative=True),
+        ),
+        outputs=(ProgramTensorContract("future_field", (1, "S")),),
+        nodes=(ProgramGraphNode("step", _NegativeTimestepSensitiveStep(), "submitted-step"),),
+        edges=(
+            ProgramGraphEdge("field", "step", 0),
+            ProgramGraphEdge("dt", "step", 1),
+            ProgramGraphEdge("step", "future_field"),
+        ),
+    )
+
+    # The step overflows on a negative timestep; because dt is declared
+    # non-negative, shape validation never probes it negative, so a numerically
+    # valid integrator validates instead of being spuriously overflowed.
+    report = graph.validate(
+        runtime,
+        input_shapes=((1, 8), ()),
+        additional_input_shapes=(((1, 12), ()),),
+        require_differentiable=False,
+    )
+
+    assert report.output_shapes[0][0] == (1, 8)
+
+
+def test_tensor_contract_round_trips_nonnegative_flag() -> None:
+    marked = ProgramTensorContract("dt", (), nonnegative=True)
+    assert marked.to_record()["nonnegative"] is True
+    assert ProgramTensorContract.from_record(marked.to_record()) == marked
+
+    plain = ProgramTensorContract("field", (1, "S"))
+    assert "nonnegative" not in plain.to_record()
+    assert ProgramTensorContract.from_record(plain.to_record()).nonnegative is False
+
+
+class _NegativeTimestepSensitiveStep:
+    def __call__(self, field: Any, dt: Any) -> Any:
+        if float(dt.reshape(-1)[0]) < 0.0:
+            raise OverflowError("negative timestep overflows the propagator")
+        return field
+
+
 class _Detach:
     def __call__(self, value: Any) -> Any:
         return value.detach()
