@@ -426,6 +426,15 @@ def _parser() -> argparse.ArgumentParser:
 
 def _console(args: argparse.Namespace) -> int:
     if str(args.console_command) == "dev":
+        missing = _console_dependencies_missing()
+        if missing is not None:
+            print(
+                f"error: console web dependencies are not installed ({missing}).\n"
+                "Run `bash scripts/setup_environment.sh` before starting the "
+                "console dev server.",
+                file=sys.stderr,
+            )
+            return 1
         command = _console_dev_command(args)
         try:
             return subprocess.run(
@@ -449,6 +458,25 @@ def _console_dev_command(args: argparse.Namespace) -> list[str]:
 
 def _console_web_source_root() -> Path:
     return Path(__file__).parent / "console" / "web"
+
+
+def _console_dependencies_missing(web_root: Path | None = None) -> str | None:
+    """Return why console node dependencies look uninstalled, or None if present.
+
+    ``console dev`` shells into ``npm run dev`` (vite), which fails with an
+    opaque ``ERR_MODULE_NOT_FOUND`` when the dev toolchain is not installed —
+    e.g. on a fresh checkout, or when an earlier install was stranded under a
+    renamed directory. Detect that here and point the user at the setup step
+    instead.
+    """
+
+    root = _console_web_source_root() if web_root is None else web_root
+    node_modules = root / "node_modules"
+    if not node_modules.is_dir():
+        return "node_modules is missing"
+    if not (node_modules / "vite").exists():
+        return "the vite dev toolchain is not installed"
+    return None
 
 
 def _benchmark(args: argparse.Namespace) -> int:

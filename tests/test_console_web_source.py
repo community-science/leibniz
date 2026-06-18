@@ -2,6 +2,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from leibniz.cli import _console_dependencies_missing
 from leibniz.console.protocol import (
     console_protocol_format_versions,
     console_protocol_formats,
@@ -271,6 +272,20 @@ def test_handwritten_console_source_avoids_migrated_protocol_literals() -> None:
     )
 
     assert offenders == ()
+
+
+def test_console_dependency_check_reports_uninstalled_toolchain(tmp_path: Path) -> None:
+    # No node_modules at all (fresh checkout / wrong directory).
+    assert _console_dependencies_missing(tmp_path) is not None
+
+    # node_modules exists but the vite dev toolchain was never installed
+    # (e.g. an empty directory left after a source rename).
+    (tmp_path / "node_modules").mkdir()
+    assert _console_dependencies_missing(tmp_path) is not None
+
+    # A populated install with the dev toolchain present passes.
+    (tmp_path / "node_modules" / "vite").mkdir()
+    assert _console_dependencies_missing(tmp_path) is None
 
 
 def _handwritten_web_source_files() -> tuple[Path, ...]:
