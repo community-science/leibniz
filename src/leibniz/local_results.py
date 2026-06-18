@@ -505,7 +505,7 @@ def _local_run_records(
             capability_map.get("score_width_bits"),
             "evaluation.capability_map.score_width_bits",
         )
-        mean_competence = _as_probability(
+        mean_competence = _as_nonnegative_number(
             capability_map.get("mean_competence"),
             "evaluation.capability_map.mean_competence",
         )
@@ -3650,13 +3650,6 @@ def _optional_state_space_region(value: object, field: str) -> Any | None:
         return state_space_region_from_record(value)
     except StateSpaceError as error:
         raise LocalResultImportError(f"{field}: {error}") from error
-
-
-def _as_probability(value: object, field: str) -> float:
-    numeric = _as_nonnegative_number(value, field)
-    if numeric > 1.0:
-        raise LocalResultImportError(f"{field}: expected probability no greater than 1")
-    return numeric
 
 
 def _as_positive_int(value: object, field: str) -> int:

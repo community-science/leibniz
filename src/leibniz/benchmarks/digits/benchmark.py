@@ -1900,8 +1900,8 @@ def _digits_transform_cell_intervals(
 def _digits_transform_axes() -> tuple[StateSpaceAxis, ...]:
     translation_reach = float((_chart_ordinal_domain_extent + 1) * _translation_step_pixels)
     scale_step = _render_unit_side * _scale_ratio_per_level
-    minimum_scale = _scale_footprint(-_max_scale_level) - 0.5 * scale_step
-    maximum_scale = _scale_footprint(_max_scale_level) + 0.5 * scale_step
+    minimum_scale = round(_scale_footprint(-_max_scale_level) - 0.5 * scale_step, 12)
+    maximum_scale = round(_scale_footprint(_max_scale_level) + 0.5 * scale_step, 12)
     return (
         StateSpaceAxis(
             id="x_translation",
@@ -1929,7 +1929,7 @@ def _digits_transform_axes() -> tuple[StateSpaceAxis, ...]:
 
 def _half_open_cell_interval(*, center: float, width: float) -> tuple[float, float]:
     half_width = 0.5 * width
-    return (center - half_width, center + half_width)
+    return (round(center - half_width, 12), round(center + half_width, 12))
 
 
 def _digits_measure_estimate(log2_volume: float) -> MeasureEstimate:

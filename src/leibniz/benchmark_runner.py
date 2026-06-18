@@ -122,6 +122,7 @@ from leibniz.tensor_runtime import (
     tensor_runtime_has_fixed_device_memory,
     tensor_runtime_total_memory_bytes,
     tensor_runtime_used_memory_bytes,
+    tensor_runtime_value_is_finite,
     tensor_value_to_host,
     validate_tensor_runtime_device,
 )
@@ -152,8 +153,8 @@ _default_training_batch_target = 512
 _default_gate_batch_target = 512
 _default_certified_bits_gate_batch_target = 4
 _default_evaluation_convergence_min_samples = 64
-_default_certified_bits_evaluation_min_samples = 1
-_default_certified_bits_evaluation_max_rungs = 1
+_default_certified_bits_evaluation_min_samples = 2
+_default_certified_bits_evaluation_max_rungs = 6
 _default_evaluation_convergence_half_width = 0.05
 _default_evaluation_convergence_confidence_z = 1.96
 _default_evaluation_integral_relative_half_width = 0.05
@@ -545,6 +546,32 @@ def _evaluation_sampled_competence_record(
     if "partition_score" in frontier_point:
         record["partition_score"] = frontier_point["partition_score"]
     return record
+
+
+def _evaluation_ladder_record(
+    *,
+    evaluation_results: Sequence[_CheckpointEvaluationRungEvidence],
+    frontier_index: int,
+) -> list[dict[str, object]]:
+    return [
+        {
+            **result.rung.to_record(
+                status=(
+                    "frontier"
+                    if index == frontier_index
+                    else "unlocked"
+                    if index < frontier_index
+                    else "locked"
+                )
+            ),
+            "mean_competence": result.mean_accepted_mass,
+            "confidence_half_width": result.confidence_half_width,
+            "confidence_method_id": result.confidence_method_id,
+            "sampling_protocol": result.sampling_protocol.to_record(),
+            "input_shape": list(result.input_shape),
+        }
+        for index, result in enumerate(evaluation_results)
+    ]
 
 
 def _attach_competence_diagnostics(
@@ -1537,6 +1564,11 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
                 "evaluation requires a partition_score capability map in sampled_competence"
             )
         capability_map = dict(cast(Mapping[str, object], partition_score))
+        capability_map["evaluation_ladder"] = _evaluation_ladder_record(
+            evaluation_results=evaluation_results,
+            frontier_index=evaluation_frontier_index,
+        )
+        capability_map["evaluation_frontier_index"] = evaluation_frontier_index
         validated_bits = _required_float(
             capability_map.get("value"),
             "sampled_competence.partition_score.value",
@@ -2562,14 +2594,9 @@ def evaluate_model_checkpoint_artifact(
         competence_factory=competence_factory,
     )
     competence_value_kind = _competence_value_kind(target_contract)
-    max_rungs = (
-        _default_certified_bits_evaluation_max_rungs
-        if competence_value_kind == "validated-bits"
-        else None
-    )
     capacity_limited = False
     curriculum_exhausted = False
-    rung_limited = False
+    evidence_budget_limited = False
     planner = _VolumeCurriculumPlanner()
     while True:
         with phase_timings.span("checkpoint_evaluation.rung_preparation"):
@@ -2621,9 +2648,6 @@ def evaluate_model_checkpoint_artifact(
             tuple(result.rung for result in results),
             accessible_subspace=accessible_subspace,
         )
-        if max_rungs is not None and len(results) >= max_rungs:
-            rung_limited = True
-            break
         with phase_timings.span("checkpoint_evaluation.integration_check"):
             integration_evidence = _evaluation_integration_evidence(
                 evaluation_results=results,
@@ -2632,6 +2656,12 @@ def evaluate_model_checkpoint_artifact(
                 competence_value_kind=competence_value_kind,
             )
         if integration_evidence.converged:
+            break
+        if (
+            competence_value_kind == "validated-bits"
+            and len(results) >= _default_certified_bits_evaluation_max_rungs
+        ):
+            evidence_budget_limited = True
             break
     if not results:
         raise BenchmarkRunnerError("checkpoint evaluation did not produce any results")
@@ -2667,7 +2697,7 @@ def evaluate_model_checkpoint_artifact(
     throughput["phase_timing"] = phase_timings.to_record()
     throughput["capacity_limited"] = capacity_limited
     throughput["curriculum_exhausted"] = curriculum_exhausted
-    throughput["rung_limited"] = rung_limited
+    throughput["evidence_budget_limited"] = evidence_budget_limited
     compile_fallbacks = tensor_element_compile_fallback_records()
     if compile_fallbacks:
         throughput["tensor_compile_fallbacks"] = [dict(fallback) for fallback in compile_fallbacks]
@@ -2765,7 +2795,7 @@ def _model_inference_for_cost(
 def _call_submitted_program(module: Any, fields: Any) -> Any:
     try:
         return module(fields)
-    except (OverflowError, FloatingPointError, ValueError) as error:
+    except (OverflowError, FloatingPointError) as error:
         raise _NumericalProgramFailure(str(error)) from error
 
 
@@ -2781,12 +2811,7 @@ def _model_output_contains_nonfinite(runtime: TensorRuntime, output: object) -> 
         return False
     shape = getattr(output, "shape", None)
     if shape is not None:
-        try:
-            backend_module = getattr(runtime, "tor" + "ch")
-            finite = backend_module.isfinite(output).all()
-            return not bool(tensor_value_to_host(finite))
-        except (TypeError, ValueError):
-            return False
+        return not tensor_runtime_value_is_finite(runtime, output)
     if isinstance(output, Mapping):
         mapping = cast(Mapping[object, object], output)
         return any(_model_output_contains_nonfinite(runtime, value) for value in mapping.values())
@@ -2965,7 +2990,7 @@ def _field_valued_model_state_at_horizon(
         )
     except (FieldEvolutionError, TensorRuntimeError) as error:
         raise BenchmarkRunnerError(str(error)) from error
-    except (OverflowError, FloatingPointError, ValueError) as error:
+    except (OverflowError, FloatingPointError) as error:
         raise _NumericalProgramFailure(str(error)) from error
 
 
@@ -3584,7 +3609,7 @@ def _checkpoint_evaluation_chunks(
                         probabilities=probabilities,
                         outcome_ids=outcome_ids,
                     )
-            except (OverflowError, FloatingPointError, ValueError) as error:
+            except (OverflowError, FloatingPointError) as error:
                 yield _failed_checkpoint_evaluation_chunk(
                     predictor=predictor,
                     batch=batch,

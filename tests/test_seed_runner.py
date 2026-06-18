@@ -10,6 +10,7 @@ validated-bit score and its capability map.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -19,6 +20,13 @@ from leibniz.seed_runner import SeedSubmission, run_seed_submission
 _repository_root = Path(__file__).parents[1]
 _program_root = _repository_root / "tests/fixtures/programs"
 _benchmark_root_base = _repository_root / "src/leibniz/benchmarks"
+
+
+def _evaluation_ladder_length(capability_map: Mapping[str, object]) -> int:
+    ladder = capability_map.get("evaluation_ladder")
+    if not isinstance(ladder, list):
+        return 0
+    return len(cast(list[object], ladder))
 
 
 def test_seed_runner_emits_submission_and_evaluation(tmp_path: Path) -> None:
@@ -51,26 +59,47 @@ def test_seed_runner_emits_submission_and_evaluation(tmp_path: Path) -> None:
     capability_map = evaluation.capability_map
     assert cast(float, capability_map["value"]) == evaluation.validated_bits
     assert isinstance(capability_map["root"], dict)
+    assert cast(int, capability_map["sample_count"]) >= 2
 
 
-def test_seed_runner_scores_diverging_submission_at_boundary(tmp_path: Path) -> None:
-    results_root = tmp_path / "results"
-    seed = SeedSubmission(
-        name="partial-dynamics",
-        program_path=_program_root / "ks_partial_dynamics.py",
-        benchmark_root=_benchmark_root_base / "ks",
-        train_steps=0,
-        learning_rate=1e-3,
+def _run_ks_fixture(tmp_path: Path, *, name: str, program_name: str) -> EvaluationDocument:
+    result = run_seed_submission(
+        SeedSubmission(
+            name=name,
+            program_path=_program_root / program_name,
+            benchmark_root=_benchmark_root_base / "ks",
+            train_steps=0,
+            learning_rate=1e-3,
+        ),
+        results_root=tmp_path / name,
+        tensor_device="cpu",
     )
-
-    result = run_seed_submission(seed, results_root=results_root, tensor_device="cpu")
-
-    evaluation = EvaluationDocument.from_bytes(result.evaluation_path.read_bytes()).evaluation
+    document = EvaluationDocument.from_bytes(result.evaluation_path.read_bytes())
+    evaluation = document.evaluation
 
     assert math.isfinite(evaluation.validated_bits)
     assert evaluation.validated_bits >= 0.0
     assert cast(float, evaluation.capability_map["value"]) == evaluation.validated_bits
     assert isinstance(evaluation.capability_map["root"], dict)
+    return document
+
+
+def test_seed_runner_ks_ladder_orders_solver_above_partial_model(tmp_path: Path) -> None:
+    partial_document = _run_ks_fixture(
+        tmp_path,
+        name="partial-dynamics",
+        program_name="ks_partial_dynamics.py",
+    )
+    spectral_document = _run_ks_fixture(
+        tmp_path,
+        name="spectral-solver",
+        program_name="ks_spectral_solver.py",
+    )
+    partial = partial_document.evaluation.validated_bits
+    spectral = spectral_document.evaluation.validated_bits
+
+    assert spectral > partial > 0.0
+    assert _evaluation_ladder_length(spectral_document.evaluation.capability_map) > 1
 
 
 def test_seed_runner_evaluates_inverse_digits_submission(tmp_path: Path) -> None:
@@ -91,3 +120,5 @@ def test_seed_runner_evaluates_inverse_digits_submission(tmp_path: Path) -> None
     assert evaluation.validated_bits >= 0.0
     assert cast(float, evaluation.capability_map["value"]) == evaluation.validated_bits
     assert isinstance(evaluation.capability_map["root"], dict)
+    assert _evaluation_ladder_length(evaluation.capability_map) > 1
+    assert cast(int, evaluation.capability_map["sample_count"]) >= 2
