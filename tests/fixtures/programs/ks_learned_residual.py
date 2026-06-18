@@ -63,7 +63,7 @@ def build_program_graph(runtime: Any) -> ProgramGraph:
         contract_kind="prediction",
         inputs=(
             ProgramTensorContract("field", (1, "S")),
-            ProgramTensorContract("dt", ()),
+            ProgramTensorContract("dt", (), nonnegative=True),
         ),
         outputs=(ProgramTensorContract("future_field", (1, "S")),),
         nodes=(
