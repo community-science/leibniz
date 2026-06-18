@@ -295,11 +295,13 @@ def test_program_checkpoint_evaluation_materializes_ks_result_view(tmp_path: Pat
             learning_rate=1e-3,
         )
     )
-    training_record = load_object_document(
+    submission_record = load_object_document(
         training_summary.training_summary_path.read_bytes(),
-        description="training summary",
+        description="submission record",
     )
-    training_estimate = cast(dict[str, object], training_record["training_estimate"])
+    assert submission_record["format"] == "leibniz.submission"
+    training_provenance = cast(dict[str, object], submission_record["training_provenance"])
+    training_estimate = cast(dict[str, object], training_provenance["training_estimate"])
     training_sampled_competence = cast(
         dict[str, object],
         training_estimate["sampled_competence"],
@@ -331,15 +333,18 @@ def test_program_checkpoint_evaluation_materializes_ks_result_view(tmp_path: Pat
     result = benchmark_results[0]
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     plot_runs = cast(list[dict[str, object]], result["plot_runs"])
-    point = cast(list[dict[str, object]], leaderboard[0]["points"])[0]
 
     assert result["benchmark_id"] == "benchmarks.ks@0.1.0"
     assert leaderboard
     assert [run["result_status"] for run in plot_runs] == ["accepted"]
     assert math.isfinite(cast(float, leaderboard[0]["score"]))
-    assert math.isfinite(cast(float, point["predictability_boundary"]))
     assert "program_digest" in leaderboard[0]
     assert "program_graph" in plot_runs[0]
+    # The cutover derives the console view from the slim EvaluationRecord: the
+    # validated-bit Score and the capability map that backs it. The richer
+    # per-sample certification diagnostics (certified epsilon, time points) are
+    # not yet carried on the EvaluationRecord and return with the commit-3
+    # console rebuild -- see the cutover-code-smells memory.
     sampled_competence = cast(dict[str, object], plot_runs[0]["sampled_competence"])
     partition_score = cast(dict[str, object], sampled_competence["partition_score"])
     capability_map = cast(dict[str, object], leaderboard[0]["capability_map"])
@@ -349,32 +354,6 @@ def test_program_checkpoint_evaluation_materializes_ks_result_view(tmp_path: Pat
     assert cast(float, capability_map["mean_competence"]) >= 0.0
     assert cast(int, capability_map["leaf_count"]) >= 1
     assert cast(list[dict[str, object]], capability_map["refinement_ladder"])
-    sections = cast(
-        list[dict[str, object]],
-        cast(dict[str, object], plot_runs[0]["console_view_model"])["detail_sections"],
-    )
-    section_titles = [section["title"] for section in sections]
-    assert "Competence Diagnostics" in section_titles
-    assert "Competence Time Points" in section_titles
-    diagnostics_section = next(
-        section for section in sections if section["title"] == "Competence Diagnostics"
-    )
-    diagnostic_entries = {
-        entry["label"]: entry["value"]
-        for entry in cast(list[dict[str, str]], diagnostics_section["entries"])
-    }
-    assert diagnostic_entries["Status"] in {
-        "certified",
-        "refused-amplification-growing",
-        "refused-missing-refinement-ladder",
-    }
-    assert diagnostic_entries["Certified Epsilon"] != "unknown"
-    time_section = next(
-        section for section in sections if section["title"] == "Competence Time Points"
-    )
-    time_table = cast(dict[str, object], time_section["table"])
-    assert "Certified Epsilon" in cast(list[str], time_table["columns"])
-    assert cast(list[list[str]], time_table["rows"])
 
 
 def test_cli_benchmark_train_accepts_program_flag(
@@ -461,9 +440,10 @@ def _selected_checkpoint_artifact_path(
     *,
     results_root: Path,
 ) -> Path:
-    training_summary = load_object_document(
+    submission = load_object_document(
         training_summary_path.read_bytes(),
-        description="training summary",
+        description="submission record",
     )
-    checkpoint = cast(dict[str, object], training_summary["selected_model_checkpoint"])
+    provenance = cast(dict[str, object], submission["training_provenance"])
+    checkpoint = cast(dict[str, object], provenance["selected_model_checkpoint"])
     return results_root / cast(str, checkpoint["record_path"]).removeprefix("results/")

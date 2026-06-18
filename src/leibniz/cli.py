@@ -31,7 +31,6 @@ from leibniz.documents import (
     document_filename_suffix,
     load_object_document,
 )
-from leibniz.evaluation_bundles import BenchmarkEvaluationBundleDocument
 from leibniz.formation_timing import (
     FormationOperatorProfilePlan,
     profile_formation_operators,
@@ -57,6 +56,7 @@ from leibniz.model_operations import ModelOperationDocument
 from leibniz.outcomes import OutcomeSpace
 from leibniz.program_graphs import ProgramGraphError, load_program_graph
 from leibniz.resources import ResourceReportDocument, ResourceReportSetDocument
+from leibniz.result_schema import EvaluationDocument
 from leibniz.submission_registries import SubmissionRegistryDocument
 from leibniz.tensor_runtime import (
     TensorRuntimeError,
@@ -641,7 +641,7 @@ def _run_benchmark_training(args: argparse.Namespace) -> tuple[list[BenchmarkRun
     return summaries, skipped, moved
 
 
-_generated_result_roots = ("training", "models", "evaluations", "views")
+_generated_result_roots = ("submissions", "benchmarks", "evaluations", "views")
 
 
 class _CleanBenchmarkResults(NamedTuple):
@@ -930,27 +930,31 @@ def _evaluation_checkpoint_artifacts(
                 results_root=results_root,
             ),
         )
-    training_root = results_root / "training"
-    if not training_root.is_dir():
+    submissions_root = results_root / "submissions"
+    if not submissions_root.is_dir():
         return ()
     checkpoint_paths: list[Path] = []
-    for path in sorted(training_root.rglob("*" + document_filename_suffix())):
-        record = _load_object_record(path, description="training summary")
-        if record.get("format") != "leibniz.benchmark-run":
+    for path in sorted(submissions_root.rglob("*" + document_filename_suffix())):
+        record = _load_object_record(path, description="submission record")
+        if record.get("format") != "leibniz.submission":
             continue
-        if record.get("run_status") != "completed":
+        raw_provenance = record.get("training_provenance")
+        if not isinstance(raw_provenance, Mapping):
             continue
-        benchmark_id = _benchmark_id_from_record(record, description="training_summary")
+        provenance = cast(Mapping[str, object], raw_provenance)
+        benchmark_id = _benchmark_id_from_record(
+            provenance, description="submission.training_provenance"
+        )
         if not _benchmark_selected(benchmark_id, benchmark_selectors):
             continue
-        run_slug = record.get("run_slug")
+        run_slug = provenance.get("run_slug")
         if isinstance(run_slug, str) and _evaluation_bundle_exists(
             results_root=results_root,
             benchmark_id=benchmark_id,
             run_slug=run_slug,
         ):
             continue
-        raw_artifact = record.get("evaluation_model_artifact")
+        raw_artifact = provenance.get("evaluation_model_artifact")
         if not isinstance(raw_artifact, Mapping):
             continue
         artifact = cast(Mapping[str, object], raw_artifact)
@@ -1047,9 +1051,9 @@ def _benchmark_root_for_record(
 
 
 def _load_evaluation_summary_record(path: Path) -> dict[str, object]:
-    record = _load_object_record(path, description="benchmark evaluation bundle")
-    if record.get("format") != "leibniz.benchmark-evaluation":
-        raise ValueError(f"unsupported benchmark evaluation bundle: {path}")
+    record = _load_object_record(path, description="benchmark evaluation")
+    if record.get("format") != "leibniz.evaluation":
+        raise ValueError(f"unsupported benchmark evaluation: {path}")
     return record
 
 
@@ -1146,8 +1150,8 @@ def _validate(args: argparse.Namespace) -> int:
             print(f"valid model derivation compatibility report {document.report.id}")
             return 0
         if artifact == "evaluation-bundle":
-            document = BenchmarkEvaluationBundleDocument.from_bytes(args.path.read_bytes())
-            print(f"valid evaluation bundle {document.bundle.id}")
+            document = EvaluationDocument.from_bytes(args.path.read_bytes())
+            print(f"valid evaluation {document.evaluation.id}")
             return 0
         if artifact == "submission-registry":
             document = SubmissionRegistryDocument.from_bytes(args.path.read_bytes())

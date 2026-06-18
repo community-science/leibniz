@@ -46,9 +46,6 @@ from leibniz.documents import (
     document_filename_suffix,
     load_object_document,
 )
-from leibniz.evaluation_bundles import (
-    BenchmarkEvaluationBundle,
-)
 from leibniz.field_evolution import (
     FieldEvolutionError,
     field_stepper_state,
@@ -77,6 +74,15 @@ from leibniz.partition_score import (
 )
 from leibniz.program_graphs import LoadedProgramGraph, ProgramGraphError, load_program_graph
 from leibniz.records import RecordExtractor
+from leibniz.result_schema import (
+    ArtifactReference as FittedParameterArtifact,
+)
+from leibniz.result_schema import (
+    BenchmarkMetadataRecord,
+    EvaluationLineage,
+    EvaluationRecord,
+    SubmissionRecord,
+)
 from leibniz.state_space import (
     AccessibleSubspace,
     SamplingProtocol,
@@ -121,7 +127,6 @@ from leibniz.tensor_runtime import (
 )
 from leibniz.timing import TimingCollector
 from leibniz.training_runs import TrainingHistoryPoint, TrainingProtocol, TrainingRunRecord
-from leibniz.views import MeasurementScoreView
 
 __all__ = [
     "BenchmarkRunnerError",
@@ -162,9 +167,7 @@ _default_convergence_min_delta = 1e-3
 _default_rung_competence_threshold = 0.5
 _training_replay_score_window_batches = 8
 _converged_training_stage_stop_reasons = frozenset({"validation-plateau"})
-_legal_uncapped_training_stage_stop_reasons = frozenset(
-    {"validation-plateau", "capacity-limited"}
-)
+_legal_uncapped_training_stage_stop_reasons = frozenset({"validation-plateau", "capacity-limited"})
 _minimum_plateau_lr_reductions = 3
 _full_variation_extent = 1.0
 _sync_timing_environment_variable = "LEIBNIZ_SYNC_TIMING"
@@ -439,9 +442,7 @@ class _CurriculumRung:
                 "value": self.log2_volume,
             },
             "volume_request": (
-                None
-                if self.batch.volume_request is None
-                else self.batch.volume_request.to_record()
+                None if self.batch.volume_request is None else self.batch.volume_request.to_record()
             ),
             "sample_count": self.sample_count,
         }
@@ -505,9 +506,7 @@ def _evaluation_sampled_competence_record(
         point: dict[str, object] = {
             "kind": "sampled-state-space-volume-window",
             "sampling_rule": "generator-uniform-component-index-v1",
-            "difficulty_assumption": (
-                "approximately-uniform-within-volume-window"
-            ),
+            "difficulty_assumption": ("approximately-uniform-within-volume-window"),
             "benchmark_id": str(benchmark_id),
             "volume_axis": None,
             "log2_volume": result.rung.log2_volume,
@@ -705,11 +704,7 @@ def _wilson_confidence_half_width(
     n = float(sample_count)
     denominator = 1.0 + z * z / n
     center = (p + z * z / (2.0 * n)) / denominator
-    radius = (
-        z
-        * math.sqrt(max(0.0, p * (1.0 - p) / n + z * z / (4.0 * n * n)))
-        / denominator
-    )
+    radius = z * math.sqrt(max(0.0, p * (1.0 - p) / n + z * z / (4.0 * n * n))) / denominator
     lower = max(0.0, center - radius)
     upper = min(1.0, center + radius)
     return max(0.0, min(1.0, max(p - lower, upper - p)))
@@ -742,11 +737,7 @@ def _evaluation_next_sample_count(
         return _default_evaluation_convergence_min_samples - estimator.samples
     target = math.ceil(
         estimator.sample_variance
-        * (
-            _default_evaluation_convergence_confidence_z
-            / half_width_threshold
-        )
-        ** 2
+        * (_default_evaluation_convergence_confidence_z / half_width_threshold) ** 2
     )
     return max(1, target - estimator.samples)
 
@@ -931,13 +922,9 @@ class BenchmarkRunPlan:
             type(self.model_checkpoint_gate_interval) is not int
             or self.model_checkpoint_gate_interval < 1
         ):
-            raise BenchmarkRunnerError(
-                "model_checkpoint_gate_interval must be a positive integer"
-            )
+            raise BenchmarkRunnerError("model_checkpoint_gate_interval must be a positive integer")
         if self.gate_decision_rule != "score-estimate-plateau":
-            raise BenchmarkRunnerError(
-                f"unsupported gate_decision_rule: {self.gate_decision_rule}"
-            )
+            raise BenchmarkRunnerError(f"unsupported gate_decision_rule: {self.gate_decision_rule}")
         if (
             not math.isfinite(float(self.rung_competence_threshold))
             or self.rung_competence_threshold < 0.0
@@ -1045,9 +1032,7 @@ def run_benchmark(
     summary = _run_summary(
         plan=plan,
         benchmark_id=generator.manifest.id,
-        model_source_atom=(
-            f"program-{program_identity.graph.digest.hex[:12]}"
-        ),
+        model_source_atom=(f"program-{program_identity.graph.digest.hex[:12]}"),
     )
     try:
         initial_evaluation_rung = _evaluation_curriculum_rung(
@@ -1097,8 +1082,7 @@ def run_benchmark(
     )
     model_inspection = ModelInspectionRecord.from_program_graph(
         id=ProtocolIdentifier.parse(
-            f"model-inspections.{_identifier_atom(generator.manifest.id)}."
-            f"{summary.run_slug}@0.1.0"
+            f"model-inspections.{_identifier_atom(generator.manifest.id)}.{summary.run_slug}@0.1.0"
         ),
         program_graph=program_graph_record,
         input_shape=input_shape,
@@ -1107,8 +1091,7 @@ def run_benchmark(
 
     progress_path = _training_progress_path(summary)
     model_interface_id = ProtocolIdentifier.parse(
-        f"model-interfaces.{_identifier_atom(generator.manifest.id)}."
-        f"{summary.run_slug}@0.1.0"
+        f"model-interfaces.{_identifier_atom(generator.manifest.id)}.{summary.run_slug}@0.1.0"
     )
     model_interface = (
         ModelInterface.from_outcome_space(
@@ -1180,17 +1163,14 @@ def run_benchmark(
             )
         with progress_timings.span("training_progress.checkpoint_records"):
             progress_full_checkpoint_records = tuple(
-                checkpoint_record(checkpoint)
-                for checkpoint in checkpoint_artifacts
+                checkpoint_record(checkpoint) for checkpoint in checkpoint_artifacts
             )
             progress_checkpoint_records = tuple(
                 _compact_model_checkpoint_summary_record(record)
                 for record in progress_full_checkpoint_records
             )
             selected_checkpoint_record = (
-                None
-                if selected_checkpoint is None
-                else checkpoint_record(selected_checkpoint)
+                None if selected_checkpoint is None else checkpoint_record(selected_checkpoint)
             )
         with progress_timings.span("training_progress.record"):
             progress_record = _training_progress_record(
@@ -1212,8 +1192,7 @@ def run_benchmark(
                 selected_model_checkpoint=selected_checkpoint_record,
                 selected_model_checkpoint_score_estimate=(
                     None
-                    if selected_checkpoint is None
-                    or selected_checkpoint.score_estimate is None
+                    if selected_checkpoint is None or selected_checkpoint.score_estimate is None
                     else selected_checkpoint.score_estimate
                 ),
             )
@@ -1252,8 +1231,7 @@ def run_benchmark(
         raise BenchmarkRunnerError("training did not produce any model checkpoints")
     model_inspection = ModelInspectionRecord.from_model_manifest(
         id=ProtocolIdentifier.parse(
-            f"model-inspections.{_identifier_atom(generator.manifest.id)}."
-            f"{summary.run_slug}@0.1.0"
+            f"model-inspections.{_identifier_atom(generator.manifest.id)}.{summary.run_slug}@0.1.0"
         ),
         model_manifest=selected_checkpoint.manifest,
         program_graph=program_graph_record,
@@ -1261,8 +1239,7 @@ def run_benchmark(
         output_shape=output_shape,
     )
     full_checkpoint_records = tuple(
-        checkpoint_record(checkpoint)
-        for checkpoint in checkpoint_artifacts
+        checkpoint_record(checkpoint) for checkpoint in checkpoint_artifacts
     )
     for checkpoint, record in zip(checkpoint_artifacts, full_checkpoint_records, strict=True):
         _write_document(
@@ -1270,8 +1247,7 @@ def run_benchmark(
             record,
         )
     checkpoint_records = tuple(
-        _compact_model_checkpoint_summary_record(record)
-        for record in full_checkpoint_records
+        _compact_model_checkpoint_summary_record(record) for record in full_checkpoint_records
     )
     selected_checkpoint_record = checkpoint_record(selected_checkpoint)
     completed_training_estimate = _training_estimate_record(
@@ -1324,7 +1300,35 @@ def run_benchmark(
     }
     if plan.learning_rate is not None:
         completed_record["learning_rate"] = float(plan.learning_rate)
-    _write_document_atomic(summary.training_summary_path, completed_record)
+    training_provenance = dict(completed_record)
+    for provenance_drop_key in (
+        "format",
+        "format_version",
+        "program_graph",
+        "program",
+        "training_summary_path",
+        "model_artifact_root",
+    ):
+        training_provenance.pop(provenance_drop_key, None)
+    training_provenance["kind"] = "benchmark-training-provenance"
+    submission = SubmissionRecord(
+        id=ProtocolIdentifier.parse(f"submissions.{summary.run_slug}@0.1.0"),
+        program_graph=program_graph_record,
+        model_inspection=model_inspection.to_record(),
+        fitted_parameters=tuple(
+            FittedParameterArtifact(
+                kind="fitted-parameters",
+                digest=checkpoint.digest,
+                path=_artifact_record_path(checkpoint.path, results_root=plan.results_root),
+                description=(
+                    f"checkpoint gate {checkpoint.validation_check:04d} step {checkpoint.step:08d}"
+                ),
+            )
+            for checkpoint in checkpoint_artifacts
+        ),
+        training_provenance=training_provenance,
+    )
+    _write_document_atomic(summary.training_summary_path, submission.to_record())
     if progress_path != summary.training_summary_path:
         progress_path.unlink(missing_ok=True)
     return summary
@@ -1338,15 +1342,14 @@ def _run_summary(
 ) -> BenchmarkRunSummary:
     benchmark_atom = _identifier_atom(benchmark_id)
     run_slug = f"{benchmark_atom}-{model_source_atom}-{plan.run_slug}"
+    submission_root = plan.results_root / "submissions" / run_slug
     return BenchmarkRunSummary(
         run_slug=run_slug,
         benchmark_id=benchmark_id,
         program_path=plan.program_path,
         measurement_count=0,
-        training_summary_path=(
-            plan.results_root / "training" / benchmark_atom / f"{run_slug}{_document_suffix}"
-        ),
-        model_artifact_root=(plan.results_root / "models" / benchmark_atom / run_slug),
+        training_summary_path=(submission_root / f"submission{_document_suffix}"),
+        model_artifact_root=submission_root,
         dry_run=plan.dry_run,
         results_root=plan.results_root,
     )
@@ -1427,11 +1430,6 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             outcome_ids=outcome_ids,
             target_contract=target_contract,
         )
-        evaluation_integration = _evaluation_integration_evidence(
-            evaluation_results=evaluation_results,
-            outcome_ids=outcome_ids,
-            target_contract=target_contract,
-        )
     with workflow_timings.span(
         "evaluation_workflow.final_measurement_records",
         samples=final_evaluation_batch.sample_count,
@@ -1476,15 +1474,15 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         )
         final_sampled_competence["inference_cost_measurement"] = final_cost_measurement
         final_sampled_competence["inference_cost_sample_count"] = final_cost_sample_count
-        final_sampled_competence["confidence_half_width"] = (
-            evaluation_results[evaluation_frontier_index].confidence_half_width
-        )
-        final_sampled_competence["confidence_method_id"] = (
-            evaluation_results[evaluation_frontier_index].confidence_method_id
-        )
-        final_sampled_competence["sampling_protocol"] = (
-            evaluation_results[evaluation_frontier_index].sampling_protocol.to_record()
-        )
+        final_sampled_competence["confidence_half_width"] = evaluation_results[
+            evaluation_frontier_index
+        ].confidence_half_width
+        final_sampled_competence["confidence_method_id"] = evaluation_results[
+            evaluation_frontier_index
+        ].confidence_method_id
+        final_sampled_competence["sampling_protocol"] = evaluation_results[
+            evaluation_frontier_index
+        ].sampling_protocol.to_record()
         final_sampled_competence["sampling_seed"] = frontier_rung.seed
         _attach_partition_score(
             final_sampled_competence,
@@ -1499,144 +1497,59 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             frontier_index=evaluation_frontier_index,
         )
     with workflow_timings.span("evaluation_workflow.measurement_dataset"):
-        measurements = tuple(
-            measurement
-            for group in measurement_groups
-            for measurement in group
-        )
+        measurements = tuple(measurement for group in measurement_groups for measurement in group)
         dataset = MeasurementDataset(measurements=measurements)
         dataset.validate_manifest(generator.manifest)
-    with workflow_timings.span("evaluation_workflow.model_inspection"):
-        model_inspection = ModelInspectionRecord.from_model_manifest(
-            id=ProtocolIdentifier.parse(
-                f"model-inspections.{benchmark_atom}.{run_slug}@0.1.0"
-            ),
-            model_manifest=selected_checkpoint.manifest,
-            program_graph=evaluation_input.program_graph,
-            input_shape=_batch_sample_input_shape(batch=final_evaluation_batch),
-            output_shape=_expected_program_output_shape(
-                batch=final_evaluation_batch,
-                target_contract=target_contract,
-            ),
-        )
-    with workflow_timings.span("evaluation_workflow.curriculum_record"):
-        evaluation_curriculum = _curriculum_record(
-            kind="checkpoint-benchmark-evaluation-curriculum",
-            rungs=tuple(result.rung for result in evaluation_results),
-            frontier_index=evaluation_frontier_index,
-        )
-        evaluation_curriculum_rungs = cast(
-            list[dict[str, object]],
-            evaluation_curriculum["rungs"],
-        )
-        for rung_record, result in zip(
-            evaluation_curriculum_rungs,
-            evaluation_results,
-            strict=True,
-        ):
-            rung_record["mean_accepted_mass"] = result.mean_accepted_mass
-            rung_record["confidence_half_width"] = result.confidence_half_width
-            rung_record["confidence_method_id"] = result.confidence_method_id
-            rung_record["sampling_protocol"] = result.sampling_protocol.to_record()
-            rung_record["sampling_seed"] = result.rung.seed
-    throughput = {
-        "kind": "benchmark-evaluation-throughput",
-        "evaluation": dict(checkpoint_evaluation_throughput),
-        "checkpoint_evaluation": dict(checkpoint_evaluation_throughput),
-    }
-    evaluation_tensor_device = _required_string(
-        checkpoint_evaluation_throughput.get("tensor_device"),
-        "checkpoint_evaluation.tensor_device",
-    )
     identifier_stem = f"{benchmark_atom}.{run_slug}"
-    evaluation_protocol: dict[str, object] = {
-        "kind": "checkpoint-benchmark-evaluation",
-        "measurement_count": len(measurements),
-        "score_status": (
-            "provisional"
-            if _checkpoint_evaluation_capacity_limited(checkpoint_evaluation_throughput)
-            else "accepted"
-        ),
-        "evaluation_convergence": {
-            "kind": "accepted-mass-confidence-half-width",
-            "minimum_sample_count": _default_evaluation_convergence_min_samples,
-            "confidence_z": _default_evaluation_convergence_confidence_z,
-            "half_width_threshold": _default_evaluation_convergence_half_width,
-        },
-        "integration_convergence": {
-            "kind": "adaptive-score-integral-confidence",
-            "score_integral": evaluation_integration.score_integral_value,
-            "score_integral_half_width": (
-                evaluation_integration.score_integral_half_width
-            ),
-            "score_integral_half_width_threshold": (
-                evaluation_integration.score_integral_half_width_threshold
-            ),
-            "score_integral_relative_half_width_threshold": (
-                _default_evaluation_integral_relative_half_width
-            ),
-            "score_integral_minimum_half_width_threshold": (
-                _default_evaluation_integral_minimum_half_width
-            ),
-            "terminal_failure_count": evaluation_integration.terminal_failure_count,
-            "terminal_failure_threshold": _default_evaluation_terminal_failure_rungs,
-            "converged": evaluation_integration.converged,
-            "curriculum_exhausted": (
-                checkpoint_evaluation_throughput.get("curriculum_exhausted") is True
-            ),
-        },
-        "evaluation_curriculum_rung_count": len(evaluation_results),
-        "tensor_runtime": "pytorch",
-        "tensor_device": evaluation_tensor_device,
-        "requested_tensor_device": plan.tensor_device,
-    }
-    checkpoint_record = _model_checkpoint_artifact_record(
-        checkpoint=selected_checkpoint,
-        program_graph=evaluation_input.program_graph,
-        program_path=evaluation_input.program_path,
-        benchmark_id=benchmark_id,
-        run_slug=run_slug,
-        results_root=plan.results_root,
-    )
-    with workflow_timings.span("evaluation_workflow.bundle_construction"):
-        bundle = BenchmarkEvaluationBundle(
-            id=ProtocolIdentifier.parse(f"benchmark-evaluations.{identifier_stem}@0.1.0"),
-            run_slug=run_slug,
-            benchmark_manifest=generator.manifest,
-            program_graph=evaluation_input.program_graph,
-            model_manifest=selected_checkpoint.manifest,
-            model_checkpoint=checkpoint_record,
-            model_inspection=model_inspection,
-            measurement_dataset=dataset,
-            measurement_score_view=MeasurementScoreView.from_dataset(
-                id=ProtocolIdentifier.parse(
-                    f"views.measurement-scores.{identifier_stem}@0.1.0"
-                ),
-                dataset=dataset,
-            ),
-            sampled_competence=sampled_competence,
-            evaluation_protocol=evaluation_protocol,
-            evaluation_seed=evaluation_seed,
-            evaluation_curriculum=evaluation_curriculum,
-            throughput=throughput,
+    with workflow_timings.span("evaluation_workflow.evaluation_record"):
+        partition_score = sampled_competence.get("partition_score")
+        if not isinstance(partition_score, Mapping):
+            raise BenchmarkRunnerError(
+                "evaluation requires a partition_score capability map in sampled_competence"
+            )
+        capability_map = dict(cast(Mapping[str, object], partition_score))
+        validated_bits = _required_float(
+            capability_map.get("value"),
+            "sampled_competence.partition_score.value",
         )
-    with workflow_timings.span("evaluation_workflow.bundle_record"):
-        bundle_record = bundle.to_record()
-    throughput["workflow_phase_timing"] = workflow_timings.to_record(
-        kind="benchmark-evaluation-workflow-phase-timing"
-    )
-    bundle_record["throughput"] = throughput
-    _write_document(evaluation_bundle_path, bundle_record)
+        submission_document_path = (
+            plan.results_root / "submissions" / run_slug / f"submission{_document_suffix}"
+        )
+        submission = SubmissionRecord.from_record(
+            _load_object_record(submission_document_path, description="submission record")
+        )
+        benchmark_metadata = BenchmarkMetadataRecord(
+            id=generator.manifest.id,
+            name=str(generator.manifest.name),
+            representation=target_contract.kind,
+            competence=target_contract.competence.to_record(),
+            baseline=target_contract.baseline.to_record(),
+        )
+        benchmark_metadata_path = (
+            plan.results_root / "benchmarks" / f"{benchmark_atom}{_document_suffix}"
+        )
+        _write_document(benchmark_metadata_path, benchmark_metadata.to_record())
+        evaluation = EvaluationRecord(
+            id=ProtocolIdentifier.parse(f"evaluations.{identifier_stem}@0.1.0"),
+            submission_id=submission.id,
+            benchmark_id=benchmark_id,
+            validated_bits=validated_bits,
+            capability_map=capability_map,
+            cost=CostMeasurement.from_record(final_cost_measurement),
+            lineage=EvaluationLineage(
+                submission_digest=submission.digest,
+                benchmark_digest=benchmark_metadata.digest,
+                measurement_dataset_digest=dataset.digest,
+            ),
+            evaluation_seed=evaluation_seed,
+        )
+    _write_document(evaluation_bundle_path, evaluation.to_record())
     return BenchmarkEvaluationSummary(
         run_slug=run_slug,
         benchmark_id=benchmark_id,
         evaluation_bundle_path=evaluation_bundle_path,
         measurement_count=len(measurements),
     )
-
-
-def _checkpoint_evaluation_capacity_limited(throughput: Mapping[str, object]) -> bool:
-    return throughput.get("capacity_limited") is True
 
 
 def _checkpoint_evaluation_throughput_inference_cost_record(
@@ -1678,9 +1591,7 @@ def _evaluation_input_from_plan(
     except ValueError as error:
         raise BenchmarkRunnerError(str(error)) from error
     if checkpoint_benchmark_id != generator.manifest.id:
-        raise BenchmarkRunnerError(
-            "checkpoint_artifact.benchmark_id does not match benchmark root"
-        )
+        raise BenchmarkRunnerError("checkpoint_artifact.benchmark_id does not match benchmark root")
     run_slug = _required_string(checkpoint_record.get("run_slug"), "checkpoint_artifact.run_slug")
     program_path = _checkpoint_program_path(
         checkpoint_record.get("program_path"),
@@ -1849,6 +1760,7 @@ class _VolumeCurriculumPlanner:
         self.next_index += 1
         return window
 
+
 def _optional_timing_span(timing: TimingCollector | None, phase: str) -> Any:
     if timing is None:
         return nullcontext()
@@ -1887,9 +1799,7 @@ def _curriculum_record(
         "unlocked_rung_count": min(len(rungs), frontier_index + 1),
         "claim_chain": [
             region.to_record()
-            for region in _claim_chain_regions(
-                rungs[: min(len(rungs), frontier_index + 1)]
-            )
+            for region in _claim_chain_regions(rungs[: min(len(rungs), frontier_index + 1)])
         ],
         "rungs": [
             rung.to_record(
@@ -1976,10 +1886,7 @@ def _validate_claim_chain_cumulative_brackets(
             continue
         lower, upper = interval
         cumulative_log2_volume = math.log2(running_volume)
-        if (
-            cumulative_log2_volume < lower - 1e-9
-            or cumulative_log2_volume > upper + 1e-9
-        ):
+        if cumulative_log2_volume < lower - 1e-9 or cumulative_log2_volume > upper + 1e-9:
             raise BenchmarkRunnerError(
                 "claim chain cumulative volume is outside the proposed bracket"
             )
@@ -2119,8 +2026,7 @@ def _train_and_predict(
     loss_factory: _BenchmarkTrainingLossFactory | None = None,
     competence_factory: _BenchmarkTrainingCompetenceFactory | None = None,
     progress_callback: (
-        Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object], Any], None]
-        | None
+        Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object], Any], None] | None
     ) = None,
 ) -> _TrainingResult:
     fallback_errors: list[tuple[str, str]] = []
@@ -2188,8 +2094,7 @@ def _train_and_predict_on_device(
     loss_factory: _BenchmarkTrainingLossFactory | None = None,
     competence_factory: _BenchmarkTrainingCompetenceFactory | None = None,
     progress_callback: (
-        Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object], Any], None]
-        | None
+        Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object], Any], None] | None
     ) = None,
     fallback_errors: tuple[tuple[str, str], ...] = (),
 ) -> _TrainingResult:
@@ -2484,9 +2389,7 @@ def _train_and_predict_on_device(
                             batch_size=batch_size,
                             target_contract=target_contract,
                         ),
-                        training_cost=_training_history_latest_training_cost_measurement(
-                            history
-                        ),
+                        training_cost=_training_history_latest_training_cost_measurement(history),
                         storage_bytes=storage_bytes,
                         batch_size=batch_size,
                     ),
@@ -2512,9 +2415,7 @@ def _train_and_predict_on_device(
     )
     validation_history = training_result.validation_history
     final_training_stop_reason = training_result.stop_reason
-    if train_steps is None and not _training_stage_finished_legally(
-        final_training_stop_reason
-    ):
+    if train_steps is None and not _training_stage_finished_legally(final_training_stop_reason):
         raise BenchmarkRunnerError("uncapped training curriculum ended before convergence")
     training_run = _training_run_record(
         seed=seed,
@@ -2693,19 +2594,17 @@ def evaluate_model_checkpoint_artifact(
             final_competence_diagnostics,
             final_inference_cost_measurement,
             final_inference_cost_sample_count,
-        ) = (
-            _evaluate_checkpoint_rung_measurements(
-                predictor=predictor,
-                generator=generator,
-                rung=results[evaluation_frontier_index].rung,
-                outcome_ids=outcome_ids,
-                target_contract=target_contract,
-                competence=competence,
-                sampling_protocol=sampling_protocol,
-                requested_sample_count=results[evaluation_frontier_index].sample_count,
-                evaluation_counter=evaluation_counter,
-                phase_timings=phase_timings,
-            )
+        ) = _evaluate_checkpoint_rung_measurements(
+            predictor=predictor,
+            generator=generator,
+            rung=results[evaluation_frontier_index].rung,
+            outcome_ids=outcome_ids,
+            target_contract=target_contract,
+            competence=competence,
+            sampling_protocol=sampling_protocol,
+            requested_sample_count=results[evaluation_frontier_index].sample_count,
+            evaluation_counter=evaluation_counter,
+            phase_timings=phase_timings,
         )
     throughput = evaluation_counter.to_record(kind="checkpoint-evaluation-throughput")
     throughput["tensor_runtime"] = "pytorch"
@@ -2715,9 +2614,7 @@ def evaluate_model_checkpoint_artifact(
     throughput["curriculum_exhausted"] = curriculum_exhausted
     compile_fallbacks = tensor_element_compile_fallback_records()
     if compile_fallbacks:
-        throughput["tensor_compile_fallbacks"] = [
-            dict(fallback) for fallback in compile_fallbacks
-        ]
+        throughput["tensor_compile_fallbacks"] = [dict(fallback) for fallback in compile_fallbacks]
     throughput["inference_cost_measurement"] = (
         final_inference_cost_measurement.without_operation_trace().to_record()
     )
@@ -2942,8 +2839,7 @@ def _field_valued_model_trajectory(
         raise BenchmarkRunnerError("field-valued trajectory requires target horizons")
     if label_time_count > 1 and len(horizons) != label_time_count - 1:
         raise BenchmarkRunnerError(
-            "field-valued target horizon count must match target time steps after "
-            "the initial state"
+            "field-valued target horizon count must match target time steps after the initial state"
         )
     state = fields
     states = [fields]
@@ -3517,9 +3413,8 @@ def _max_cost_measurement(
         return left
     left_cost, left_sample_count = left
     right_cost, right_sample_count = right
-    if (
-        right_cost.abstract_flops_per_item(right_sample_count)
-        > left_cost.abstract_flops_per_item(left_sample_count)
+    if right_cost.abstract_flops_per_item(right_sample_count) > left_cost.abstract_flops_per_item(
+        left_sample_count
     ):
         return right
     return left
@@ -3747,9 +3642,7 @@ def load_model_checkpoint_artifact(
         )
     manifest_document = ModelArtifactManifestDocument.from_bytes(manifest_path.read_bytes())
     if manifest_document.digest != manifest_digest:
-        raise BenchmarkRunnerError(
-            f"model checkpoint manifest digest mismatch: {manifest_path}"
-        )
+        raise BenchmarkRunnerError(f"model checkpoint manifest digest mismatch: {manifest_path}")
     return ModelCheckpointArtifact(
         path=path,
         digest=digest,
@@ -3797,9 +3690,7 @@ def _model_checkpoint_artifact_record(
         results_root=results_root or Path("results"),
     )
     if checkpoint.score_estimate is not None:
-        record["score"] = _checkpoint_score_estimate_selection_score(
-            checkpoint.score_estimate
-        )
+        record["score"] = _checkpoint_score_estimate_selection_score(checkpoint.score_estimate)
     return record
 
 
@@ -4233,14 +4124,11 @@ def _train_until_convergence(
             break
         validation_check += 1
         with phase_timings.span("validation_plateau_check"):
-            rung_has_plateaued = (
-                patience > 0
-                and has_windowed_validation_plateau(
-                    validation_history[plateau_window_start_index:],
-                    window_checks=patience,
-                    min_delta=min_delta,
-                    chance_mass=chance_mass,
-                )
+            rung_has_plateaued = patience > 0 and has_windowed_validation_plateau(
+                validation_history[plateau_window_start_index:],
+                window_checks=patience,
+                min_delta=min_delta,
+                chance_mass=chance_mass,
             )
         if rung_has_plateaued:
             with phase_timings.span("validation_rung_competence_threshold"):
@@ -4257,9 +4145,7 @@ def _train_until_convergence(
             if scheduler is not None and not scheduler.has_exhausted_plateau_response():
                 continue
             with phase_timings.span("validation_plateau_handler"):
-                advanced_frontier = (
-                    on_plateau is not None and on_plateau(tuple(validation_history))
-                )
+                advanced_frontier = on_plateau is not None and on_plateau(tuple(validation_history))
             if advanced_frontier:
                 plateau_window_start_index = len(validation_history) - 1
                 best_score = _training_history_frontier_competence(
@@ -4316,9 +4202,7 @@ def _training_gate_score_estimate(
         bounded_mass=target_contract.kind != "field-valued",
     )
     compact_sampled_competence = _compact_training_sampled_competence(sampled_competence)
-    partition_score = _training_sampled_competence_partition_score(
-        compact_sampled_competence
-    )
+    partition_score = _training_sampled_competence_partition_score(compact_sampled_competence)
     _assign_sampled_competence_inference_cost(
         compact_sampled_competence,
         measurement=inference_cost[0],
@@ -4355,9 +4239,7 @@ def _training_gate_score_estimate(
         "sampled_competence": compact_sampled_competence,
     }
     if training_cost is not None:
-        record["training_cost_measurement"] = (
-            training_cost[0].without_operation_trace().to_record()
-        )
+        record["training_cost_measurement"] = training_cost[0].without_operation_trace().to_record()
         record["training_cost_sample_count"] = training_cost[1]
     if competence_diagnostics:
         record["competence_diagnostics"] = [dict(item) for item in competence_diagnostics]
@@ -4402,14 +4284,10 @@ def _competence_point_interval_sort_key(point: CompetencePoint) -> tuple[float, 
 
 def _competence_point_interval(point: CompetencePoint) -> tuple[float, float]:
     lower = (
-        point.log2_volume_minimum
-        if point.log2_volume_minimum is not None
-        else point.log2_volume
+        point.log2_volume_minimum if point.log2_volume_minimum is not None else point.log2_volume
     )
     upper = (
-        point.log2_volume_maximum
-        if point.log2_volume_maximum is not None
-        else point.log2_volume
+        point.log2_volume_maximum if point.log2_volume_maximum is not None else point.log2_volume
     )
     if upper <= lower:
         upper = point.log2_volume
@@ -4492,8 +4370,7 @@ def _refreshed_frontier_points(
     replay_points: Iterable[ValidationCompetencePoint],
 ) -> tuple[ValidationCompetencePoint, ...]:
     by_interval = {
-        _validation_competence_point_interval_key(point): point
-        for point in historical_points
+        _validation_competence_point_interval_key(point): point for point in historical_points
     }
     for point in replay_points:
         by_interval[_validation_competence_point_interval_key(point)] = point
@@ -4513,9 +4390,7 @@ def _accumulate_replay_frontier_point(
     key = _validation_competence_point_interval_key(point)
     existing = replay_frontier_points.get(key)
     if existing is None:
-        replay_frontier_points[key] = _RollingValidationCompetencePoint.from_point(
-            point
-        )
+        replay_frontier_points[key] = _RollingValidationCompetencePoint.from_point(point)
         return
     replay_frontier_points[key] = existing.add(point)
 
@@ -4634,8 +4509,7 @@ def _sampled_unbounded_competence_curriculum_record(
         raise BenchmarkRunnerError("sampled competence sample count must be positive")
     weighted_value = (
         math.fsum(
-            value * sample_count
-            for value, sample_count in zip(values, sample_counts, strict=True)
+            value * sample_count for value, sample_count in zip(values, sample_counts, strict=True)
         )
         / total_samples
     )
@@ -4753,9 +4627,7 @@ def _assign_sampled_competence_inference_cost(
         return
     for point in cast(list[object], points):
         if isinstance(point, dict):
-            point["inference_cost_measurement"] = (
-                measurement.without_operation_trace().to_record()
-            )
+            point["inference_cost_measurement"] = measurement.without_operation_trace().to_record()
             point["inference_cost_sample_count"] = sample_count
 
 
@@ -4772,9 +4644,7 @@ def _training_score_estimate_points(
     if isinstance(points, list | tuple):
         raw_points = cast(Sequence[object], points)
         return tuple(
-            cast(Mapping[str, object], point)
-            for point in raw_points
-            if isinstance(point, Mapping)
+            cast(Mapping[str, object], point) for point in raw_points if isinstance(point, Mapping)
         )
     return (record,)
 
@@ -5140,8 +5010,7 @@ def _training_progress_record(
 def _training_run_artifact_record(training_run: TrainingRunRecord) -> dict[str, object]:
     record = training_run.to_record()
     record["validation_history"] = [
-        _training_history_artifact_point_record(point)
-        for point in training_run.validation_history
+        _training_history_artifact_point_record(point) for point in training_run.validation_history
     ]
     return record
 
@@ -5246,9 +5115,7 @@ def _training_cost_summary(
     )
     if cost is not None:
         cost_summary["cost"] = cost
-    inference_cost = _training_history_latest_cost_measurement(
-        training_run.validation_history
-    )
+    inference_cost = _training_history_latest_cost_measurement(training_run.validation_history)
     if inference_cost is not None:
         cost_summary["inference_cost_measurement"] = (
             inference_cost[0].without_operation_trace().to_record()
@@ -5325,9 +5192,7 @@ def _write_model_checkpoint_artifact(
         training_provenance=(
             ArtifactReference(
                 kind="training-run",
-                record_digest=ContentDigest.from_value(
-                    _training_run_artifact_record(training_run)
-                ),
+                record_digest=ContentDigest.from_value(_training_run_artifact_record(training_run)),
             ),
         ),
     )
@@ -5463,9 +5328,7 @@ def _throughput_record(
             for device_kind, reason in fallback_errors
         ]
     if operation_fallbacks:
-        record["operation_runtime_fallbacks"] = [
-            dict(fallback) for fallback in operation_fallbacks
-        ]
+        record["operation_runtime_fallbacks"] = [dict(fallback) for fallback in operation_fallbacks]
     if tensor_compile_fallbacks:
         record["tensor_compile_fallbacks"] = [
             dict(fallback) for fallback in tensor_compile_fallbacks
@@ -5801,9 +5664,7 @@ def _target_distribution_row(
 ) -> list[float]:
     unknown = tuple(outcome_id for outcome_id in distribution if outcome_id not in outcome_ids)
     if unknown:
-        raise BenchmarkRunnerError(
-            f"target_distribution contains unknown outcome id: {unknown[0]}"
-        )
+        raise BenchmarkRunnerError(f"target_distribution contains unknown outcome id: {unknown[0]}")
     return [float(distribution.get(outcome_id, 0.0)) for outcome_id in outcome_ids]
 
 
@@ -5876,9 +5737,7 @@ def _target_tensor_prediction_mass(
     if isinstance(target, Sequence) and not isinstance(target, str):
         target_values = cast(Sequence[object], target)
         if len(target_values) != len(probabilities):
-            raise BenchmarkRunnerError(
-                "target distribution width does not match prediction width"
-            )
+            raise BenchmarkRunnerError("target distribution width does not match prediction width")
         return math.fsum(
             _target_probability_value(target_probability) * float(probability)
             for target_probability, probability in zip(
@@ -5951,8 +5810,7 @@ def _build_training_loss(
     if target_contract.loss_id in {"equation-residual", "reconstruction"}:
         if loss_factory is None:
             raise BenchmarkRunnerError(
-                f"{target_contract.loss_id} target contracts require benchmark "
-                "build_training_loss"
+                f"{target_contract.loss_id} target contracts require benchmark build_training_loss"
             )
         return loss_factory.build_training_loss(runtime, target_contract)
     return build_loss(runtime, target_contract)
@@ -6010,9 +5868,7 @@ class _CompetenceFunctional:
     ) -> _CompetenceEvaluation:
         if self.kind in _field_valued_competence_kinds:
             if self.field_mass_tensor is None:
-                raise BenchmarkRunnerError(
-                    f"{self.kind} requires benchmark training competence"
-                )
+                raise BenchmarkRunnerError(f"{self.kind} requires benchmark training competence")
             mass_tensor = self.training_logit_mass_tensor(
                 runtime,
                 logits,
@@ -6027,9 +5883,7 @@ class _CompetenceFunctional:
                 values=tuple(float(value) for value in mass_tensor.detach().tolist()),
                 diagnostics=_competence_tensor_diagnostics(mass_tensor),
             )
-        return _CompetenceEvaluation(
-            values=tuple(softmax_target_masses(runtime, logits, labels))
-        )
+        return _CompetenceEvaluation(values=tuple(softmax_target_masses(runtime, logits, labels)))
 
     def training_logit_mass_tensor(
         self,
@@ -6045,9 +5899,7 @@ class _CompetenceFunctional:
     ) -> Any:
         if self.kind in _field_valued_competence_kinds:
             if self.field_mass_tensor is None:
-                raise BenchmarkRunnerError(
-                    f"{self.kind} requires benchmark training competence"
-                )
+                raise BenchmarkRunnerError(f"{self.kind} requires benchmark training competence")
             return self.field_mass_tensor(
                 _FieldTrainingCompetenceRequest(
                     runtime=runtime,
@@ -6088,8 +5940,7 @@ def _resolve_competence_functional(
         *_field_valued_competence_kinds,
     }:
         raise BenchmarkRunnerError(
-            "runner path does not support competence kind "
-            f"{contract.competence.kind!r}"
+            f"runner path does not support competence kind {contract.competence.kind!r}"
         )
     if contract.competence.kind in _field_valued_competence_kinds:
         if runtime is None or competence_factory is None:
@@ -6112,9 +5963,7 @@ def _competence_tensor_diagnostics(tensor: Any) -> tuple[Mapping[str, object], .
         return ()
     diagnostic_items = cast(tuple[object, ...], diagnostics)
     return tuple(
-        cast(Mapping[str, object], item)
-        for item in diagnostic_items
-        if isinstance(item, Mapping)
+        cast(Mapping[str, object], item) for item in diagnostic_items if isinstance(item, Mapping)
     )
 
 
