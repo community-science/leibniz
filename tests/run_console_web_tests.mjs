@@ -105,20 +105,20 @@ function assertArchitecturePanel() {
     'utf8',
   );
   for (const marker of [
-    "import { ProgramPanel } from './ArchitecturePanel'",
-    "{ id: 'program', label: 'Program'",
-    "hidden={activeTab !== 'program'}",
-    '<ProgramPanel />',
+    "import { ArchitecturePanel } from './ArchitecturePanel'",
+    "{ id: 'architecture', label: 'Architecture'",
+    "hidden={activeTab !== 'architecture'}",
+    '<ArchitecturePanel />',
   ]) {
     if (!shell.includes(marker)) {
-      throw new Error(`ConsoleShell must wire the Program tab: ${marker}`);
+      throw new Error(`ConsoleShell must wire the Architecture tab: ${marker}`);
     }
   }
-  if (shell.indexOf("id: 'program'") > shell.indexOf("id: 'benchmarks'")) {
-    throw new Error('Program tab must be declared before the Benchmarks tab');
+  if (shell.indexOf("id: 'architecture'") > shell.indexOf("id: 'benchmarks'")) {
+    throw new Error('Architecture tab must be declared before the Benchmarks tab');
   }
-  if (!/usePersistentState<TabId>\(\s*'leibniz\.console\.currentTab',\s*'program'/.test(shell)) {
-    throw new Error('Program must be the default console tab');
+  if (!/usePersistentState<TabId>\(\s*'leibniz\.console\.currentTab',\s*'architecture'/.test(shell)) {
+    throw new Error('Architecture must be the default console tab');
   }
   const panel = readFileSync(
     resolve(repositoryRoot, 'src/leibniz/console/web/src/ArchitecturePanel.tsx'),
@@ -128,13 +128,13 @@ function assertArchitecturePanel() {
     'architecture-forest',
     'Show precision up to',
     "id: 'U'",
-    "id: 'Q'",
+    "id: 'U-query'",
     "id: 'R'",
-    "id: 'D'",
+    "id: 'R-ledger'",
     'architecture-roadmap',
     'Closing the delta',
-    'residual-certified distance to a solution of the law',
-    'field evolution above persistence',
+    'integrated over the initial conditions, over a region of space, and forward in time',
+    'a law whose solution is unique',
     'Law-induced metric from typed equations',
     'const STEPS',
   ]) {
