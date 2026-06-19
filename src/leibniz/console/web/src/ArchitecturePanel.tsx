@@ -520,6 +520,61 @@ const STEPS: RoadmapStep[] = [
   },
 ];
 
+type FormalLine = {
+  id: string;
+  root: RootId;
+  tex: string;
+  gloss: string;
+};
+
+// The architecture as a series of equations, alongside the tree. Each line is
+// formalized by the nodes under its root; the intent is to invert these to the
+// primary statement, with the tree as commentary.
+const FORMAL_STATEMENT: FormalLine[] = [
+  {
+    id: 'universe',
+    root: 'U',
+    tex: '\\mathcal{U} = (\\mathcal{X},\\ \\Omega,\\ g_\\theta : \\Theta \\to \\mathcal{X},\\ L), \\qquad L[f] = 0',
+    gloss: 'A universe is a field space $\\mathcal{X}$ on a domain $\\Omega$, a generator $g_\\theta$ that builds a field from latents, and a law $L$ completed to a unique solution. Everything is a field; the generator builds it, an initial condition or a rendered image alike.',
+  },
+  {
+    id: 'decomposition',
+    root: 'U',
+    tex: 'f = g + h, \\qquad h = (f \\mid g)',
+    gloss: 'A model and the remainder it leaves: $g$ is the part a posited or learned model compresses (theory-driven), $h$ what is still uncompressed given $g$ (data-driven). They add by the chain rule, not by independence.',
+  },
+  {
+    id: 'query',
+    root: 'U',
+    tex: 'z = (\\theta, x, t) = O \\sqcup S, \\qquad f|_O \\ \\longmapsto\\ \\mathrm{score}\\,(f|_S)',
+    gloss: 'A query conditions the joint object into what is given ($O$) and what is scored ($S$). Evolution, inverse, and equilibrium are choices of $O$ and $S$ — one kind of query, not several.',
+  },
+  {
+    id: 'score',
+    root: 'R',
+    tex: '\\varepsilon(\\hat f) = \\int_{\\Theta} \\int_{\\Omega} \\int_{t} \\big\\lVert L[\\hat f] \\big\\rVert_{M} \\; \\mathrm{d}t \\, \\mathrm{d}x \\, \\mathrm{d}\\theta',
+    gloss: 'The score is the law-residual integrated over initial conditions, space, and forward time, in the metric $M$ the law induces, anchored to each initial condition. Where there is no law it is the data-fit instead.',
+  },
+  {
+    id: 'correct',
+    root: 'R',
+    tex: '\\varepsilon(\\hat f)\\ \\text{small} \\ \\wedge\\ L\\ \\text{unique} \\;\\Longrightarrow\\; \\hat f\\ \\text{correct}',
+    gloss: 'A small initial-condition-anchored residual is the correct prediction exactly when the completed law has a unique solution.',
+  },
+  {
+    id: 'cost',
+    root: 'R',
+    tex: 'C(\\hat f) = \\pi \\cdot n(\\hat f)',
+    gloss: 'Cost is a declared price vector $\\pi$ against invariant operation counts $n$ — compute, bytes moved, bytes resident — under a reference device profile. Parsimony is emergent, never measured.',
+  },
+  {
+    id: 'ledger',
+    root: 'R',
+    tex: '\\mathrm{score} = (\\varepsilon,\\ C), \\qquad \\varepsilon = \\varepsilon_g + (\\varepsilon_h \\mid g)',
+    gloss: 'Two axes, value against cost; the theory-driven and data-driven parts combine on one ledger by the chain rule. A single unit comparable across different laws is still open.',
+  },
+];
+
 const STATUS_LABEL: Record<NodeStatus, string> = {
   implemented: 'implemented',
   direction: 'design direction',
@@ -627,6 +682,30 @@ export function ArchitecturePanel() {
           ))}
         </div>
       </header>
+
+      <section className="architecture-formal" aria-label="The architecture as equations">
+        <h3>Formal statement</h3>
+        <p className="architecture-formal-note">
+          The same architecture written as equations: the universe and the queries you condition on it
+          (<span className="architecture-glyph">U</span>), and how a candidate is scored
+          (<span className="architecture-glyph">R</span>). The tree below annotates these lines; the intent is to make
+          this the primary statement and the tree its commentary.
+        </p>
+        {FORMAL_STATEMENT.map((line) => (
+          <div className="architecture-formal-line" key={line.id}>
+            <span className="architecture-glyph">{line.root}</span>
+            <div
+              className="architecture-formal-eq"
+              dangerouslySetInnerHTML={{
+                __html: renderToString(line.tex, { displayMode: true, throwOnError: false }),
+              }}
+            />
+            <p className="architecture-formal-gloss">
+              <MathText>{line.gloss}</MathText>
+            </p>
+          </div>
+        ))}
+      </section>
 
       <div className="architecture-forest">
         {ROOTS.map((root) => (
