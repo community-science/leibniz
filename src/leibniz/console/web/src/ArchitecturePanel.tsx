@@ -79,7 +79,7 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'ambient vs chart',
-            text: 'The states live in an ambient field space, and a benchmark reaches into it by turning a handful of measured knobs, its chart axes — a generator $g: \\Theta \\to X$. Building an initial condition for a field problem and rendering an image on the plane are the same move: a generator from a few latents into the field. Everything is a field — the observation is one whether it evolves in time or is rendered on the plane.',
+            text: 'The states live in an ambient field space, and a benchmark reaches into it by turning a handful of measured knobs, its chart axes — a generator $\\Gamma: \\Theta \\to \\mathcal{X}$. Building an initial condition for a field problem and rendering an image on the plane are the same move: a generator from a few latents into the field. Everything is a field — the observation is one whether it evolves in time or is rendered on the plane.',
           },
           {
             level: 2,
@@ -534,8 +534,8 @@ const FORMAL_STATEMENT: FormalLine[] = [
   {
     id: 'universe',
     root: 'U',
-    tex: '\\mathcal{U} = (\\mathcal{X},\\ \\Omega,\\ g_\\theta : \\Theta \\to \\mathcal{X},\\ L), \\qquad L[f] = 0',
-    gloss: 'A universe is a field space $\\mathcal{X}$ on a domain $\\Omega$, a generator $g_\\theta$ that builds a field from latents, and a law $L$ completed to a unique solution. Everything is a field; the generator builds it, an initial condition or a rendered image alike.',
+    tex: '\\mathcal{U} = (\\mathcal{X},\\ \\Omega,\\ \\Gamma : \\Theta \\to \\mathcal{X},\\ L), \\qquad L[f] = 0',
+    gloss: 'A universe is a field space $\\mathcal{X}$ on a domain $\\Omega$, a generator $\\Gamma$ that builds a field from latents, and a law $L$ completed to a unique solution. Everything is a field; the generator builds it, an initial condition or a rendered image alike.',
   },
   {
     id: 'decomposition',
