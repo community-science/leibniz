@@ -30,7 +30,7 @@ type ConceptNode = {
   verdict: Verdict;
 };
 
-type RootId = 'U' | 'Q' | 'R' | 'D';
+type RootId = 'U' | 'Q' | 'R';
 
 type RootTree = {
   id: RootId;
@@ -108,7 +108,7 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'intrinsic vs extrinsic',
-            text: 'With a law, correctness is intrinsic. With only a convention — an agreed-on label, no governing law — it is extrinsic. Predicting that label from data is honest work that earns uncertified $h$ bits; what is pre-scientific, and forks off, is treating a match against the stored label as certified correctness — a convention masquerading as a law.',
+            text: 'With a law, correctness is intrinsic. With only a convention — an agreed-on label, no governing law — it is extrinsic. Predicting that label from data is honest work scored on the data alone (the $h$ part); what is pre-scientific, and forks off, is treating a match against a stored label as if it were the law\'s residual — a convention masquerading as a law.',
           },
           {
             level: 2,
@@ -149,10 +149,10 @@ const ROOTS: RootTree[] = [
             level: 3,
             kind: 'add',
             tag: 'known part plus unknown part',
-            text: 'Most real problems are $f = g + h$: a part $g$ whose law we know, so answers there are scored against the law, and a part $h$ we have only data for, scored by how much of that data a model actually accounts for. Discovering the law of an $h$ converts it into a $g$ — and on the ledger that shows up as its bits turning from uncertified into certified. That migration is the measurable trace of a field becoming a science.',
+            text: 'Most real problems are $f = g + h$: a part $g$ whose law we know, scored by the law\'s residual, and a part $h$ we have only data for, scored by how completely a model accounts for that data. Discovering the law of an $h$ converts it into a $g$ — its score moving from data-only to law-grounded. That migration is the measurable trace of a field becoming a science.',
           },
         ],
-        verdict: { tone: 'open', text: 'The $g + h$ split and the uncertified-to-certified migration orient discovery; the $h$ score is now fixed in form (predictive log-loss bits from a probabilistic submission); multi-scale universes still need to be specified.' },
+        verdict: { tone: 'open', text: 'The $g + h$ split orients discovery, and a discovered law moves a part from data-only to law-grounded; the single quantity that puts the law-residual and the data-only score on one ledger, once it is no longer a bit count, is unresolved, and multi-scale universes still need to be specified.' },
       },
     ],
   },
@@ -185,7 +185,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'horizon',
             tag: 'open',
-            text: 'Is a query really its own thing, or just a slice of the universe you have pointed at? If it is the latter, there are three roots here, not four.',
+            text: 'Is a query really its own thing, or just a slice of the universe you have pointed at? If it is the latter, there are two roots here, not three.',
           },
         ],
         verdict: { tone: 'open', text: 'Whether a query stands on its own is unsettled.' },
@@ -236,77 +236,47 @@ const ROOTS: RootTree[] = [
   {
     id: 'R',
     name: 'Refinement',
-    ask: 'how you know',
+    ask: 'how you score',
     nodes: [
       {
         id: 'R-correctness',
-        gist: 'Correctness is convergence to a law, not an oracle.',
-        meta: 'Refine space and time, test the residual, and score the resolved bits.',
-        status: 'implemented',
-        anchor: 'certified_bits.py: shared certified known-law ledger',
-        verify: { module: 'leibniz.certified_bits', symbols: ['CertificationEstimator', 'evaluate_certified_bits'] },
+        gist: 'Correctness is how completely a candidate satisfies the law.',
+        meta: 'The score is the law\'s residual, integrated over initial conditions, space, and forward time, for a law whose solution is unique.',
+        status: 'direction',
+        anchor: 'score: the law residual over the sampled domain',
+        step: 'ladder',
         rungs: [
           {
             level: 1,
             kind: 'add',
-            tag: 'the move',
-            text: 'You cannot look up the exact answer, so here is the move: a field answer is correct where refinement makes it converge to a solution of the law. A hand-selected scoring parameter is a bug; the scored quantities must be measured from the ladder or derived from the law.',
+            tag: 'residual',
+            text: 'The score is the law\'s residual: put the candidate trajectory into the equation and measure how far it is from satisfying it, integrated over the initial conditions, over a region of space, and forward in time, anchored to each initial condition. It is the measured residual itself, earned by satisfying the equation, and continuous — the score scales with how nearly the candidate satisfies the law.',
           },
           {
             level: 2,
             kind: 'add',
-            tag: 'space-time ladder',
-            text: 'Compute the operator on nested refinements and compare on the common grid. For a field law, the residual is evaluated consistently in space and time, then converted into a certified distance by the law\'s amplification along the submitted trajectory. For a static inverse map, the residual is converted by the renderer Jacobian conditioning at the submitted latent.',
-          },
-          {
-            level: 2,
-            kind: 'add',
-            tag: 'what makes a task admissible',
-            text: 'A task earns its place when the forward law hands you the certified answer as a byproduct — sample a cause, run the law, and you already hold the answer — so minting an instance is cheap and the difficulty lives in the inverse. Where the answer is instead an adversarial game tree, minting a certified instance costs as much as solving it and there is no cheap ground, so such games are out even though their rules are a law; the open frontier they would offer belongs on the cost axis instead, as the search for a cheaper algorithm.',
+            tag: 'uniqueness',
+            text: 'The residual is the score for a law whose solution is unique; then a small initial-condition-anchored residual is the correct prediction. A complete law includes whatever makes its solution unique: for shock-forming conservation laws like Euler or shallow water that is the entropy/admissibility condition — the arrow of time — which selects the single physical solution and is part of stating the law, equivalently its viscous parent. A self-regularized field law is already unique on its own.',
           },
           {
             level: 3,
             kind: 'add',
-            tag: 'measured ruler',
-            text: '$\\varepsilon$ is not declared and there is no gate. It is the residual-certified distance to a solution of the law: dynamical prediction uses $\\varepsilon(t) = \\sum_{s<t} G(s\\to t)\\,\\lVert r(s)\\rVert\\,dt$, where $r$ is the law residual and $G$ is the leading operator-norm amplification of the law linearized about the submitted trajectory itself; static inverse maps use $\\varepsilon_z = \\lVert R(\\hat z)-y\\rVert / \\sigma_{\\min}(\\partial R/\\partial z)$ at the submitted latent. Validated bits are continuous in $\\varepsilon$, and the boundary emerges where the certified bits reach zero.',
+            tag: 'law-induced metric',
+            text: 'The residual and the distance to a solution are measured in the metric the law itself induces — its entropy, its energy or Lyapunov functional, a renderer\'s Jacobian — derived from the equation rather than declared. Forward in time the residual accumulates as the law amplifies it about the candidate\'s own trajectory: $L^2$ for a dissipative law, the entropy metric for a conservation law, and for a static inverse map the renderer-Jacobian conditioning at the submitted latent. The derived functional is itself checked, not trusted.',
           },
           {
             level: 3,
             kind: 'add',
-            tag: 'the metric is the law geometry',
-            text: 'The residual, the certified $\\varepsilon$, and the bit count all live in one metric: the geometry the law itself induces through its entropy or energy/Lyapunov functional, derived from the equation rather than declared. It is $L^2$ for a dissipative law and the entropy metric for a conservation law; certification is amplification when no monotone functional exists and functional dissipation when one does. The derived functional is itself verified, not trusted.',
-          },
-          {
-            level: 3,
-            kind: 'add',
-            tag: 'formal objects',
-            text: 'Formally: query $\\hat\\Phi(x_h, t)$ or $\\hat z$ across refined grids, compute the residual and the structural estimator on each prefix, refuse prefixes whose conditioning grows under refinement, and credit the ambient entropy resolved above the certified $\\varepsilon$. Both worked structural types now enter the same known-law ledger through a CertificationEstimator: dynamical amplification for field evolution, static conditioning for inverse rendering.',
-          },
-          {
-            level: 3,
-            kind: 'code',
-            tag: 'ledger',
-            text: 'certified_bits.py owns the certified-$g$ leaf: residuals, stability/refusal, ambient_entropy_above, zero credit, and one diagnostic envelope. The data-only $h$ leaf is only a declared seam at this boundary; no $h$ score ships yet.',
-          },
-          {
-            level: 4,
-            kind: 'code',
-            tag: 'capability meter',
-            text: 'The boundary-climbing submission test now runs four program graphs through the same certified-bit path: persistence gets zero and a shallow boundary, a partial law scores above it, a residual-trained predictor climbs higher with a margin, and the numerical solver remains the reference ceiling. The assertion is certified-bit order plus deep-boundary reach for strong submissions, not a graded boundary-depth ladder or a hard-coded score.',
-          },
-          {
-            level: 4,
-            kind: 'horizon',
-            tag: 'open',
-            text: 'Open rungs remain: the IC distribution is provisional; the certified $\\varepsilon$ uses the leading-amplification estimator, the smooth and chaotic-dynamics instance of a general law-induced one (entropy stability for shock-forming conservation laws is the harder case). The retired-gate observed-order tolerance and rung-count parameters are gone.',
+            tag: 'admissible tasks',
+            text: 'A task earns its place when the forward law hands you the answer as a byproduct — sample a cause, run the law, and you hold the answer — so minting an instance is cheap and the difficulty lives in the inverse. Where the answer is instead an adversarial game tree, minting an instance costs as much as solving it and there is no cheap ground, so such games sit on the cost axis as the search for a cheaper algorithm, not here.',
           },
         ],
-        verdict: { tone: 'partial', text: 'Continuous certified bits now have two worked structural types and a boundary-climbing submission test; general entropy-stability certification remains open.' },
+        verdict: { tone: 'partial', text: 'This is the score we believe in; the code still computes it as certified bits behind a refusal gate, and the near-term work lets it read as the residual directly. A generic learned model does not cheaply satisfy a known law to a meaningful residual — that is expected, and it is why the data-only side exists.' },
       },
       {
         id: 'R-territory',
         gist: 'One operator, many territories.',
-        meta: 'Correctness, the score hierarchy, and the bootstrap are all the same move.',
+        meta: 'Correctness, the score hierarchy, and the bootstrap are one refinement pointed at different territories.',
         status: 'implemented',
         anchor: 'partition_score.py: adversarial partition competence integral',
         verify: { module: 'leibniz.partition_score', symbols: ['PartitionScore', 'adversarial_partition_competence_integral'] },
@@ -314,20 +284,20 @@ const ROOTS: RootTree[] = [
           {
             level: 1,
             kind: 'add',
-            tag: 'the parameter',
+            tag: 'territories',
             text: 'Refinement always runs over some territory. Refine resolution and you get correctness. Refine the problem partition and you get the score hierarchy. Refine over operators across time and you get the bootstrap. Refine over scale or intervention and you get multi-scale work and discovery.',
           },
           {
             level: 2,
             kind: 'add',
-            tag: 'one mechanism',
-            text: 'So those three are one mechanism pointed at different territories, not three separate ideas.',
+            tag: 'one refinement',
+            text: 'So those three are one refinement pointed at different territories, not three separate ideas.',
           },
           {
             level: 2,
             kind: 'add',
-            tag: 'the partition tree',
-            text: 'On the problem partition, the score is a tree of regions. Each node is a state-space region, each leaf carries the ledger competence measured from samples that landed there, and the reported Score is the extensive validated-bit integral $\\sum_r b(r)c(r)$ over the leaves. Here $b(r)$ is the leaf share of the additive ambient entropy interval, so independent territories add; the normalized mean competence is retained only as a capability view.',
+            tag: 'partition tree',
+            text: 'On the problem partition, the score is a tree of regions. Each node is a state-space region, each leaf carries the competence measured from samples that landed there, and the reported Score is the measure-weighted competence integral $\\sum_r \\mu(r)\\,c(r)$ over the leaves. Here $\\mu(r)$ is the leaf\'s share of the territory measure, so independent territories add; the normalized mean competence is retained as a capability view.',
           },
           {
             level: 3,
@@ -339,7 +309,7 @@ const ROOTS: RootTree[] = [
             level: 3,
             kind: 'add',
             tag: 'convergent value',
-            text: 'The record carries the refinement ladder: each depth contracts the current leaves back to the same extensive validated-bit integral and records the movement from the previous rung. The reported value is the converged leaf contraction with its propagated sampling uncertainty, not a score stopped by a hand-tuned minimum region size.',
+            text: 'The record carries the refinement ladder: each depth contracts the current leaves back to the same extensive competence integral and records the movement from the previous rung. The reported value is the converged leaf contraction with its propagated sampling uncertainty, not a score stopped by a hand-tuned minimum region size.',
           },
           {
             level: 3,
@@ -397,17 +367,10 @@ const ROOTS: RootTree[] = [
         ],
         verdict: { tone: 'partial', text: 'Carrying trusted ground across submissions is not built yet.' },
       },
-    ],
-  },
-  {
-    id: 'D',
-    name: 'Description length',
-    ask: 'what you count',
-    nodes: [
       {
-        id: 'D-volume',
-        gist: 'Volume counts distinguishable states; bits add up.',
-        meta: 'The unit everything else is measured in.',
+        id: 'R-resolution',
+        gist: 'Two states are distinct only if you can tell them apart at the declared resolution.',
+        meta: 'The resolution and region grammar the metric and the partition are built on.',
         status: 'implemented',
         anchor: 'state_space.py: Distinguishability, RegionFiltration',
         verify: { module: 'leibniz.state_space', symbols: ['Distinguishability', 'RegionFiltration'] },
@@ -415,73 +378,73 @@ const ROOTS: RootTree[] = [
           {
             level: 1,
             kind: 'add',
-            tag: 'defines “different”',
-            text: 'Two states only count as different if you can tell them apart at the declared resolution. Bits $= \\log_2(\\text{count})$, so each doubling of variety is one more bit.',
+            tag: 'resolution decides distinctness',
+            text: 'Two states count as different only when you can tell them apart at the declared resolution, measured in the metric the law induces. Resolution decides what is distinguishable, not the chart you happened to write.',
           },
           {
             level: 2,
             kind: 'add',
-            tag: 'locates it, justifies invariance',
-            text: 'It is an $\\varepsilon$-covering count under the metric the law itself induces — the geometry of its entropy, energy/Lyapunov functional, or static renderer Jacobian — taken in the ambient space rather than the chart, so it does not change if you reparameterize. In that metric a smooth field and a shock are both finite information (a Fourier chart only made the shock look complex), a field law can count evolution above persistence, and an inverse renderer can count the product answer space of identity bits plus continuous nuisance bits. Independent axes multiply, which is why their bits add.',
+            tag: 'ambient, not chart',
+            text: 'Distinguishability is taken in the ambient space under the law-induced metric, not the chart, so it does not change if you reparameterize. In that metric a smooth field and a shock are both finite — a Fourier chart only made the shock look complex — and an inverse renderer separates identity from continuous nuisance.',
           },
           {
             level: 2,
             kind: 'add',
-            tag: 'the region grammar',
-            text: 'Regions are finite disjoint unions of products of per-axis regions. Qualitative labels are strata: typed annotations, never axes. A volume is either exact or a bracketed estimate.',
+            tag: 'region grammar',
+            text: 'Regions are finite disjoint unions of products of per-axis regions; qualitative labels are strata — typed annotations, never axes. This is the grammar the partition refines over.',
           },
           {
             level: 3,
             kind: 'code',
             tag: '⟂',
-            text: 'state_space.py: Distinguishability, log2 μ, RegionFiltration',
+            text: 'state_space.py: Distinguishability, RegionFiltration',
           },
         ],
         verdict: { tone: 'ok', text: 'Specified in code.' },
       },
       {
-        id: 'D-ledger',
-        gist: 'One ledger: value as credit, cost as debit.',
-        meta: 'Same unit, opposite signs.',
+        id: 'R-ledger',
+        gist: 'One ledger: what a candidate accounts for, set against its cost.',
+        meta: 'The currency is the residual; cost is the second axis; a common unit across laws is open.',
         status: 'direction',
-        anchor: 'score: validated bits per unit cost',
+        anchor: 'score: law-satisfaction against cost',
         step: 'cost',
         rungs: [
           {
             level: 1,
             kind: 'add',
-            tag: 'the two entries',
-            text: 'Credit is validated bits: the ambient $\\varepsilon$-entropy of the field evolution above persistence, resolved to the residual-certified $\\varepsilon$ (continuous, no gate), replacing the earlier grid-degree-of-freedom count $N_{dof}\\log_2(\\sigma/\\varepsilon_{field})$. Debit is the declared energy cost of running the operator under the reference profile — compute, bytes moved, and bytes resident — not a description-length term.',
+            tag: 'two axes',
+            text: 'The score has two axes: how completely a candidate satisfies the law — its residual, where there is a law ($g$) — or how completely it accounts for the data where there is not ($h$), set against the energy cost of computing it. Value earned, cost paid.',
           },
           {
             level: 2,
             kind: 'add',
-            tag: 'one quantity to minimize',
-            text: 'The value side has a concrete validated-bit quantity for field prediction; the cost side is energy priced from machine-independent counts by a declared device profile, which the runner attaches and integrates against validated bits over the measured frontier. There is no description-length term to add — parsimony is emergent, not minimized (see Cost).',
+            tag: 'the currency is the residual',
+            text: 'The currency is the residual itself, earned by satisfying the equation, not a count of bits laid over it. Distance and residual are read in the law-induced metric, and the cost is energy priced from machine-independent counts under a declared profile.',
           },
           {
             level: 2,
             kind: 'add',
-            tag: 'one measure, two regimes',
-            text: 'Validated bits come off one ledger whatever the source: certified against the law where there is one ($g$), and where there is not ($h$) an absolute count of how much of the real data a model accounts for — uncertified, so a ratcheting lower bound that climbs toward the certified value as the law is discovered, not a ranking against other models. Both regimes count generalizing information in the same bit unit and independent information adds, so datasets combine without a hand-picked weighting; $h$ is scored as the predictive log-loss bits of a probabilistic submission, its density parameterization left open. Moving the $g$/$h$ boundary converts bits between certified and uncertified for the same information — it does not manufacture bits, so there is nothing to be gained by elaborating the known law to swallow data it does not generalize. The inverse-renderer already does the certified case per mode, an information-spectrum count whose additivity discounts redundancy on its own.',
+            tag: 'g and h on one ledger',
+            text: 'Where there is a law the score is the law-residual ($g$); where there is not it is how completely a model accounts for the data ($h$) — the same kind of quantity, law-satisfaction versus data-fit, with $h$ a lower bound that tightens toward $g$ as the law is discovered. Moving the $g$/$h$ boundary moves a part from data-only to law-grounded for the same content; it manufactures nothing, so there is nothing to gain by elaborating a known law to swallow data it does not generalize.',
           },
           {
             level: 3,
             kind: 'add',
-            tag: 'predict a distribution, not a label',
-            text: 'A submission earns bits by predicting a distribution over the observable and being scored on the information it resolves — not by emitting a point estimate or a hard label. So the line that matters is probabilistic prediction versus point output, not classification versus reconstruction: against a known law a reconstruction earns certified $g$ bits, and where there is no law a probabilistic classifier earns all-$h$ bits. Uncertified predictive classification is in scope; only a certified answer-key forks off.',
+            tag: 'predict a distribution',
+            text: 'A submission earns its score by predicting a distribution over the observable and being scored on what it resolves, not by emitting a point estimate or a hard label. So the line that matters is probabilistic prediction versus point output, not classification versus reconstruction. Only a stored answer-key forks off.',
           },
           {
             level: 2,
             kind: 'horizon',
             tag: 'open',
-            text: 'Whether value and cost really collapse into one number, or have to stay two, is open.',
+            text: 'Two things are open once the unit is no longer a bit count: whether a single quantity can put the law-residual and the data-only score on one ledger across different laws, and whether value and cost collapse into one number or stay two. Each score still lives in its own law\'s terms.',
           },
         ],
-        verdict: { tone: 'open', text: 'Whether it is truly one number is not shown yet.' },
+        verdict: { tone: 'open', text: 'The currency is the residual; the single cross-law unit, and whether value and cost are one number, are unresolved.' },
       },
       {
-        id: 'D-cost',
+        id: 'R-cost',
         gist: 'Cost is declared roofline energy from invariant program counts.',
         meta: 'Measured, not a description-length penalty. Parsimony is pressured by low cost, not minimized directly.',
         status: 'implemented',
@@ -493,7 +456,7 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'measured, not penalized',
-            text: 'Cost is a single priced quantity from the submitted program, not the machine it happened to run on: invariant counts for op class, dtype, bytes moved, and bytes resident are priced by a declared reference device profile. Parsimony is emergent, not minimized — a table-heavy memorizer pays when held tables enter the operation footprint, and a simple but expensive brute force is still excluded by cost; what survives, generalizing bits at low energy, is the parsimonious explanation.',
+            text: 'Cost is a single priced quantity from the submitted program, not the machine it happened to run on: invariant counts for op class, dtype, bytes moved, and bytes resident are priced by a declared reference device profile. Parsimony is emergent, not minimized — a table-heavy memorizer pays when held tables enter the operation footprint, and a simple but expensive brute force is still excluded by cost; what survives — a model that generalizes at low energy — is the parsimonious explanation.',
           },
           {
             level: 2,
@@ -517,22 +480,22 @@ const ROOTS: RootTree[] = [
 const EDGES: CouplingEdge[] = [
   {
     id: 'edge-distinguishability',
-    roots: ['U', 'D'],
+    roots: ['U', 'R'],
     title: 'Distinguishability',
-    body: 'States come from the universe; counting them in bits is the currency’s job. The metric $(d, \\varepsilon)$ is the handoff, the thing that gives the currency something to count. You cannot count without a metric to count against.',
+    body: 'States come from the universe; what makes “how far from the law” well-defined is the metric the residual is measured in. The metric $(d, \\varepsilon)$ is the handoff — the geometry Refinement reads the residual against. There is no distance, and no score, without it.',
   },
   {
     id: 'edge-grounding',
     roots: ['U', 'R'],
     title: 'Grounding',
     warn: true,
-    body: 'Grounding is really two questions wearing one name: does the universe have a law (Universe), and is an answer checked by an exact verifier or by convergence (Refinement)? So a contract can just record whether there is a law and let the verifier-or-convergence part fall out of refinement, instead of declaring “grounding” outright. And where there is no law yet, correctness does not vanish — it becomes an absolute measure of how much of the real data a model accounts for, just uncertified: a lower bound nobody can yet prove optimal, which tightens as the law is discovered. Known-law and no-law are the two ends of one dial — certified versus uncertified — so the same ledger measures both, and how useful a known law is shows up as the share of the total bits it can certify — the law’s g-coverage.',
+    body: 'Grounding is really two questions wearing one name: does the universe have a law (Universe), and is an answer checked by an exact verifier or by convergence (Refinement)? So a contract can just record whether there is a law and let the verifier-or-convergence part fall out of refinement, instead of declaring “grounding” outright. And where there is no law yet, correctness does not vanish — it becomes a measure of how completely a model accounts for the real data, just data-only: a lower bound nobody can yet prove optimal, which tightens as the law is discovered. Known-law and no-law are the two ends of one dial — law-grounded versus data-only — so the same ledger measures both, and how useful a known law is shows up as the share of the total it can ground, the law’s g-coverage.',
   },
   {
     id: 'edge-score',
-    roots: ['U', 'R', 'D'],
-    title: 'The score (triple point)',
-    body: 'Competence is the validated information a model resolves at the certified refinement precision: measured distance from Refinement, bits from Description length, integrated over the sampled state-space territory from Universe. The partition tree makes that handoff explicit: leaves are regions, color is normalized competence, and the headline number is their extensive validated-bit contraction.',
+    roots: ['U', 'R'],
+    title: 'The score',
+    body: 'Competence is how completely a candidate satisfies the law: the residual in the law-induced metric, to the resolution Refinement reaches, integrated over the sampled state-space territory from the Universe. The partition tree makes that handoff explicit: leaves are regions, color is competence, and the headline number is their measure-weighted competence contraction.',
   },
 ];
 
@@ -547,7 +510,7 @@ const STEPS: RoadmapStep[] = [
     id: 'ladder',
     title: 'Refinement-ladder records and convergence-grounded scoring',
     outcome:
-      'Emit convergence diagnostics for the ladder and score field prediction as continuous validated evolution bits resolved to the residual-certified precision, with the predictability boundary emerging where certified bits reach zero. The boundary-climbing test shows certified bits rising with submitted capability and strong submissions reaching a deep boundary. The binary gate and its parameters are retired.',
+      'Emit convergence diagnostics for the ladder and score field prediction as the residual integrated over the domain in the law-induced metric, with the predictability boundary emerging where the law stops determining the future. The boundary-climbing test shows the score rising with submitted capability and strong submissions reaching a deep boundary. The binary gate and its parameters are retired.',
   },
   {
     id: 'cost',
@@ -564,13 +527,13 @@ const STEPS: RoadmapStep[] = [
   {
     id: 'bootstrap',
     title: 'Trusted-ground persistence',
-    outcome: 'Carry convergent regions forward and certify newly reached ground by the agreement-on-overlap check.',
+    outcome: 'Carry convergent regions forward and establish newly reached ground by the agreement-on-overlap check.',
   },
   {
     id: 'lawmetric',
     title: 'Law-induced metric from typed equations',
     outcome:
-      'Recognize the structural type of a benchmark equation from its typed symbols, and derive the stability functional it implies — hence the one metric used for both the ambient entropy and the certified error — instead of declaring it. The verifier-or-amplification form of certification falls out of the type, and the derived functional is itself verified.',
+      'Recognize the structural type of a benchmark equation from its typed symbols, and derive the stability functional it implies — hence the one metric the residual is measured in — instead of declaring it. How the residual accumulates forward (verifier, amplification, or functional dissipation) falls out of the type, and the derived functional is itself checked.',
   },
   {
     id: 'reexpress',
@@ -582,7 +545,7 @@ const STEPS: RoadmapStep[] = [
     id: 'discovery',
     title: 'Readout and unknown-law universes (reserved)',
     outcome:
-      'A readout-valued, convergence-grounded task, plus the $g + h$ ledger: a probabilistic submission scored by predictive log-loss bits on the data-only part $h$ (no point-estimate or reference fallback), aggregated with certified $g$ bits through the partition tree, with a law promoted from $h$ into $g$ by the trusted-ground criteria rather than by the maintainer, and the scaffolding for unknown-law and multi-scale universes. Parked until the consolidated certified spine is solid.',
+      'A readout-valued, convergence-grounded task, plus the $g + h$ ledger: a probabilistic submission scored on how completely it accounts for the data-only part $h$ (no point-estimate or reference fallback), aggregated with the law-residual $g$ through the partition tree, with a law promoted from $h$ into $g$ by the trusted-ground criteria rather than by the maintainer, and the scaffolding for unknown-law and multi-scale universes. Parked until the consolidated residual spine is solid.',
   },
 ];
 
@@ -617,7 +580,7 @@ function MathText({ children }: { children: string }) {
   );
 }
 
-export function ProgramPanel() {
+export function ArchitecturePanel() {
   const [maxLevel, setMaxLevel] = useState(4);
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(() => new Set());
   const [highlightRoot, setHighlightRoot] = useState<RootId | null>(null);
@@ -664,12 +627,12 @@ export function ProgramPanel() {
   return (
     <div className="architecture-panel">
       <header className="architecture-intro">
-        <h2>Program &mdash; adaptive precision tree</h2>
+        <h2>Architecture &mdash; adaptive precision tree</h2>
         <p>
           Every concept starts as a one-line gist; open it to go deeper a refinement at a time, until you reach the
           code that backs it (<span className="architecture-tag code">&#x27c2;</span>) or a question that is still open
-          (<span className="architecture-tag horizon">open</span>). There are four roots, and they do not overlap: the
-          universe, what you ask of it, how you decide an answer is right, and what you count. Everything else is built
+          (<span className="architecture-tag horizon">open</span>). There are three roots, and they do not overlap: the
+          universe, what you ask of it, and how you score an answer. Everything else is built
           from those, and where two roots lean on each other it shows up below as an edge.
         </p>
         <p className="architecture-intro-provenance">

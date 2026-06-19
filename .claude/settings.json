@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest *)",
+      "Bash(.miniforge/envs/leibniz-dev/bin/python -m ruff *)",
+      "Bash(.miniforge/envs/leibniz-dev/bin/python -m pyright *)",
+      "Bash(python scripts/validate.py)",
+      "Bash(python scripts/validate.py *)",
+      "Bash(.miniforge/envs/leibniz-dev/bin/python scripts/validate.py)",
+      "Bash(.miniforge/envs/leibniz-dev/bin/python scripts/validate.py *)",
+      "Bash(python scripts/check_pr_body.py)",
+      "Bash(python3 scripts/check_pr_body.py)",
+      "Bash(source scripts/activate_environment.sh)",
+      "Bash(git fetch)",
+      "Bash(git fetch *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git rm *)",
+      "Bash(git restore --staged *)"
+    ]
+  }
+}
