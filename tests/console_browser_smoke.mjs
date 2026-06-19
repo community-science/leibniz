@@ -48,8 +48,8 @@ try {
     await page.locator('#root').waitFor({ state: 'attached' });
     await page.locator('.architecture-forest').waitFor({ state: 'visible', timeout: 5_000 });
     const architectureRoots = await page.locator('.architecture-root').count();
-    if (architectureRoots !== 3) {
-      throw new Error(`expected three architecture roots on the default tab, found ${architectureRoots}`);
+    if (architectureRoots !== 2) {
+      throw new Error(`expected two architecture roots on the default tab, found ${architectureRoots}`);
     }
     await page.getByRole('button', { name: 'Benchmarks' }).click();
     try {

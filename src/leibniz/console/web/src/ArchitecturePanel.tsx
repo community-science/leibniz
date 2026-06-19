@@ -30,7 +30,7 @@ type ConceptNode = {
   verdict: Verdict;
 };
 
-type RootId = 'U' | 'Q' | 'R';
+type RootId = 'U' | 'R';
 
 type RootTree = {
   id: RootId;
@@ -160,82 +160,47 @@ const ROOTS: RootTree[] = [
         ],
         verdict: { tone: 'open', text: 'The $g + h$ split orients discovery, and a discovered law moves a part from data-driven to theory-driven; within one problem the chain rule combines them, but the single quantity that puts the law-residual and the data-driven score on one ledger across different laws, once it is no longer a bit count, is unresolved, and multi-scale universes still need to be specified.' },
       },
-    ],
-  },
-  {
-    id: 'Q',
-    name: 'Query',
-    ask: 'what you ask',
-    nodes: [
       {
-        id: 'Q-task',
-        gist: 'A task is a question you put to a universe.',
-        meta: 'One universe holds many tasks; they do not split neatly into classification versus prediction.',
-        status: 'direction',
-        anchor: 'target contract: task signature',
-        step: 'signature',
-        rungs: [
-          {
-            level: 1,
-            kind: 'add',
-            tag: 'the form',
-            text: 'Three parts: how you sample the universe (access), how the input fixes the answer (binding), and what shape the answer takes (target).',
-          },
-          {
-            level: 1,
-            kind: 'add',
-            tag: 'benchmarks',
-            text: 'A forward task asks for $f(t)$ itself; an inverse task asks for the latents behind an observed field. Either way the field — observed, predicted, or reconstructed — scales with spatial resolution, and the answer is the field or its latents, not a fixed-size label.',
-          },
-          {
-            level: 2,
-            kind: 'horizon',
-            tag: 'open',
-            text: 'Is a query really its own thing, or just a slice of the universe you have pointed at? If it is the latter, there are two roots here, not three.',
-          },
-        ],
-        verdict: { tone: 'open', text: 'Whether a query stands on its own is unsettled.' },
-      },
-      {
-        id: 'Q-binding',
-        gist: 'Binding: evolution, equilibrium, or inverse.',
-        meta: 'Step forward in time · settle into a state · work back to a cause.',
+        id: 'U-query',
+        gist: 'A query is a conditioning on the field: what is given, what is scored.',
+        meta: 'Evolution, inverse, and equilibrium are conditioning directions, not different kinds; a readout is a projection of the field.',
         status: 'implemented',
-        anchor: 'target contract: binding relation',
+        anchor: 'target contract: the conditioning (given vs scored)',
         verify: { module: 'leibniz.target_contracts', symbols: ['TargetContract'] },
         step: 'signature',
         rungs: [
           {
             level: 1,
             kind: 'add',
-            tag: 'examples',
-            text: 'Evolution moves a field forward in time. Equilibrium is the state a system settles into; a folded protein, for instance, is an energy minimum, not a point on a trajectory. Inverse works backward from an observed field to the latent cause behind it, which is usually ill-posed.',
+            tag: 'one query, many conditionings',
+            text: 'A query partitions the law-constrained joint object — latents, field, time — into what is given and what is scored. Evolution conditions on the field now and scores it later; inverse conditions on an observed field and scores the latents behind it; equilibrium conditions on the constraints and scores the stationary field. One object, one law, different conditioning — not different kinds of query.',
           },
           {
             level: 2,
             kind: 'add',
-            tag: 'relation to the law',
-            text: 'The law decides which bindings are even possible. The field-evolution benchmark exercises evolution; the inverse-renderer benchmark exercises inverse binding by asking a submission to infer a latent cause, including pose and graded deformation, from an observed rendered field — built by a generator from latents the same way a field initial condition is.',
+            tag: 'well-posedness, not kind',
+            text: 'A conditioning the law cannot invert is ill-posed; that is a direction where the scored answer is a distribution rather than a point, not a separate kind of query.',
           },
-        ],
-        verdict: { tone: 'partial', text: 'Evolution and inverse are live benchmark bindings; equilibrium remains a design direction.' },
-      },
-      {
-        id: 'Q-target',
-        gist: 'Target: a field, its latents, or a readout.',
-        meta: 'A whole field, the latents behind it, or a readout off it (a number, a decision).',
-        status: 'direction',
-        anchor: 'target contract: target shape',
-        step: 'signature',
-        rungs: [
           {
-            level: 1,
+            level: 2,
             kind: 'add',
-            tag: 'independent of grounding',
-            text: 'What you ask for and how you check it are separate choices. A field-valued task or a readout task can each be checked by a verifier or by convergence. Folding the two together into “classification versus prediction” hides that.',
+            tag: 'target is how much of the field',
+            text: 'What you are scored on is the whole field, its latents, or a projection of it — a number, a decision. That is how much of the field, not a different species of answer, and never a fixed-size label.',
+          },
+          {
+            level: 2,
+            kind: 'add',
+            tag: 'a slice of the universe',
+            text: 'A query only conditions a universe that already exists: choosing it does not change the universe, only which slice you are handed and held to. So it is not a separate root — there are two, not three.',
+          },
+          {
+            level: 3,
+            kind: 'code',
+            tag: 'contract',
+            text: 'target_contracts.py: TargetContract records the conditioning. It still enumerates the named bindings; collapsing them into one conditioning specification is the cleanup this asks for.',
           },
         ],
-        verdict: { tone: 'ok', text: 'An independent axis.' },
+        verdict: { tone: 'partial', text: 'The contract carries the conditioning; expressing it as one conditioning rather than a taxonomy of bindings, with equilibrium still a direction, is the near-term cleanup.' },
       },
     ],
   },
@@ -510,7 +475,7 @@ const STEPS: RoadmapStep[] = [
     id: 'signature',
     title: 'Task signature in the contract grammar',
     outcome:
-      'Make (access, binding, target) and a law-status real fields in the contract, then rebuild the existing benchmarks on top of them. Verifier scoring falls out as the zero-gap case of convergence.',
+      'Make the conditioning — what is given, what is scored — and a law-status real fields in the contract, then rebuild the existing benchmarks on top of them. Verifier scoring falls out as the zero-gap case of convergence.',
   },
   {
     id: 'ladder',
@@ -637,9 +602,9 @@ export function ArchitecturePanel() {
         <p>
           Every concept starts as a one-line gist; open it to go deeper a refinement at a time, until you reach the
           code that backs it (<span className="architecture-tag code">&#x27c2;</span>) or a question that is still open
-          (<span className="architecture-tag horizon">open</span>). There are three roots, and they do not overlap: the
-          universe, what you ask of it, and how you score an answer. Everything else is built
-          from those, and where two roots lean on each other it shows up below as an edge.
+          (<span className="architecture-tag horizon">open</span>). There are two roots, and they do not overlap: the
+          universe &mdash; what exists, and the queries you condition on it &mdash; and how you score an answer.
+          Everything else is built from those, and where the two roots lean on each other it shows up below as an edge.
         </p>
         <p className="architecture-intro-provenance">
           A concept is tagged <span className="architecture-status implemented">implemented</span> when working code

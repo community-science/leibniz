@@ -128,7 +128,7 @@ function assertArchitecturePanel() {
     'architecture-forest',
     'Show precision up to',
     "id: 'U'",
-    "id: 'Q'",
+    "id: 'U-query'",
     "id: 'R'",
     "id: 'R-ledger'",
     'architecture-roadmap',
