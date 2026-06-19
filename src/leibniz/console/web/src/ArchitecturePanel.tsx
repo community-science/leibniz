@@ -108,7 +108,7 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'theory-driven or data-driven',
-            text: 'Where a law is posited, correctness is how completely a candidate satisfies it — the theory-driven path ($g$). A renderer is as much a posited law as a field equation, so the target is the latent cause that reconstructs the observation through it, recovered by inverse inference — never a stored label. Even a dataset that ships with labels is approached this way, discarding the labels entirely. A posited law can still miss something real — the way the inviscid equations miss viscosity — and that residual against the real observations is the data-driven part ($h$); sharpening the law to close it migrates that part into $g$. Where no law is available at all, $h$ stands alone, drawing predictive power straight from the data. Both paths aim at prediction.',
+            text: 'Where a law is posited, correctness is how completely a candidate satisfies it — the theory-driven path ($g$). A renderer is as much a posited law as a field equation, so the target is the latent cause that reconstructs the observation through it, recovered by inverse inference — never a stored label. Even a dataset that ships with labels is approached this way, discarding the labels entirely. A posited law can still miss something real — the way the inviscid equations miss viscosity — and that gap against the real observations is the data-driven part ($h$); sharpening the law to close it migrates that part into $g$. Where no law is available at all, $h$ stands alone, drawing predictive power straight from the data. Both paths aim at prediction, and they are the two ends of one spectrum — how compressed the explanation is.',
           },
           {
             level: 2,
@@ -155,10 +155,10 @@ const ROOTS: RootTree[] = [
             level: 3,
             kind: 'add',
             tag: 'known part plus unknown part',
-            text: 'Most real problems are $f = g + h$: a part $g$ approached theory-driven, a posited law scored by its residual, and a part $h$ approached data-driven, scored by how completely a model accounts for the data. Discovering the law of an $h$ converts it into a $g$ — turning a data-driven part theory-driven. That migration is the measurable trace of a field becoming a science.',
+            text: 'Most real problems are $f = g + h$, read as a model and the remainder it leaves: $g$ is the part a posited or learned model compresses — the theory-driven end — and $h$ is what is still uncompressed given $g$, the data-driven end. They add because $h$ is conditional on $g$, a chain rule, not because they are independent. Theory and data are the two ends of one spectrum, how compressed the explanation is; a learned closure is itself a compression of data sitting in the middle, nearer theory, and every theory is a compression of the world toward parsimony. Compressing more of $h$ into a parsimonious law migrates it into $g$ — the measurable trace of a field becoming a science. This is the coarsest cut: along a tower of scales the same chain rule refines into one conditional residual per scale, each a compression of the level beneath, and the score stays the total residual, never a per-level compression cost.',
           },
         ],
-        verdict: { tone: 'open', text: 'The $g + h$ split orients discovery, and a discovered law moves a part from data-driven to theory-driven; the single quantity that puts the law-residual and the data-driven score on one ledger, once it is no longer a bit count, is unresolved, and multi-scale universes still need to be specified.' },
+        verdict: { tone: 'open', text: 'The $g + h$ split orients discovery, and a discovered law moves a part from data-driven to theory-driven; within one problem the chain rule combines them, but the single quantity that puts the law-residual and the data-driven score on one ledger across different laws, once it is no longer a bit count, is unresolved, and multi-scale universes still need to be specified.' },
       },
     ],
   },
@@ -420,7 +420,7 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'two axes',
-            text: 'The score has two axes: how completely a candidate satisfies the law — its residual, where there is a law ($g$) — or how completely it accounts for the data where there is not ($h$), set against the energy cost of computing it. Value earned, cost paid.',
+            text: 'The score has two axes: how completely a candidate accounts for $f$ — the law-residual on the theory-driven part $g$, the data-fit on the data-driven part $h$ — set against the energy cost of computing it. Value earned, cost paid.',
           },
           {
             level: 2,
@@ -432,7 +432,7 @@ const ROOTS: RootTree[] = [
             level: 2,
             kind: 'add',
             tag: 'g and h on one ledger',
-            text: 'The theory-driven path scores against a posited law (its residual, $g$); the data-driven path scores how completely a model accounts for the data ($h$) — the same kind of quantity, law-satisfaction versus data-fit, with $h$ a lower bound that tightens toward $g$ as the law is discovered. Moving the $g$/$h$ boundary turns a part theory-driven for the same content; it manufactures nothing, so there is nothing to gain by elaborating a posited law to swallow data it does not generalize.',
+            text: 'The theory-driven part $g$ is scored by the law-residual — how far a candidate is from satisfying the posited law; the data-driven part $h$ is scored by how completely a model accounts for the data — law-satisfaction versus data-fit, the same kind of misfit against different references, with $h$ a lower bound that tightens toward $g$ as the law is discovered. The two combine on one ledger because $h$ is the part left conditional on $g$ — a chain rule, not an independence assumption. Moving the $g$/$h$ boundary turns a part theory-driven for the same content; it manufactures nothing, so there is nothing to gain by elaborating a posited law to swallow data it does not generalize.',
           },
           {
             level: 3,
@@ -551,7 +551,7 @@ const STEPS: RoadmapStep[] = [
     id: 'discovery',
     title: 'Readout and unknown-law universes (reserved)',
     outcome:
-      'A readout-valued, convergence-grounded task, plus the $g + h$ ledger: a probabilistic submission scored on how completely it accounts for the data-driven part $h$ (no point-estimate or reference fallback), aggregated with the law-residual $g$ through the partition tree, with a law promoted from $h$ into $g$ by the trusted-ground criteria rather than by the maintainer, and the scaffolding for unknown-law and multi-scale universes. Parked until the consolidated residual spine is solid.',
+      'A readout-valued, convergence-grounded task, plus the $g + h$ ledger: a probabilistic submission scored on how completely it accounts for the data-driven part $h$ (no point-estimate or reference fallback), aggregated with the law-residual on $g$ through the partition tree, with a law promoted from $h$ into $g$ by the trusted-ground criteria rather than by the maintainer, and the scaffolding for unknown-law and multi-scale universes. Parked until the consolidated residual spine is solid.',
   },
 ];
 
